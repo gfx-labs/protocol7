@@ -2,7 +2,7 @@
 
 Written 2026-11-12 against `docs/plan.md` and updated the same day with the decisions below. Nothing here is built.
 
-Sources: `gfx-labs/pdp` local `main` at `1c3e9f8`, the acphost README at `v0.24.1`, a read-only look at the `talos-metal` cluster, and `elee1766/jobcity` `docs/ops/ingest.md` at `81da411`.
+Sources: `gfx-labs/pdp` local `main` at `1c3e9f8`, acphost tags, a read-only look at the `talos-metal` cluster, `gfx-labs/baremetal` at `948cd40`, and `elee1766/jobcity` at `5c76f7a`.
 
 Correction: the first version of this review read PDP's `origin/main` and described the older two-route gateway. PDP's local `main` is 25 commits ahead of it and is a generic forward proxy. The claims that PDP had no streaming, proxying or model-provider path were wrong and are removed.
 
@@ -13,10 +13,18 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | Order | Selfdev first. Selfdev then builds the consumer flows |
 | First iteration | Not complete until the container and Kubernetes executors both work |
 | First consumer flow | Requested pull request review. Linear triage, the implementation flow and opencodereview are deferred |
-| Review eligibility | A pull request from a collaborator in a configured repository, not a draft, with our review requested by a ping or a label |
+| Review eligibility | A pull request in a configured repository, not a draft, whose author has write access, with our review requested by a ping from someone with write access or by a label |
+| Re-review | A push after a review starts a review of the new head once pushes go quiet. No new ping is needed |
+| Verdict | Real approvals and change requests that count toward branch protection, from the start |
 | Credentials | Wait for PDP. No interim mode with keys mounted in pods. protocol7 adds the Rego and policies it needs, and PDP gains features as they are needed |
 | Workload identity | Install SPIRE on `talos-metal` |
-| Human decisions | A basic generic web UI with chat, in protocol7. No authentication of its own during development. People reach it through PDP |
+| Human decisions | A basic generic web UI in protocol7 with two kinds of chat: one attached to a ticket, and a new chat for maintenance |
+| UI access | No authentication of its own. Reached with `kubectl port-forward` for now. Tailscale or Google sign-in in front is later |
+| Actor identity | A name the user gives, recorded as unverified, until an authenticating proxy supplies a verified one |
+| Postgres | For development, one CNPG cluster each for Temporal and protocol7, one instance, with backups |
+| Chart | Published as an OCI artifact and installed by a Flux `HelmRelease` declared in `gfx-labs/baremetal`'s cdk8s code |
+| `p7.OnEvent` | Removed |
+| Session limit | 20 open agent sessions across the deployment |
 | GitHub identities | Separate author and reviewer identities |
 | Rollout | The reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing ones are shut down once it is proven |
 | Webhooks | protocol7 ships its own receiver, `webhookd`, which publishes to NATS JetStream. Consumers pull from the stream |
@@ -25,7 +33,7 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 
 | Flow | Status | Shape in protocol7 |
 |---|---|---|
-| Requested GitHub review | First consumer flow, milestone 7 | One ticket per pull request head and request. Review the exact head, publish one review, follow replies and new requests |
+| Requested GitHub review | First consumer flow, milestone 7 | One ticket per pull request. Review the exact head, publish one review, follow replies, pushes and new requests |
 | Linear issue to merged PR | Deferred | One long-lived ticket workflow per issue |
 | Stale Linear issues | Deferred | A scheduled sweep with one short child per issue or batch |
 | opencodereview on a PR | Deferred | A `p7.Step` on the head, then a publish activity |
@@ -136,42 +144,41 @@ PDP's design now covers what the flows need. What is left, from its own docs:
 
 Mostly a deployment: SPIRE server, node agents, the SPIFFE CSI driver and spire-controller-manager, added through `gfx-labs/baremetal`. A `ClusterSPIFFEID` can render a separate ID for each run pod from its pod metadata. Not yet checked on Talos: how the agent's workload attestor verifies the kubelet, and the privileged pod-security label its namespace needs. The two PDP items above (presenting the SVID, run scope in policy) are design work, not deployment.
 
-### 3. Provider capacity
+### 3. Model accounts
 
-Section 8 says model capacity is held per turn and milestone 3 lists "provider capacity". The generic resource layer is gone, so nothing says how many turns run at once per provider account, who picks the account, or what happens on a rate limit. `docs/acpharness-needs.md` still describes the removed design.
+The limit of 20 sessions is in section 8. Accounts are not settled. A model account is one login or API key at a provider, and every session on it shares its rate limit. jobcity's notes say a login must not be copied between credential stores, because both copies rotate the same refresh token and one of them gets revoked. PDP therefore needs logins of its own for protocol7, or ones that nothing else uses. How many there are decides how far 20 sessions can go before rate limits.
 
-### 4. Agent harness
+### 4. Maintenance chat reach
+
+You asked for a chat that can change workflows and configure Kubernetes. The plan proposes that it changes both by pull request: workflows through the development loop, and cluster configuration through `gfx-labs/baremetal`, which Flux applies. It reads cluster state through PDP with a read-only credential. It does not get direct write access to the cluster. Reading the Kubernetes API through PDP has not been tried.
+
+### 5. Agent harness
 
 The plan assumes Jcode. `docs/acpharness-needs.md` says acpharness has only a stub turn and no model. Session restore in a new pod, tool-load events for the journal and placeholder credentials all depend on the harness. A flow that lasts days should not depend on restoring a conversation: the branch, the pull request and the ticket hold enough to start a fresh session on the next wake.
 
-### 5. Webhook delivery
+### 6. Webhook delivery
 
 GitHub marks a delivery failed after 10 seconds without a 2xx and does not redeliver on its own. `webhookd` therefore needs more than one replica, and the flows need their recheck timer and a scheduled poll. JetStream stream replicas need a three-node NATS cluster.
 
-### 6. Shared cluster exposure
+### 7. Shared cluster exposure
 
-`talos-metal` also runs GitHub Actions runners. Cilium is in default policy mode, so nothing is denied until a policy selects a pod. With the API and web UI holding no authentication of their own, the NetworkPolicies in section 11 are a precondition for the first deployment.
+`talos-metal` also runs GitHub Actions runners. Cilium is in default policy mode, so nothing is denied until a policy selects a pod. The API and web UI have no authentication of their own, so the NetworkPolicies in section 11 are a precondition for the first deployment. Anyone who can port-forward into the control namespace can act as any name.
 
-### 7. Postgres durability
+### 8. Postgres backups
 
-Existing CNPG clusters on `talos-metal` run one instance. Temporal's database holds every running flow, and protocol7's holds records the plan keeps forever.
+No CNPG cluster on `talos-metal` has a backup today, although the Barman Cloud plugin is installed. The two new clusters need a bucket and credentials. SeaweedFS on the same cluster is a poor target because its own metadata database there has no backup. With one instance each, a lost volume means restoring from backup, and Temporal is down until then.
 
 ## Smaller inconsistencies in the plan
 
-- `p7.OnEvent` is still in the SDK table. With `webhookd`, consumers pull from a stream, and nothing calls an `OnEvent` registration.
+Fixed: `p7.OnEvent` is removed from the SDK table, and the acphost pin now says to take the current release (`v0.25.0` is the latest tag).
+
+Remaining:
+
 - `docs/acpharness-needs.md` refers to `p7-proxy`, decision numbers and plan sections that no longer exist.
-- `docs/example-pr-review.md` is marked historical and still shows removed APIs.
-- Section 8 pins acphost `v0.24.0`. `v0.24.1` is tagged.
 - `p7.Count` followed by `p7.File` is not atomic. It works as a cap only while one intake runs per repository at a time.
 
 ## Questions
 
-1. **Chat.** I took chat to mean the conversation of the session attached to a ticket: you read it live and type into it, and when no session is running your message becomes the answer the workflow passes to the next turn. Or do you want a general operator chat, as Desk has, that can act on any ticket?
-2. **Collaborator.** GitHub labels an author as owner, member or collaborator. I would accept all three, meaning anyone with write access. Is that the rule?
-3. **Ping.** I took a ping to be a comment that mentions the reviewer. Must the person who pings also be a collaborator? Does a push after a review trigger a new review, or only a new ping or label?
-4. **Verdict.** While it runs beside the existing reviewers, does it post approvals and change requests that count toward branch protection, or comments only until it is proven?
-5. **UI through PDP.** PDP is a forward proxy for workloads. How does a person's browser reach the UI through it: a proxy setting on your machine, or something in front of the UI? And should PDP pass the person's identity so decisions record who made them?
-6. **Postgres.** One instance with backups, or replicas, for Temporal's database and for protocol7's?
-7. **Chart.** Render the Helm chart through cdk8s in `gfx-labs/baremetal`, or use a Flux HelmRelease?
-8. **`p7.OnEvent`.** Remove it, or redefine it as a handler on the consumer's pull loop?
-9. **Capacity.** How many agent sessions should run at once, across how many model accounts?
+1. **Model accounts.** Which provider logins will protocol7 have, and how many? They need to be separate from the ones jobcity and you use.
+2. **Backup bucket.** Where should the two Postgres backups go? An off-cluster bucket is safer than SeaweedFS on the same cluster.
+3. **Maintenance chat.** Is changing Kubernetes by pull request to `gfx-labs/baremetal` enough, or do you want the chat to apply changes to the cluster directly?

@@ -249,9 +249,14 @@ A basic, provider-neutral web UI handles escalations. ticketd serves it as stati
 
 - Attention list: pending approvals and questions, with blocked and quarantined work.
 - Ticket view: fields, history, comments, runs, linked external objects and approvals. An approval is resolved by choosing one of its options or writing a reply.
-- Chat: the conversation of a session attached to a ticket, live through `WatchSession`, with a box that sends an operator message into that session.
+- New chat: a conversation that belongs to no existing work, for maintenance. See below.
+- Ticket chat: the conversation of a session attached to a ticket, live through `WatchSession`, with a box that sends an operator message into that session.
 
-It has no authentication of its own during development. People reach it through PDP. It gets no Ingress while that is the case. The actor recorded on a decision is stored as unverified unless PDP supplies a verified identity for the request, which is not designed yet. External objects render from their schema metadata, with no provider-specific views at first.
+A new chat is a ticket like any other. The UI lists the ticket kinds that consumers registered as chat kinds and files one. That kind's workflow opens a session, waits for each operator message with a state-based wait, prompts the session with it, and closes the session after an idle limit. What the agent can reach is set by that workflow's image, tools and grants. protocol7 ships the chat surface and no maintenance agent of its own. Chats count toward the session limit (section 8).
+
+Selfdev registers the first chat kind. Proposed: its agent works on the selfdev and protocol7 repositories and changes workflows through the development loop, as reviewed pull requests that ship by versioned rollout. For Kubernetes it reads cluster state with a read-only credential that PDP injects, and changes configuration by pull request to `gfx-labs/baremetal`, which Flux applies. Agent pods still get no Kubernetes API token. Reading the Kubernetes API through PDP has not been tried.
+
+The UI has no authentication of its own during development and no Ingress. People reach it with `kubectl port-forward`. Kubernetes RBAC on `pods/portforward` in the control namespace decides who can. A forwarded connection arrives at ticketd from loopback inside the pod and carries no user identity, so ticketd cannot learn who is on the other end. The UI asks for a name once and sends it with each request, and ticketd records it on decisions and messages as a claimed, unverified actor. When an authenticating proxy is put in front later, the trusted-header mode above takes the actor from that proxy's header, records it as verified and ignores the claimed name. The trusted peer is the proxy's address and never loopback, so a port-forwarded request cannot set that header. External objects render from their schema metadata, with no provider-specific views at first.
 
 ## 7. Go workflow library
 
@@ -273,7 +278,7 @@ The following surface is proposed, not a published API:
 | `p7.Child`, `p7.File` | Create work with an independent lifecycle, with or without waiting |
 | `p7.WaitChildren[T]` | Wait on Temporal child-workflow futures for parent-started children; use database-backed waits for independently agent-filed tickets |
 | `p7.Parent[T]`, `p7.Count` | Query parent fields and scoped ticket counts through activities |
-| `p7.OnEvent`, `p7.Every` | Register event entry points; use Temporal Schedules for recurring starts and workflow timers for in-execution delays, with explicit overlap policy |
+| `p7.Every` | Register a recurring start as a Temporal Schedule with an explicit overlap policy. Use workflow timers for delays inside an execution |
 | `p7.Tool` | Register a user activity callable by authorized sessions |
 | Integration packages | Optional consumer/provider packages for typed outside reads and writes through PDP, not built-in GitHub/Linear entities |
 
@@ -317,7 +322,7 @@ Tool calls are recorded by name on the run. Activity results also enter Temporal
 
 ## 8. ACP sessions and live output
 
-Use `github.com/gfx-labs/acphost` v0.24.0 as the ACP transport. In networked backends use its TCP listener with per-session mTLS. The core worker provisions the session trust material and retains its client identity. Locally use a Unix socket. Do not build another ACP TCP/WebSocket bridge. These session transport credentials are distinct from upstream API secrets and PDP's interception CA.
+Use `github.com/gfx-labs/acphost` as the ACP transport. Pin the current release when implementation starts. `v0.25.0` is the latest tag as of 2026-11-12. In networked backends use its TCP listener with per-session mTLS. The core worker provisions the session trust material and retains its client identity. Locally use a Unix socket. Do not build another ACP TCP/WebSocket bridge. These session transport credentials are distinct from upstream API secrets and PDP's interception CA.
 
 acphost reconnect uses `Hello.Since` and replayed JSON-RPC requests. Deduplicate request IDs and responses. Reconnect within its controller lease. Validate process survival and reattachment after a core-worker restart.
 
@@ -325,7 +330,13 @@ The session activity redacts and publishes output frames to `p7.session.<id>.out
 
 Clients read through ticketd, never directly from NATS or acphost. A new acphost controller connection can replace the current one, so viewers must not connect to it. Archive streams/journals to artifact storage before purging live data. Frames do not enter workflow history, but final typed results and ordinary activity results do.
 
-Hold model/provider capacity per turn, not per idle session. Waiting sessions retain their execution environment until an idle limit expires. Workflows can close and reopen for long waits. Cross-process session restoration remains dependent on the selected harness and needs acceptance testing.
+Waiting sessions retain their execution environment until an idle limit expires. Workflows can close and reopen for long waits. Cross-process session restoration remains dependent on the selected harness and needs acceptance testing.
+
+### Session limit and model accounts
+
+At most 20 agent sessions are open at once across the deployment. Steps that only run a command do not count. The number is one ticketd setting. ticketd counts open session records and registers the new one in one transaction, serialized on that count so two concurrent opens cannot both take the last slot. Over the limit it refuses with a retryable capacity error. The open-session activity's Temporal retry policy does the waiting. There is no queue, reservation or fairness order. An idle session counts until it is closed, so a flow closes its session before a long wait. Reconciliation closes session records whose workflow is gone, so a crash cannot hold a slot for good. Temporal worker slot settings cannot provide this limit: they apply to each worker process separately, and a session spans several activities.
+
+A model account is one login or API key at a model provider. Sessions on the same account share its rate limit and its bill. jobcity's Jcode store, for example, holds several Claude logins used in a priority order (`elee1766/jobcity`, `docs/ops/agent-credentials.md`). In protocol7 the real account credentials live in PDP as bindings, and a session holds only the placeholder that names its binding (section 9). The consumer workflow chooses the account for a session from its own configuration, as it chooses a pool. protocol7 keeps no per-account limits at first. A provider rate limit surfaces as the `rate limit` failure class and Temporal retries the turn with backoff. Which accounts protocol7 gets, and whether a retry moves to another account, is open.
 
 ### Session journal, catalog and search
 
@@ -444,15 +455,18 @@ The first consumer flow after selfdev reviews pull requests on request. It is co
 A pull request is eligible when all of these hold, checked against live GitHub state at intake and not taken from event text:
 
 - its repository is in the configured list
-- its author is a collaborator on that repository
+- its author has write access or higher on that repository. This is read from GitHub's repository-permission endpoint and not from the association label on the event, because an organization member can have read-only access to a repository
 - it is not a draft
-- a review was requested from the reviewer identity, by a ping (a comment that mentions it) or by a configured label
+- a review was requested from the reviewer identity, by a ping (a comment that mentions it) from a user who also has write access, or by a configured label
 
-One ticket covers one pull request head and request. The workflow checks out that exact head read-only with the guidance collection mounted, runs the repository's checks and the review, and returns a typed report. Before publishing it re-reads the head, and discards the result if the head moved. It publishes one consolidated review, then follows the pull request with a state-based wait for replies on its threads, a new head or request, and close or merge. It never merges.
+One ticket covers one pull request, from the first request until it closes. The workflow checks out the exact head read-only with the guidance collection mounted, runs the repository's checks and the review, and returns a typed report. Before publishing it re-reads the head, and discards the result if the head moved. It publishes one consolidated review as an approval, a change request or a comment.
+
+It then follows the pull request with a state-based wait. A push after a review starts a review of the new head with no new ping, once pushes have been quiet for a configured period. A new ping or label does the same. Replies on its threads are answered. It does not review while the pull request is a draft, and it ends when the pull request is closed or merged. It never merges.
 
 - The reviewer is its own GitHub identity, separate from any identity that authors pull requests, because GitHub does not accept an approval from the author.
 - Rollout: the reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing reviewers are shut down once this one is proven.
-- Pull request text is untrusted input. The collaborator rule is the admission gate, and the session has read-only repository grants.
+- Its approvals and change requests are real GitHub reviews and count toward branch protection. GitHub counts an approval toward required reviews only from a reviewer with write permission, so the reviewer identity has write access on those repositories. Where a branch requires reviews, a change request from it blocks the merge until it approves or someone with write access dismisses the review.
+- Pull request text is untrusted input. The write-access rule is the admission gate. The session's own grants are read-only. Publishing is a worker activity under a separate PDP grant limited to submitting reviews and comments.
 
 ### Safety and operational controls
 
@@ -515,7 +529,7 @@ Permission to create pods in a namespace allows use of any service account in it
 
 ### Network paths
 
-Agent and step pods may reach DNS, PDP, the ticketd run API and the artifact endpoint, and accept the ACP connection from the core worker. They must not reach Temporal, Postgres, NATS, the ticketd admin API or the Kubernetes API. Temporal, NATS and ticketd accept connections only from the control and consumer namespaces. With human authentication off, these policies are the access boundary on a shared cluster. `webhookd` is the only component with an Ingress. The API and web UI have none, and are reached through PDP.
+Agent and step pods may reach DNS, PDP, the ticketd run API and the artifact endpoint, and accept the ACP connection from the core worker. They must not reach Temporal, Postgres, NATS, the ticketd admin API or the Kubernetes API. Temporal, NATS and ticketd accept connections only from the control and consumer namespaces. With human authentication off, these policies are the access boundary on a shared cluster. `webhookd` is the only component with an Ingress. The API and web UI have none, and are reached with `kubectl port-forward`.
 
 ### First deployment: `talos-metal`
 
@@ -525,9 +539,9 @@ The first deployment targets the `talos-metal` cluster. Read from the cluster on
 |---|---|
 | Talos v1.14.5, Kubernetes v1.35.0, three control-plane nodes and three workers with 24, 24 and 32 CPUs and about 62 GiB each | The Kubernetes executor is needed for the first deployment, not as a later milestone |
 | Cilium with `enable-policy: default` | NetworkPolicy is available. Nothing is denied until a policy selects a pod, so every protocol7 namespace needs its own default-deny policy |
-| CloudNativePG operator, with existing clusters running one instance each | Postgres for protocol7 and for Temporal can be CNPG clusters. Instance count and backups are a decision |
+| CloudNativePG operator with the Barman Cloud plugin CRDs. The three existing clusters run one instance each, and no `ScheduledBackup` or `ObjectStore` exists | For development, protocol7 and Temporal each get their own CNPG cluster with one instance and scheduled backups. These are the first CNPG backups on this cluster, so the bucket and its credentials are new. SeaweedFS on the same cluster is a poor target, because its own metadata database there has no CNPG backup |
 | SeaweedFS with an S3 service | Candidate artifact store |
-| Flux reconciles `gfx-labs/baremetal`, whose manifests are written in cdk8s and committed under `kubernetes/rendered/prod`. The Flux helm controller CRD is present | The chart is consumed either through cdk8s rendering or a HelmRelease. The choice is open |
+| Flux reconciles `gfx-labs/baremetal`, whose manifests are written in cdk8s and committed under `kubernetes/rendered/prod`. The Flux helm controller CRD is present | protocol7 publishes its chart as an OCI artifact. `gfx-labs/baremetal` declares a Flux `HelmRepository` and `HelmRelease` for it in a cdk8s chart file, as it does for its other charts, for example `reflector.ts`. A private chart needs a pull secret on the `HelmRepository` |
 | No RuntimeClass | No gVisor. Pods run on the default containerd runtime |
 | No SPIRE, NATS, Temporal or PDP installed | All four are new installs for this deployment |
 | Storage classes `proxmox-lvm-xfs` (default) and `proxmox-scratch-xfs` | Persistent volumes for Postgres and NATS, scratch volumes for workspaces |
@@ -543,11 +557,11 @@ Build complete paths in this order. Do not finish every backend or integration b
 |---|---|---|
 | 1. Credentialed execution | Container executor, runner/manifest, file artifacts, NATS output and PDP integration including static and OAuth credentials | Run a command and private checkout; preserve output/artifacts; deny unauthorized access and prove no upstream token reaches the step |
 | 2. Durable work | Ticket core, Temporal commands, atomic mutation receipts, CAS/ownership fences, run projections and reconciliation | Retry a command across client timeout and commit-before-response loss; preserve cross-ticket atomicity and approval single resolution; restart between persistence and workflow start; lose NOTIFY events and reconnect listeners while approval/dependency waits still complete through polling; cancel and retry waiting activities; duplicate starts create one execution; expose accepted versus persisted status correctly; a workflow waiting on an approval, an external object and a timer wakes on each, and a change committed while it was busy is returned by its next wait |
-| 3. Agent sessions | ACP/acphost integration, scoped tools, typed reports, declared inputs, session journal and catalog, and provider capacity | Complete real turns through PDP; reconnect after worker failure; verify placeholders, refresh, streaming and provider isolation; mount a guidance tree from a tag and record its commit; find a session by task queue and time and read its full ordered conversation after its pod is gone |
-| 4. Development loop | Minimal GitHub operations, approvals, web UI and consumer edit/check/review/PR workflows | An explicit request produces a checked, independently reviewed PR with traceable evidence and intact gates; an escalation is answered in the web UI and the waiting workflow continues |
+| 3. Agent sessions | ACP/acphost integration, scoped tools, typed reports, declared inputs, session journal and catalog, and the session limit | Complete real turns through PDP; reconnect after worker failure; verify placeholders, refresh, streaming and provider isolation; a session over the limit waits and opens when another closes; mount a guidance tree from a tag and record its commit; find a session by task queue and time and read its full ordered conversation after its pod is gone |
+| 4. Development loop | Minimal GitHub operations, approvals, web UI and consumer edit/check/review/PR workflows | An explicit request produces a checked, independently reviewed PR with traceable evidence and intact gates; an escalation is answered in the web UI and the waiting workflow continues; a maintenance chat opened in the web UI takes messages across several turns |
 | 5. Kubernetes execution and cluster deployment | Kubernetes executor, S3 artifacts, backend admission, Helm chart, SPIRE identity and PDP enforcement on `talos-metal` | Execute the same contract on container and Kubernetes, including DNS/trust, cancellation, denied bypass and artifact access; PDP accepts a run pod's identity and denies a neighbouring pod |
 | 6. Versioned rollout | Consumer deployment activities, concurrent builds, promotion/rollback and draining | Existing executions finish on A while new ones use B; rollback future traffic; validate Continue-As-New separately; recover a stuck pinned execution on a replay-compatible fixed build and validate reset/ownership/external-effect handling |
-| 7. Requested review flow | `webhookd`, consumer intake, the review workflow and a reviewer GitHub identity | A ping or label on an eligible pull request produces one review on the exact head; a replayed delivery produces none; a push during review discards the stale result; an ineligible pull request is ignored; a receiver restart loses no accepted delivery |
+| 7. Requested review flow | `webhookd`, consumer intake, the review workflow and a reviewer GitHub identity | A ping or label on an eligible pull request produces one review on the exact head; a replayed delivery produces none; a push during review discards the stale result; a push after a review produces one review of the new head; an ineligible pull request is ignored; a receiver restart loses no accepted delivery |
 | 8. Evaluated improvement | Optional learnings plus consumer-owned incident groups, evaluation cases and improvement journal | Propose and evaluate a scoped change with external writes disabled, then record a justified keep/revert outcome |
 | 9. Broader integrations | Linear flows, the implementation flow, opencodereview and external-object metrics | Duplicate and out-of-order deliveries preserve one coherent object timeline; missed events reconcile; peak-volume load test and typed metrics agree with recorded transitions |
 
@@ -574,6 +588,6 @@ Open implementation questions:
 - Cross-process agent-session restoration and limits for long idle sessions.
 - Browser CORS policy for third-party clients, if required.
 
-A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID, provider capacity, the agent harness, and review-flow details.
+A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID, model accounts, the Postgres backup bucket and the agent harness.
 
 Device-specific providers and remote development environments are consumer concerns and are not prerequisites for this implementation path.
