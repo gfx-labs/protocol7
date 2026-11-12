@@ -1,21 +1,38 @@
-# Plan review against the first four flows
+# Plan review against the first flows
 
-Written 2026-11-12 against `docs/plan.md`. Nothing here is built. Facts about PDP come from `gfx-labs/pdp` `origin/main` at `30cd4b6`, about acphost from its README at `v0.24.1`, about the cluster from a read-only look at `talos-metal`, and about the current webhook path from `elee1766/jobcity` `docs/ops/ingest.md` at `81da411`.
+Written 2026-11-12 against `docs/plan.md` and updated the same day with the decisions below. Nothing here is built.
+
+Sources: `gfx-labs/pdp` local `main` at `1c3e9f8`, the acphost README at `v0.24.1`, a read-only look at the `talos-metal` cluster, and `elee1766/jobcity` `docs/ops/ingest.md` at `81da411`.
+
+Correction: the first version of this review read PDP's `origin/main` and described the older two-route gateway. PDP's local `main` is 25 commits ahead of it and is a generic forward proxy. The claims that PDP had no streaming, proxying or model-provider path were wrong and are removed.
+
+## Decisions
+
+| Topic | Decision |
+|---|---|
+| Order | Selfdev first. Selfdev then builds the consumer flows |
+| First iteration | Not complete until the container and Kubernetes executors both work |
+| First consumer flow | Requested pull request review. Linear triage, the implementation flow and opencodereview are deferred |
+| Review eligibility | A pull request from a collaborator in a configured repository, not a draft, with our review requested by a ping or a label |
+| Credentials | Wait for PDP. No interim mode with keys mounted in pods. protocol7 adds the Rego and policies it needs, and PDP gains features as they are needed |
+| Workload identity | Install SPIRE on `talos-metal` |
+| Human decisions | A basic generic web UI with chat, in protocol7. No authentication during development. Reached by port-forward |
+| GitHub identities | Separate author and reviewer identities |
+| Rollout | The reviewer is added beside the existing reviewers on the same pull requests. The existing ones are shut down once it is proven. Other flows start on a subset jobcity does not serve |
+| Webhooks | protocol7 ships its own receiver, `webhookd`, which publishes to NATS JetStream. Consumers pull from the stream |
 
 ## The flows
 
-| Flow | Trigger | Shape in protocol7 | Outside writes |
-|---|---|---|---|
-| 1. Stale Linear issues | Temporal Schedule | A sweep workflow lists old issues through an activity, then one short child per issue (or per batch) asks an agent for a typed verdict: keep, update, retriage or close | Linear comment, state, label and assignee changes |
-| 2. Linear issue to merged PR | Delegation in Linear, or a deliberate start | One long-lived ticket workflow per issue. Check criteria, claim, implement in an environment, open the PR, run an internal review, then loop on changes until merged or abandoned | Linear state and comments, git push, PR create, review requests, thread replies and resolution, branch update from base, merge |
-| 3. Requested GitHub review | Review request on a PR | One ticket per PR and review cycle. Review the exact head, publish one review, follow replies, re-review a new head | PR review, comments, thread replies |
-| 4. opencodereview on a PR | PR opened or updated | A `p7.Step` that runs the tool on the head and returns a typed result, then a publish activity | PR review comments, approval |
-
-Flow 2 is the one that tests the design. Flows 3 and 4 are its review half. Flow 1 is mostly independent and needs the least.
+| Flow | Status | Shape in protocol7 |
+|---|---|---|
+| Requested GitHub review | First consumer flow, milestone 7 | One ticket per pull request head and request. Review the exact head, publish one review, follow replies and new requests |
+| Linear issue to merged PR | Deferred | One long-lived ticket workflow per issue |
+| Stale Linear issues | Deferred | A scheduled sweep with one short child per issue or batch |
+| opencodereview on a PR | Deferred | A `p7.Step` on the head, then a publish activity |
 
 ## Waking on several conditions
 
-The plan now has this in section 7 ("Waiting on several conditions", "Long-lived flow workflows"). The loop for flow 2 would look like this. The p7 calls are proposed and this has not been compiled against an SDK.
+The plan has this in section 7 ("Waiting on several conditions", "Long-lived flow workflows"). The loop below is for the deferred implementation flow, which has the most branches. The review flow uses the same loop with fewer of them. The p7 calls are proposed and this has not been compiled against an SDK.
 
 ```go
 // FlowState is everything a pull request flow carries across Continue-As-New.
@@ -103,88 +120,57 @@ Three properties do the work that jobcity's waits do badly today:
 - A change that lands during a long agent turn is still there on the next pass, because the wait compares revisions and does not listen for edges.
 - The timer makes a missed webhook cost a delay, not a stuck flow.
 
-## Issues likely to block
+## Still open
 
-### 1. PDP does not yet carry the traffic these flows need
+### 1. PDP
 
-PDP today proxies GitHub REST and Linear GraphQL only, with at most those two routes. It rejects streaming, WebSockets, upgrades and non-JSON responses. It has no forward-proxy or TLS-interception mode, no git transport and no model-provider route. Its real GitHub and Linear acceptance runs are still pending, and its documented initial GitHub scope is read and comment in one repository.
+PDP's design now covers what the flows need. What is left, from its own docs:
 
-The flows need all of the following through PDP, or a stated exception:
+- **Nothing has run against a real provider.** Its acceptance notes say no real GitHub or Linear call, no subscription client such as Jcode, no SPIRE and no cluster has been tried. Milestone 1 is the first real run.
+- **Presenting the SVID.** Many HTTP clients cannot present a client certificate to a proxy. PDP lists this as open. The plan proposes that the runner holds the SVID and runs a local forwarder in the pod.
+- **Run scope in policy.** PDP loads policy data from one file at reload. A grant for one run, such as "this pod may read this repository", needs either a SPIFFE ID that carries the scope or a lookup of run assignments in ticketd.
+- **git and model streaming.** PDP speaks HTTP/1.1 only, sends `Accept-Encoding: identity` and refuses a compressed response when it injected a credential. git clone and push and a model stream should be the first things tried through it.
+- **Unpushed work.** The 25 commits that make PDP a forward proxy exist only in the local checkout.
 
-| Need | Used by | PDP today |
-|---|---|---|
-| Model provider calls with streaming | Every agent session, and opencodereview | Not supported |
-| git clone and push over HTTPS | Flows 2, 3, 4 | Not supported |
-| GitHub GraphQL | Resolving review threads in flow 2. REST has no call for it | Not supported |
-| GitHub REST writes: create PR, request review, submit review, merge, update branch | Flows 2, 3, 4 | Route exists. Grants and schema review needed |
-| Linear writes beyond comments on allowlisted issues | Flows 1, 2 | Route exists. PDP cannot yet verify that an issue belongs to a team, so it uses an issue allowlist |
+### 2. SPIRE on `talos-metal`
 
-Milestone 1 already assumes this work ("prove no upstream token reaches the step"). The plan should say that milestone 1 depends on PDP gaining a proxy or interception mode with streaming, and git. That is the longest dependency in the plan.
+Mostly a deployment: SPIRE server, node agents, the SPIFFE CSI driver and spire-controller-manager, added through `gfx-labs/baremetal`. A `ClusterSPIFFEID` can render a separate ID for each run pod from its pod metadata. Not yet checked on Talos: how the agent's workload attestor verifies the kubelet, and the privileged pod-security label its namespace needs. The two PDP items above (presenting the SVID, run scope in policy) are design work, not deployment.
 
-### 2. Workload identity on `talos-metal`
+### 3. Provider capacity
 
-PDP authenticates callers by Unix UID or by SPIFFE certificates from a SPIRE Workload API. Its Kubernetes example needs SPIRE server, agents and the SPIFFE CSI driver. None are installed on `talos-metal`. Either SPIRE is installed there (cluster-level, through `gfx-labs/baremetal`), or PDP gains a second authenticator such as a projected service-account token checked with TokenReview. Per-run identity, not just per-namespace identity, is still open in both.
+Section 8 says model capacity is held per turn and milestone 3 lists "provider capacity". The generic resource layer is gone, so nothing says how many turns run at once per provider account, who picks the account, or what happens on a rate limit. `docs/acpharness-needs.md` still describes the removed design.
 
-### 3. Milestone order does not match the first deployment
+### 4. Agent harness
 
-- Milestone 1 builds the container executor on the Docker Engine API. Talos nodes run containerd with no Docker daemon, so that executor cannot run on `talos-metal`. The Kubernetes executor is milestone 7.
-- Linear integration is milestone 8. Flows 1 and 2 start from Linear.
-- The plan's first delivery target is selfdev. These four flows are a different first target.
+The plan assumes Jcode. `docs/acpharness-needs.md` says acpharness has only a stub turn and no model. Session restore in a new pod, tool-load events for the journal and placeholder credentials all depend on the harness. A flow that lasts days should not depend on restoring a conversation: the branch, the pull request and the ticket hold enough to start a fresh session on the next wake.
 
-### 4. No place for a human to see and answer questions
+### 5. Webhook delivery
 
-Flows 1 and 2 need human decisions: a batch of triage proposals, an unclear requirement, a risky merge. The plan has approvals, an attention query and a CLI, and no UI. Jobcity uses Desk for this and its policy says escalations go to Desk only.
+GitHub marks a delivery failed after 10 seconds without a 2xx and does not redeliver on its own. `webhookd` therefore needs more than one replica, and the flows need their recheck timer and a scheduled poll. JetStream stream replicas need a three-node NATS cluster.
 
-### 5. One GitHub identity cannot approve its own pull request
+### 6. Shared cluster exposure
 
-Flow 2 opens PRs. Flows 3 and 4 approve PRs. GitHub does not accept an approval from the PR author. If one App identity does both, flow 4 can never approve a flow 2 PR, and the internal review in flow 2 cannot count as a GitHub approval. Jobcity handles this today by asking a second agent identity for review.
+`talos-metal` also runs GitHub Actions runners. Cilium is in default policy mode, so nothing is denied until a policy selects a pod. With the API and web UI unauthenticated, the NetworkPolicies in section 11 are a precondition for the first deployment.
 
-### 6. Running beside jobcity
+### 7. Postgres durability
 
-Jobcity already implements, reviews and merges on the same repositories, from the same Linear delegation and GitHub events. If protocol7 flows run on the same repositories at the same time, both will act. The raw webhook queue also has exactly one pull consumer today, `jobcity-relay`.
-
-### 7. Webhook volume and Temporal retention
-
-Jobcity's ingest doc reports 56,144 relay pulls in one 24-hour window, and you put current volume near 100k a day. The one sampled batch in that doc was 48 GitHub deliveries of `check_run`, `check_suite` and `issue_comment`, so check events are likely a large share, which I have not measured. One workflow per delivery at that rate is fine for throughput and poor for storage: retention is set per Temporal namespace, so with one namespace at 30 days every ingest execution is kept as long as a ticket workflow. Options are to coalesce check events at the receiver before starting anything, or to put ingestion in a second Temporal namespace with a retention of a few days.
-
-### 8. Provider capacity has no owner since resources were removed
-
-Section 8 says model capacity is held per turn and milestone 3 lists "provider capacity". The generic resource layer is gone, so nothing now says how many turns run at once per provider account, who picks the account, or what happens on a rate limit. `docs/acpharness-needs.md` still describes the removed design (provider slots and a headroom picker).
-
-### 9. Agent harness
-
-The plan assumes Jcode. `docs/acpharness-needs.md` says acpharness has only a stub turn and no model. Session restore in a new pod, tool-load events for the journal and placeholder credentials all depend on the harness. A multi-day flow should not depend on restoring a conversation: the branch, the PR and the ticket hold enough to start a fresh session on the next wake.
-
-### 10. Shared cluster exposure
-
-`talos-metal` also runs GitHub Actions runners (`arc-runners`, privileged pod security). Cilium is in default policy mode, so nothing is denied until a policy selects a pod. With human authentication off, an unprotected ticketd admin API or Temporal frontend is reachable from CI jobs. Section 11 now lists the required policies. They are a precondition for the first deployment, not hardening for later.
-
-### 11. Postgres durability
-
-Existing CNPG clusters on `talos-metal` run one instance. Temporal's database holds every running flow. Losing it loses all in-flight work, and protocol7's own database holds records the plan keeps forever.
+Existing CNPG clusters on `talos-metal` run one instance. Temporal's database holds every running flow, and protocol7's holds records the plan keeps forever.
 
 ## Smaller inconsistencies in the plan
 
-- `p7.OnEvent` is still in the SDK table, but section 10 says protocol7 ships no webhook helpers or provider registry and that the consumer's ingestion workflow starts consumer work. With no dispatcher, nothing would call an `OnEvent` registration. Either remove it or define it as a routing table that the consumer's ingestion workflow calls.
+- `p7.OnEvent` is still in the SDK table. With `webhookd`, consumers pull from a stream, and nothing calls an `OnEvent` registration.
 - `docs/acpharness-needs.md` refers to `p7-proxy`, decision numbers and plan sections that no longer exist.
 - `docs/example-pr-review.md` is marked historical and still shows removed APIs.
 - Section 8 pins acphost `v0.24.0`. `v0.24.1` is tagged.
-- `p7.Count` followed by `p7.File` is not atomic. It works as a cap only while one intake workflow per repository runs at a time, which the plan should state.
+- `p7.Count` followed by `p7.File` is not atomic. It works as a cap only while one intake runs per repository at a time.
 
 ## Questions
 
-1. **First target.** Are these four flows now the first thing to deliver, ahead of selfdev? If yes I would reorder: Kubernetes executor first (drop Docker from the first deployment), then durable work and waits, sessions and journal, flow 3, flow 4, flow 2, flow 1.
-2. **Credentials for the first deployment.** Wait for PDP to carry model traffic and git, or allow a stated interim mode on `talos-metal` where a model key and a repository-scoped git token are mounted into pods?
-3. **Workload identity.** Install SPIRE on `talos-metal`, or add a service-account-token authenticator to PDP?
-4. **Human decisions.** Where do approvals and questions surface at first: `p7` CLI only, jobcity's Desk, or comments on the Linear issue or PR?
-5. **GitHub identities.** Will the author and the reviewer be two App identities? Which one runs flow 4's approval?
-6. **Coexistence.** Do protocol7 flows start on repositories jobcity does not serve, or replace jobcity flows one at a time on the same repositories? Which flow moves first?
-7. **Webhook path.** Reuse the Cloudflare Worker with a second queue that a consumer in the cluster pulls, or expose a receiver through Traefik? Should jobcity's injection screen and approved-author list be reused or rebuilt in the consumer?
-8. **Flow 1 authority.** May the triage flow close and retriage issues directly, or does it propose and wait for a human to accept a batch? Roughly how many old issues are in scope?
-9. **Flow 2 criteria and claim.** What makes an issue eligible, rules or an agent's judgement, and what does claiming mean in Linear (assignee, state, label)? Does "merge upstream as needed" mean updating the PR branch from its base when it is behind or conflicting?
-10. **Flow 2 merge gate.** Which reviews are required: branch protection as configured per repository, or a protocol7 rule on top? May it merge its own PRs once those are met, on every repository?
-11. **Flow 4 details.** I am assuming opencodereview is a CLI that runs on a checkout with a rules directory and a model key and prints findings. Is that right, does it have machine-readable output, and is it a separate posted review or one input to the flow 3 review? Does it run on every push or once per review request?
-12. **Concurrency.** How many agent sessions should run at once on this cluster, and how many model accounts are there to spread them across?
-13. **Postgres.** One instance with backups, or replicas, for Temporal's database and for protocol7's?
-14. **Chart consumption.** Render the Helm chart through cdk8s in `gfx-labs/baremetal`, or use a Flux HelmRelease?
-15. **`p7.OnEvent`.** Remove it, or keep it as a routing table for the consumer's ingestion workflow?
+1. **Chat.** I took chat to mean the conversation of the session attached to a ticket: you read it live and type into it, and when no session is running your message becomes the answer the workflow passes to the next turn. Or do you want a general operator chat, as Desk has, that can act on any ticket?
+2. **Collaborator.** GitHub labels an author as owner, member or collaborator. I would accept all three, meaning anyone with write access. Is that the rule?
+3. **Ping.** I took a ping to be a comment that mentions the reviewer. Must the person who pings also be a collaborator? Does a push after a review trigger a new review, or only a new ping or label?
+4. **Verdict.** While it runs beside the existing reviewers, does it post approvals and change requests that count toward branch protection, or comments only until it is proven?
+5. **Postgres.** One instance with backups, or replicas, for Temporal's database and for protocol7's?
+6. **Chart.** Render the Helm chart through cdk8s in `gfx-labs/baremetal`, or use a Flux HelmRelease?
+7. **`p7.OnEvent`.** Remove it, or redefine it as a handler on the consumer's pull loop?
+8. **Capacity.** How many agent sessions should run at once, across how many model accounts?

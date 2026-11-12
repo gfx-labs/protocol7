@@ -2,19 +2,19 @@
 
 protocol7 is a Go library and support binaries for durable agent work. Users write ordinary Temporal workflows that execute commands and ACP agents, manage tickets and approvals, and call external integrations.
 
-The first delivery target is self-development and evidence-based self-improvement. Build the components needed for that working loop before expanding integrations and execution environments. This document specifies target behavior, not a claim that the system has been implemented.
+The first delivery target is self-development and evidence-based self-improvement. Selfdev is then used to build consumer flows, starting with requested pull request review (section 10). Build the components needed for that working loop before expanding integrations and execution environments. This document specifies target behavior, not a claim that the system has been implemented.
 
 ## 1. Scope and repository boundaries
 
 | Repository | Owns |
 |---|---|
-| `gfx-labs/protocol7` | Go library, ticket API and store, core Temporal worker, runner, executors and CLI |
+| `gfx-labs/protocol7` | Go library, ticket API and store, core Temporal worker, runner, executors, CLI, webhook receiver, web UI and Helm chart |
 | `gfx-labs/pdp` | Workload authentication, request authorization, upstream credential acquisition and storage, OAuth refresh, TLS interception and DNS routing |
 | `gfx-labs/protocol7-selfdev` | Consumer worker, development/review and improvement workflows, prompts, deployment activities and end-to-end acceptance scenarios |
 
 There is no workflow YAML, interpreter, orchestration DSL or custom retry/checkpoint engine. Branches, loops, conditions and error handling are Go code. Settings such as models, limits and repository lists are passed in Go configuration structs.
 
-protocol7 ships an API and CLI, not a built-in web UI. Other clients use the same published API. The platform contains no emulator, devbox or device-specific logic. Users implement domain-specific tools in their own workers.
+protocol7 ships an API, a CLI and a basic web UI for escalations, tickets and session chat (section 6). The UI and other clients use the same published API. The platform contains no emulator, devbox or device-specific logic. Users implement domain-specific tools in their own workers.
 
 ## 2. Components and ownership
 
@@ -25,10 +25,12 @@ protocol7 ships an API and CLI, not a built-in web UI. Other clients use the sam
 | Consumer worker | User workflows importing `github.com/gfx-labs/protocol7`. Does not need backend administration rights |
 | `runner` | Execute commands or host ACP sessions, expose `run.sock`, prepare workspaces and publish manifests/artifacts |
 | `p7` | Ticket operations, approvals, run tools and debugging commands using public APIs |
+| `webhookd` | Verify incoming webhook deliveries and publish them to a JetStream stream that consumers pull from |
+| Web UI | Attention list, tickets, approvals and session chat. Served by ticketd through the public API |
 | PDP | Shared credential and egress gateway. Separate from protocol7, optional for trusted host execution |
 | Temporal | Execution history, task dispatch, retries, timers, signals, child workflows and Worker Versioning |
 | Postgres | Tickets, intent, approvals, execution ownership bindings, execution projections, run outcomes, integration records and session records |
-| NATS JetStream | Live session output and command logs, available from the first execution milestone |
+| NATS JetStream | Live session output, command logs and received webhook deliveries. Available from the first execution milestone |
 | Artifact storage | Logs, manifests, artifacts and archived journals. S3 in deployed environments, a file store locally |
 
 Only ticketd writes protocol7's Postgres data. Humans, agents, activities and clients all use its API. PDP's credential storage is separate and is not subject to this rule.
@@ -38,7 +40,7 @@ Each fact has one owner:
 - Postgres owns persisted ticket records, revisions, approval decisions and recorded outcomes, with searchable public execution projections.
 - Temporal owns durable acceptance and orchestration of execution-affecting commands, execution progress, retries, timers and workflow history. Activities persist ticket changes through ticketd before dependent execution proceeds.
 - Artifact storage owns bytes. Database rows and workflow results carry references.
-- NATS owns live output until archival. It is not the ticket-to-workflow notification channel.
+- NATS owns live output until archival, and received webhook deliveries until consumers have processed them. It is not the ticket-to-workflow notification channel.
 - PDP owns real upstream credentials, bindings, grants and refresh state. protocol7 keeps references, trusted assignments and requested permissions only.
 
 Read ticketd to answer ticket-state questions. Do not reconstruct the ticket database from Temporal history.
@@ -68,7 +70,7 @@ Optional modules expose their own records through ticketd without becoming prere
 | `learnings` | Scoped content, consumer-defined metadata and non-owning evidence references. No required curation state machine |
 | External objects | One optional model for outside entities such as GitHub PRs: source, kind, external ID, URL, ticket links, current-state projection, typed fields, last synchronization time and a retained timeline |
 | Integration operation records | Integration-scoped external operation identity, pending/confirmed outcome and reconciliation evidence. Not a universal exactly-once guarantee |
-| Intake records | Optional integration-owned delivery deduplication and poll cursors; no mandatory protocol7 webhook spool |
+| Intake records | Consumer-owned delivery deduplication that outlasts the webhook stream, and poll cursors. Deliveries themselves are held in the JetStream webhook stream (section 10) |
 | Session records | Session catalog plus turn, message and tool-event projections of the session journal. Rebuildable from the archived journal. See section 8 |
 | Knowledge collections | A named reference to a path in an existing git repository, resolved to an exact commit when used as an input. See section 5 |
 
@@ -110,7 +112,7 @@ Retention defaults, configurable:
 - External-object identity and normalized timeline entries: indefinite. Raw payload: one year. Current-state projections remain reconcilable from the source.
 - Artifacts: 90 days unless pinned.
 - Session journals and their projections: kept until deleted, because search and analytics read them. Configurable.
-- NATS data: purge 24 hours after confirmed archive.
+- NATS live output: purge 24 hours after confirmed archive. The webhook stream has its own age limit.
 - Closed Temporal history: 30 days. Open histories remain governed by Temporal and Continue-As-New, not ticket retention.
 
 ## 4. Temporal commands and recovery
@@ -240,6 +242,16 @@ Run calls include progress, result submission, artifact registration, comments, 
 Approvals live in a separate table and are never schedulable tickets. One `ResolveApproval` command path handles every client: a Temporal command workflow persists the decision transactionally through an activity, refuses a second decision and returns the committed result. The waiting workflow awaits a named `WaitForApproval` activity that observes the persisted decision through ticketd using LISTEN/NOTIFY hints and polling fallback, then returns the typed decision. It does not require a signal from the command workflow. Configure heartbeats, cancellation, retry and timeout behavior, and label the activity with the approval identity for pending-activity/timeline visibility. Waiting activities must not consume agent execution or model-provider capacity; size their worker capacity separately. Support options, links, subject revision, snooze and actor attribution. An attention query combines pending approvals with blocked/quarantined work. Bind consequential approvals to the exact revision being approved.
 
 `ask_human` returns after filing so the agent can end its turn. The workflow waits without holding a model turn, then supplies the decision in a later prompt. `run_step --wait` can wait for a bounded period. Operator messages into sessions carry trusted provenance and a session nonce, but textual tags are not an authorization mechanism.
+
+### Web UI
+
+A basic, provider-neutral web UI handles escalations. ticketd serves it as static assets from the same origin as the API, and it calls only the published Connect API, so it needs no UI-only endpoints.
+
+- Attention list: pending approvals and questions, with blocked and quarantined work.
+- Ticket view: fields, history, comments, runs, linked external objects and approvals. An approval is resolved by choosing one of its options or writing a reply.
+- Chat: the conversation of a session attached to a ticket, live through `WatchSession`, with a box that sends an operator message into that session.
+
+It has no authentication during development. It has no Ingress and is reached by port-forward. The actor recorded on a decision is then a name the user typed, and is stored as unverified. External objects render from their schema metadata, with no provider-specific views at first.
 
 ## 7. Go workflow library
 
@@ -381,13 +393,15 @@ Workload identity authenticates a pod to PDP. It is not a commit or artifact sig
 
 ### Transport and Kubernetes
 
-PDP extensions cover forward HTTPS proxying, credentialed TLS interception, DNS routing, git HTTPS and agent streaming/WebSockets. Reuse PDP's authentication, schema-aware authorization and credential engine instead of creating parallel checks.
+PDP is an identity-aware HTTP forward proxy. Any destination can be reached, Rego policy is the only allowlist, and a credential is injected only where an upstream entry binds one. As of 2026-11-12 its local `main` at `1c3e9f8`, 25 commits ahead of `origin/main`, has absolute-form and `CONNECT` proxying, TLS interception with its own CA, DNS steering, streamed responses, WebSocket relay and placeholder credentials. It speaks HTTP/1.1 only. By its own acceptance notes, none of this has been run against a real provider, a subscription client such as Jcode, SPIRE or a cluster. protocol7 supplies the Rego, upstream entries and adapters it needs, and PDP gains features as acceptance finds gaps. Reuse PDP's authentication, schema-aware authorization and credential engine instead of creating parallel checks.
 
 - Distribute the public interception CA into required client trust stores. Keep its private key at PDP.
 - Kubernetes integration configures step DNS and preserves internal service resolution. A NetworkPolicy-capable CNI restricts outbound paths to required DNS, PDP and protocol7 services.
 - Container execution uses isolated networking with PDP as the permitted outbound route. Do not claim enforcement if alternate routes remain.
 - DNS routing is not identity or authorization. Block bypass through direct IPs, alternate DNS and unsupported transports in enforced mode. Do not use host networking for isolated steps.
-- SPIFFE mTLS is the proposed network identity mechanism. Issuance, attestation and trusted per-run binding remain open. An unverified header, placeholder or pod IP alone must not establish authority.
+- SPIFFE mTLS is the network identity mechanism, issued by SPIRE (section 11). Each run pod gets its own SPIFFE ID, rendered from pod metadata that only the executor can set. An unverified header, placeholder or pod IP alone must not establish authority.
+- Many HTTP clients cannot present a client certificate to a proxy, which PDP lists as an open question. Proposed: the runner holds the pod's SVID and runs a local forwarder that the pod's proxy settings point at.
+- How a run's scope, such as its repository, reaches policy is open. PDP loads policy data from one file at reload. Either the SPIFFE ID carries the scope, or PDP reads run assignments from ticketd.
 - Explicit proxy configuration remains an option for cooperative clients. Clients that ignore it use the DNS/TLS route where supported.
 - Worker-originated API actions require distinct grants from agent traffic. Listener/network separation supplements authorization, not replaces it.
 
@@ -407,17 +421,38 @@ Certificate pinning and client-key-bound provider credentials may prevent interc
 
 ## 10. Integrations, controls and improvement
 
-### Provider-neutral integrations and consumer-owned ingress
+### Webhook receiver and consumer intake
 
-Consumers implement ordinary HTTP webhook receivers and register their own ingestion workflows/activities on Temporal workers. Receiver and worker can share a binary initially or deploy independently. A receiver is a Temporal client, not necessarily a worker. protocol7 does not initially ship webhook handler, submission, ingestion helpers or a provider registry; extract shared code only after actual implementations justify it. Existing structured ticket filtering remains unchanged; no filter-library migration is selected.
+protocol7 ships `webhookd`, a provider-neutral receiver that turns webhook deliveries into durable JetStream messages. Consumers pull from the stream and do not run their own HTTP receivers.
 
-Default ingestion is one short-lived workflow per relevant webhook delivery, identified by provider/source, installation/tenant and delivery ID. The receiver verifies signature, bounds body size and applies its event allowlist before starting work. Acknowledge only after Temporal confirms durable acceptance, treating a verified duplicate start as accepted. If acceptance cannot be confirmed, return a retryable response and reuse the same identity on redelivery. Do not wait for processing to finish before acknowledging. Persist delivery deduplication beyond Temporal history retention through the integration's own records. Large payloads require durable referenced storage before acknowledgement; bound and redact data placed in Temporal history.
+Each source is configuration: URL path, signature scheme and secret reference, delivery-ID and event-type headers, and a body size limit. `webhookd` verifies the signature over the raw body, publishes the delivery with its delivery ID as the JetStream message ID, and answers 2xx only after the publish is acknowledged. JetStream drops a repeated message ID inside the stream's duplicate window. The message carries source, delivery ID, event type, receive time and the raw body, on a subject of the form `p7.webhook.<source>.<event>`. `webhookd` does not parse provider payloads, filter by content or start workflows.
 
-The ingestion workflow normalizes the external object and appends its timeline through ticketd, then starts applicable consumer work using stable identities. Database mutation retries must return the same persisted result and follow-up identities. An integration may use Temporal Schedules for poll/reconciliation backstops. Long-lived per-object workflows are optional for actual coordination, such as PR debouncing, not a fixed webhook-worker pool. At the current stated volume of 100k deliveries/day, validate representative bursts, storage, retention and downstream provider limits with a load test rather than assuming the daily average establishes capacity.
+- It is a separate deployment from ticketd, because it is the only protocol7 endpoint exposed outside the cluster. It needs publish rights on its stream and nothing else.
+- The stream uses file storage, replicas where the cluster has them, and age-based retention long enough to cover a consumer outage.
+- GitHub marks a delivery failed when no 2xx arrives within 10 seconds, and does not redeliver on its own. Run more than one replica. A missed delivery is recovered by the recheck timer in each flow and a scheduled poll of open pull requests, with redelivery through the provider API as an option.
+
+A consumer runs a durable pull consumer with explicit acknowledgement. For each message it drops events it does not use, updates the external object and its timeline through ticketd keyed on the delivery ID, files any ticket with a `Once` key, and then acknowledges. A crash before the acknowledgement redelivers the message, and every step is idempotent. Deliveries do not each become a workflow, so a burst of check events costs stream storage, not Temporal history. Running flows notice the change through their state-based waits (section 7). Deduplication that must outlast the duplicate window is the consumer's own record. At the stated volume of 100k deliveries a day, load-test bursts and stream storage before relying on the daily average. Existing structured ticket filtering remains unchanged; no filter-library migration is selected.
 
 Ticket workflows consume typed external-object changes through the chosen workflow/waiting-activity path. Each mirrored field has one authoritative direction. SQL views over retained timeline transitions provide time-to-review, cycle time, throughput and reopen metrics; derived metrics are not authoritative execution state.
 
 The selfdev consumer implements the minimal GitHub operations it needs first. Broader GitHub, Linear and other integrations remain optional consumer packages. Posting, merging and deploying are consumer workflow actions with revision-bound gates. Whether an agent may perform an outside action directly is determined by its grants, not a universal built-in workflow restriction.
+
+### Requested review flow
+
+The first consumer flow after selfdev reviews pull requests on request. It is consumer code built with selfdev, not part of protocol7. Implementation from Linear issues, Linear triage and opencodereview runs are deferred.
+
+A pull request is eligible when all of these hold, checked against live GitHub state at intake and not taken from event text:
+
+- its repository is in the configured list
+- its author is a collaborator on that repository
+- it is not a draft
+- a review was requested from the reviewer identity, by a ping (a comment that mentions it) or by a configured label
+
+One ticket covers one pull request head and request. The workflow checks out that exact head read-only with the guidance collection mounted, runs the repository's checks and the review, and returns a typed report. Before publishing it re-reads the head, and discards the result if the head moved. It publishes one consolidated review, then follows the pull request with a state-based wait for replies on its threads, a new head or request, and close or merge. It never merges.
+
+- The reviewer is its own GitHub identity, separate from any identity that authors pull requests, because GitHub does not accept an approval from the author.
+- Rollout: the reviewer is requested in addition to today's reviewers on the same pull requests. The existing reviewers are shut down once this one is proven.
+- Pull request text is untrusted input. The collaborator rule is the admission gate, and the session has read-only repository grants.
 
 ### Safety and operational controls
 
@@ -448,11 +483,11 @@ Prompt storage is still open. Proposed: plain documents in git, resolved to a re
 
 ### Helm chart
 
-protocol7 ships a Helm chart that installs ticketd, the core workers, a schema-migration Job, Services, configuration, namespaced RBAC and NetworkPolicies into one control namespace. Dependencies are configured by endpoint and secret reference and are not bundled by default.
+protocol7 ships a Helm chart that installs ticketd with its web UI, the core workers, `webhookd`, a schema-migration Job, Services, configuration, namespaced RBAC and NetworkPolicies into one control namespace. Dependencies are configured by endpoint and secret reference and are not bundled by default.
 
 - The chart takes an explicit list of execution namespaces. The Kubernetes executor launches work only there.
 - The namespaces are provisioned by the operator. The chart can create the Roles and RoleBindings inside them, or an administrator applies those separately. There are no cluster-wide workload permissions.
-- Consumer workers and webhook receivers deploy separately, in their own namespace, with their own service accounts and configuration. protocol7 provides example manifests and does not create or manage those namespaces.
+- Consumer workers, including their webhook intake, deploy separately, in their own namespace, with their own service accounts and configuration. protocol7 provides example manifests and does not create or manage those namespaces.
 
 ### Namespaces and service accounts
 
@@ -461,7 +496,8 @@ protocol7 ships a Helm chart that installs ticketd, the core workers, a schema-m
 | ticketd | Control namespace | Postgres, Temporal client, NATS, artifact storage. No Kubernetes API rights |
 | Kubernetes executor worker | Control namespace | Create, watch and delete pods and their volumes and config in the listed execution namespaces only |
 | Wait and other core workers | Control namespace | Temporal and ticketd only |
-| Consumer worker and receiver | Consumer namespace | Temporal client and ticketd. No workload-management rights |
+| `webhookd` | Control namespace | Publish to its JetStream stream. No Temporal, Postgres or Kubernetes API rights |
+| Consumer worker and intake | Consumer namespace | Temporal client, ticketd and a pull consumer on the webhook stream. No workload-management rights |
 | Agent and step pods | Execution namespaces | No Kubernetes API token. A dedicated service account with no RoleBindings |
 
 Permission to create pods in a namespace allows use of any service account in it. Execution namespaces therefore hold no privileged accounts and no unrelated secrets. They carry a default-deny NetworkPolicy, resource quotas and pod-security enforcement. The executor constrains the pod specifications it accepts.
@@ -472,14 +508,14 @@ Permission to create pods in a namespace allows use of any service account in it
 |---|---|
 | Temporal | Self-hosted in the cluster on its own Postgres, separate from protocol7's database, with a Visibility store. Worker Versioning needs Temporal Server v1.29.1, CLI v1.4.1, UI v2.38.0 and Go SDK v1.35.0 or later. The history shard count is fixed when the cluster is created. Retention is set per Temporal namespace |
 | protocol7 Postgres | One database owned by ticketd, with backups. It holds records kept indefinitely |
-| NATS JetStream | Durable storage for live output |
+| NATS JetStream | File-backed storage for live output and the webhook stream |
 | Artifact storage | An S3-compatible bucket reachable from pods through presigned URLs |
 | PDP | Required for enforced credential and egress isolation |
-| Workload identity | A verifiable per-pod identity for PDP. SPIRE needs a cluster-level install. A projected service-account token with a PDP-only audience needs none and grants no Kubernetes API access. The choice is open |
+| Workload identity | SPIRE, installed at cluster level: server, node agents, the SPIFFE CSI driver and spire-controller-manager. Run pods mount the Workload API through the CSI driver. A `ClusterSPIFFEID` scoped to the execution namespaces renders each run pod's ID from its pod metadata |
 
 ### Network paths
 
-Agent and step pods may reach DNS, PDP, the ticketd run API and the artifact endpoint, and accept the ACP connection from the core worker. They must not reach Temporal, Postgres, NATS, the ticketd admin API or the Kubernetes API. Temporal and ticketd accept connections only from the control and consumer namespaces. With human authentication off, these policies are the access boundary on a shared cluster.
+Agent and step pods may reach DNS, PDP, the ticketd run API and the artifact endpoint, and accept the ACP connection from the core worker. They must not reach Temporal, Postgres, NATS, the ticketd admin API or the Kubernetes API. Temporal, NATS and ticketd accept connections only from the control and consumer namespaces. With human authentication off, these policies are the access boundary on a shared cluster. `webhookd` is the only component with an Ingress. The API and web UI have none.
 
 ### First deployment: `talos-metal`
 
@@ -495,24 +531,27 @@ The first deployment targets the `talos-metal` cluster. Read from the cluster on
 | No RuntimeClass | No gVisor. Pods run on the default containerd runtime |
 | No SPIRE, NATS, Temporal or PDP installed | All four are new installs for this deployment |
 | Storage classes `proxmox-lvm-xfs` (default) and `proxmox-scratch-xfs` | Persistent volumes for Postgres and NATS, scratch volumes for workspaces |
-| Traefik ingress class | Available for a webhook receiver or API endpoint if one is exposed |
+| Traefik ingress class | Ingress for `webhookd` |
+
+SPIRE agents and the CSI driver run privileged with host paths, so their namespace needs the privileged pod-security label, as `csi-proxmox` has. SPIRE, NATS, Temporal, PDP and the Postgres clusters are added through `gfx-labs/baremetal`.
 
 ## 12. Delivery milestones and acceptance
 
-Build complete paths in this order. Do not finish every backend or integration before selfdev.
+Build complete paths in this order. Do not finish every backend or integration before selfdev. The first iteration is milestones 1 to 5, and it is not complete until the container and Kubernetes executors both pass the same contract.
 
 | Milestone | Deliver | Acceptance |
 |---|---|---|
 | 1. Credentialed execution | Container executor, runner/manifest, file artifacts, NATS output and PDP integration including static and OAuth credentials | Run a command and private checkout; preserve output/artifacts; deny unauthorized access and prove no upstream token reaches the step |
 | 2. Durable work | Ticket core, Temporal commands, atomic mutation receipts, CAS/ownership fences, run projections and reconciliation | Retry a command across client timeout and commit-before-response loss; preserve cross-ticket atomicity and approval single resolution; restart between persistence and workflow start; lose NOTIFY events and reconnect listeners while approval/dependency waits still complete through polling; cancel and retry waiting activities; duplicate starts create one execution; expose accepted versus persisted status correctly; a workflow waiting on an approval, an external object and a timer wakes on each, and a change committed while it was busy is returned by its next wait |
 | 3. Agent sessions | ACP/acphost integration, scoped tools, typed reports, declared inputs, session journal and catalog, and provider capacity | Complete real turns through PDP; reconnect after worker failure; verify placeholders, refresh, streaming and provider isolation; mount a guidance tree from a tag and record its commit; find a session by task queue and time and read its full ordered conversation after its pod is gone |
-| 4. Development loop | Minimal GitHub operations, approvals and consumer edit/check/review/PR workflows | An explicit request produces a checked, independently reviewed PR with traceable evidence and intact gates |
-| 5. Versioned rollout | Consumer deployment activities, concurrent builds, promotion/rollback and draining | Existing executions finish on A while new ones use B; rollback future traffic; validate Continue-As-New separately; recover a stuck pinned execution on a replay-compatible fixed build and validate reset/ownership/external-effect handling |
-| 6. Evaluated improvement | Optional learnings plus consumer-owned incident groups, evaluation cases and improvement journal | Propose and evaluate a scoped change with external writes disabled, then record a justified keep/revert outcome |
-| 7. Additional environments | Kubernetes executor, S3, backend admission and equivalent PDP enforcement | Execute the same contract on container and Kubernetes, including DNS/trust, cancellation, denied bypass and artifact access |
-| 8. Broader integrations | Optional consumer GitHub/Linear packages and external-object metrics | Duplicate and out-of-order deliveries preserve one coherent object timeline; missed events reconcile; peak-volume load test and typed metrics agree with recorded transitions |
+| 4. Development loop | Minimal GitHub operations, approvals, web UI and consumer edit/check/review/PR workflows | An explicit request produces a checked, independently reviewed PR with traceable evidence and intact gates; an escalation is answered in the web UI and the waiting workflow continues |
+| 5. Kubernetes execution and cluster deployment | Kubernetes executor, S3 artifacts, backend admission, Helm chart, SPIRE identity and PDP enforcement on `talos-metal` | Execute the same contract on container and Kubernetes, including DNS/trust, cancellation, denied bypass and artifact access; PDP accepts a run pod's identity and denies a neighbouring pod |
+| 6. Versioned rollout | Consumer deployment activities, concurrent builds, promotion/rollback and draining | Existing executions finish on A while new ones use B; rollback future traffic; validate Continue-As-New separately; recover a stuck pinned execution on a replay-compatible fixed build and validate reset/ownership/external-effect handling |
+| 7. Requested review flow | `webhookd`, consumer intake, the review workflow and a reviewer GitHub identity | A ping or label on an eligible pull request produces one review on the exact head; a replayed delivery produces none; a push during review discards the stale result; an ineligible pull request is ignored; a receiver restart loses no accepted delivery |
+| 8. Evaluated improvement | Optional learnings plus consumer-owned incident groups, evaluation cases and improvement journal | Propose and evaluate a scoped change with external writes disabled, then record a justified keep/revert outcome |
+| 9. Broader integrations | Linear flows, the implementation flow, opencodereview and external-object metrics | Duplicate and out-of-order deliveries preserve one coherent object timeline; missed events reconcile; peak-volume load test and typed metrics agree with recorded transitions |
 
-Worker Versioning configuration is required from the first Temporal worker. Milestone 5 validates the complete automated rollout, rather than postponing versioning until then. Budgets, redaction and denial checks land with the first path that needs them.
+Worker Versioning configuration is required from the first Temporal worker. Milestone 6 validates the complete automated rollout, rather than postponing versioning until then. Budgets, redaction and denial checks land with the first path that needs them.
 
 Acceptance uses real component interfaces and representative provider routes. Keep local synthetic transport tests distinct from deployed/provider-backed acceptance. Test cancellation, permission revocation, expired credentials, refresh rotation, cross-run denial, worker restart, partial writes and cleanup as well as successful execution.
 
@@ -535,6 +574,6 @@ Open implementation questions:
 - Cross-process agent-session restoration and limits for long idle sessions.
 - Browser CORS policy for third-party clients, if required.
 
-A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It lists the decisions still needed before those flows can be built, including milestone order, the human attention surface, provider capacity, the agent harness, workload identity for the first deployment and the webhook path.
+A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID, provider capacity, the agent harness, and review-flow details.
 
 Device-specific providers and remote development environments are consumer concerns and are not prerequisites for this implementation path.
