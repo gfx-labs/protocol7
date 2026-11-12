@@ -254,7 +254,7 @@ A basic, provider-neutral web UI handles escalations. ticketd serves it as stati
 
 A new chat is a ticket like any other. The UI lists the ticket kinds that consumers registered as chat kinds and files one. That kind's workflow opens a session, waits for each operator message with a state-based wait, prompts the session with it, and closes the session after an idle limit. What the agent can reach is set by that workflow's image, tools and grants. protocol7 ships the chat surface and no maintenance agent of its own. Chats count toward the session limit (section 8).
 
-Selfdev registers the first chat kind. Proposed: its agent works on the selfdev and protocol7 repositories and changes workflows through the development loop, as reviewed pull requests that ship by versioned rollout. For Kubernetes it reads cluster state with a read-only credential that PDP injects, and changes configuration by pull request to `gfx-labs/baremetal`, which Flux applies. Agent pods still get no Kubernetes API token. Reading the Kubernetes API through PDP has not been tried.
+Selfdev registers the first chat kind. Its agent works on the selfdev and protocol7 repositories and changes workflows through the development loop, as reviewed pull requests that ship by versioned rollout. For Kubernetes it reads cluster state with a read-only credential that PDP injects, and changes configuration by pull request to `gfx-labs/baremetal`, which Flux applies. It has no direct write access to the cluster, and agent pods still get no Kubernetes API token. Reading the Kubernetes API through PDP has not been tried.
 
 The UI has no authentication of its own during development and no Ingress. People reach it with `kubectl port-forward`. Kubernetes RBAC on `pods/portforward` in the control namespace decides who can. A forwarded connection arrives at ticketd from loopback inside the pod and carries no user identity, so ticketd cannot learn who is on the other end. The UI asks for a name once and sends it with each request, and ticketd records it on decisions and messages as a claimed, unverified actor. When an authenticating proxy is put in front later, the trusted-header mode above takes the actor from that proxy's header, records it as verified and ignores the claimed name. The trusted peer is the proxy's address and never loopback, so a port-forwarded request cannot set that header. External objects render from their schema metadata, with no provider-specific views at first.
 
@@ -330,13 +330,35 @@ The session activity redacts and publishes output frames to `p7.session.<id>.out
 
 Clients read through ticketd, never directly from NATS or acphost. A new acphost controller connection can replace the current one, so viewers must not connect to it. Archive streams/journals to artifact storage before purging live data. Frames do not enter workflow history, but final typed results and ordinary activity results do.
 
-Waiting sessions retain their execution environment until an idle limit expires. Workflows can close and reopen for long waits. Cross-process session restoration remains dependent on the selected harness and needs acceptance testing.
+Waiting sessions retain their execution environment until an idle limit expires. Workflows can close and reopen for long waits. acpharness keeps everything a session needs under one directory, and a new process can load a copy of it. Moving a session to a new pod means saving and restoring that directory. That is not designed here and needs an acceptance test.
+
+### Agent harness
+
+The agent harness is `github.com/gfx-labs/acpharness` (decided 2026-11-12). It was read at `origin/master` `4e3e959` and has no release tag, so protocol7 pins a commit. This plan relies on the following:
+
+- It speaks ACP only, over stdio, a Unix socket or TCP with mTLS. The runner starts it under acphost.
+- It supports Claude and Codex subscription logins, and Chat Completions and Responses endpoints.
+- An account can be proxy-held (`proxied_oauth`, `proxied_api_key`). The harness sends the placeholder `acpharness-proxied-<account id>`, builds the rest of the request as usual, and never holds or refreshes the token.
+- Its own HTTP clients all honour `HTTPS_PROXY` and the system certificate pool. `acpharness hosts` prints the hosts a configuration will contact, which gives the run's egress list.
+- Models are one ordered list of `provider:account/model#effort`. On a rate limit, exhausted quota, auth failure or overload, the request moves to the next entry and the client is told.
+- A turn that stops for a reason the client can act on carries a typed stop: `rate_limit`, `auth`, `overload`, `context_full`, `limit`, `network`, `request` or `denied`, with the reset time and the account where they apply. protocol7 maps it to the run's failure class.
+- It builds as a static Go binary and runs `rg` and a shell, so the image needs both.
+
+Not established: a turn with a proxy-held account against a real provider. Its proxy test replays a recorded exchange through a local `CONNECT` proxy with a test CA. Real Claude and Codex turns have been run with logins the harness held itself.
 
 ### Session limit and model accounts
 
 At most 20 agent sessions are open at once across the deployment. Steps that only run a command do not count. The number is one ticketd setting. ticketd counts open session records and registers the new one in one transaction, serialized on that count so two concurrent opens cannot both take the last slot. Over the limit it refuses with a retryable capacity error. The open-session activity's Temporal retry policy does the waiting. There is no queue, reservation or fairness order. An idle session counts until it is closed, so a flow closes its session before a long wait. Reconciliation closes session records whose workflow is gone, so a crash cannot hold a slot for good. Temporal worker slot settings cannot provide this limit: they apply to each worker process separately, and a session spans several activities.
 
-A model account is one login or API key at a model provider. Sessions on the same account share its rate limit and its bill. jobcity's Jcode store, for example, holds several Claude logins used in a priority order (`elee1766/jobcity`, `docs/ops/agent-credentials.md`). In protocol7 the real account credentials live in PDP as bindings, and a session holds only the placeholder that names its binding (section 9). The consumer workflow chooses the account for a session from its own configuration, as it chooses a pool. protocol7 keeps no per-account limits at first. A provider rate limit surfaces as the `rate limit` failure class and Temporal retries the turn with backoff. Which accounts protocol7 gets, and whether a retry moves to another account, is open.
+A model account is one login or API key at a model provider. Sessions on the same account share its rate limit and its bill. protocol7 gets logins of its own: Codex and four or five Claude accounts (user, 2026-11-12). No other credential store uses them, because two stores that hold one login rotate the same refresh token and one of them is revoked (`elee1766/jobcity`, `docs/ops/agent-credentials.md`).
+
+The real tokens live in PDP, one binding per account, and each binding's placeholder is the harness's placeholder for that account (section 9). The workflow gives a session an ordered model list, and the runner starts the harness with it. The harness moves down the list within a turn, so a rate-limited Claude account falls through to the next one with no protocol7 code. When every entry is exhausted, the turn stops with `rate_limit` and a reset time, and Temporal retries after that time. PDP policy must grant the run every account on its list. protocol7 keeps no per-account limits.
+
+Open:
+
+- PDP's `oauth_refresh` sends a form body with a client secret. The Claude login refreshes with a JSON body and a scope, and neither login has a client secret. PDP needs a refresh adapter for each.
+- PDP has no login command. It expects a state file that already holds a refresh token. Proposed: log in once with `acpharness login`, move the refresh token into the binding's state file, and remove the local copy with `acpharness logout`, which does not revoke the login at the provider.
+- A proxy-held Codex account needs its ChatGPT account ID in the harness configuration, because the harness has no ID token to read it from.
 
 ### Session journal, catalog and search
 
@@ -404,7 +426,7 @@ Workload identity authenticates a pod to PDP. It is not a commit or artifact sig
 
 ### Transport and Kubernetes
 
-PDP is an identity-aware HTTP forward proxy. Any destination can be reached, Rego policy is the only allowlist, and a credential is injected only where an upstream entry binds one. As of 2026-11-12 its local `main` at `1c3e9f8`, 25 commits ahead of `origin/main`, has absolute-form and `CONNECT` proxying, TLS interception with its own CA, DNS steering, streamed responses, WebSocket relay and placeholder credentials. It speaks HTTP/1.1 only. By its own acceptance notes, none of this has been run against a real provider, a subscription client such as Jcode, SPIRE or a cluster. protocol7 supplies the Rego, upstream entries and adapters it needs, and PDP gains features as acceptance finds gaps. Reuse PDP's authentication, schema-aware authorization and credential engine instead of creating parallel checks.
+PDP is an identity-aware HTTP forward proxy. Any destination can be reached, Rego policy is the only allowlist, and a credential is injected only where an upstream entry binds one. As of 2026-11-12 its `origin/main` at `aeaca30` has absolute-form and `CONNECT` proxying, TLS interception with its own CA, DNS steering, streamed responses, WebSocket relay and placeholder credentials. It speaks HTTP/1.1 only. By its own acceptance notes, none of this has been run against a real provider, a subscription client, SPIRE or a cluster. protocol7 supplies the Rego, upstream entries and adapters it needs, and PDP gains features as acceptance finds gaps. Reuse PDP's authentication, schema-aware authorization and credential engine instead of creating parallel checks.
 
 - Distribute the public interception CA into required client trust stores. Keep its private key at PDP.
 - Kubernetes integration configures step DNS and preserves internal service resolution. A NetworkPolicy-capable CNI restricts outbound paths to required DNS, PDP and protocol7 services.
@@ -422,11 +444,11 @@ Audit run, verified identity, destination, operation, credential reference, poli
 
 ### Agent compatibility and placeholders
 
-Working assumption: PDP DNS/TLS interception covers Jcode's HTTP and WebSocket traffic. This is an implementation assumption, not measured compatibility or a requirement that every workflow use Jcode.
+acpharness's own HTTP clients honour `HTTPS_PROXY` and the system certificate pool, so the pod's proxy settings cover its model, MCP and web traffic once PDP's CA is installed. DNS steering is then needed only for other programs in the pod that ignore proxy settings. This has not been run against PDP.
 
 For multiple providers, supply distinct non-secret placeholders in the harness's required environment/auth-file formats. PDP chooses the real credential from verified assignment, destination and allowed binding. Placeholders are routing hints, never authorization. Multiple accounts on one provider endpoint need an explicit permitted binding. Replace account-specific auth headers as well as bearer/API-key fields where required.
 
-PDP owns real login and refresh. Verify that the harness accepts placeholder state, handles expiry and refresh responses, and cannot receive real tokens. Configure daemon-owned provider traffic, not merely an agent shell. Provider-specific login adapters and exact agent selection remain implementation work.
+PDP owns real login and refresh. With a proxy-held account, acpharness holds only a placeholder and never refreshes, so by design no real token reaches the pod. Verify that on a real provider, including an expired token and a refresh. Configure daemon-owned provider traffic, not merely an agent shell. PDP's refresh adapters for the Claude and Codex logins remain to be written (section 8).
 
 Certificate pinning and client-key-bound provider credentials may prevent interception. Do not assume all provider authentication can be substituted. Validate supported routes explicitly and keep unsupported routes fail-closed in enforced mode.
 
@@ -539,7 +561,7 @@ The first deployment targets the `talos-metal` cluster. Read from the cluster on
 |---|---|
 | Talos v1.14.5, Kubernetes v1.35.0, three control-plane nodes and three workers with 24, 24 and 32 CPUs and about 62 GiB each | The Kubernetes executor is needed for the first deployment, not as a later milestone |
 | Cilium with `enable-policy: default` | NetworkPolicy is available. Nothing is denied until a policy selects a pod, so every protocol7 namespace needs its own default-deny policy |
-| CloudNativePG operator with the Barman Cloud plugin CRDs. The three existing clusters run one instance each, and no `ScheduledBackup` or `ObjectStore` exists | For development, protocol7 and Temporal each get their own CNPG cluster with one instance and scheduled backups. These are the first CNPG backups on this cluster, so the bucket and its credentials are new. SeaweedFS on the same cluster is a poor target, because its own metadata database there has no CNPG backup |
+| CloudNativePG operator with the Barman Cloud plugin CRDs. The three existing clusters run one instance each, and no `ScheduledBackup` or `ObjectStore` exists | For development, protocol7 and Temporal each get their own CNPG cluster with one instance and scheduled backups. They go to Wasabi through the Barman Cloud plugin. This cluster backed up to Wasabi before: `gitlab-postgres` wrote to the bucket `talos-cnpg-backups` until GitLab was removed on 2026-09-18. Nothing writes there now. The `wasabi-s3-creds` secret existed only in the `gitlab` namespace and went with it, so new credentials are needed. Whether the bucket still exists was not checked |
 | SeaweedFS with an S3 service | Candidate artifact store |
 | Flux reconciles `gfx-labs/baremetal`, whose manifests are written in cdk8s and committed under `kubernetes/rendered/prod`. The Flux helm controller CRD is present | protocol7 publishes its chart as an OCI artifact. `gfx-labs/baremetal` declares a Flux `HelmRepository` and `HelmRelease` for it in a cdk8s chart file, as it does for its other charts, for example `reflector.ts`. A private chart needs a pull secret on the `HelmRepository` |
 | No RuntimeClass | No gVisor. Pods run on the default containerd runtime |
@@ -575,19 +597,19 @@ The selfdev repository exists with a bootstrap roadmap. No selfdev runtime is de
 
 Previously measured in a scratch Temporal development server: an incompatible workflow deployment left the workflow open, and redeploying the original code completed it without repeating the two completed activities. A separate payload test confirmed that ordinary activity inputs/results are visible in history unless protected by a codec. These are narrow platform experiments, not protocol7 end-to-end acceptance.
 
-Container execution, Kubernetes deployment, PDP integration, SPIFFE lifecycle, provider placeholder compatibility and versioned rollout remain unverified here. PDP CA/TLS/DNS work is happening separately. DNS/TLS coverage for Jcode is the working assumption to validate during integration, not a reason to block the architecture on proxy-variable behavior.
+Container execution, Kubernetes deployment, PDP integration, SPIFFE lifecycle, provider placeholder compatibility and versioned rollout remain unverified here. PDP CA/TLS/DNS work is happening separately. acpharness uses explicit proxy settings, so the model path does not depend on DNS steering. A turn through PDP with a proxy-held account has not been run.
 
 Open implementation questions:
 
 - Identity issuance/attestation, runner-to-run assignment and revocation across deployment backends.
 - Concrete API signatures, schemas/migrations, commit-safe change cursors, command identity/receipt retention and closed-ticket command semantics.
-- Agent/harness selection, placeholder formats, provider account headers and refresh handling.
+- PDP refresh adapters for the Claude and Codex logins, moving a login into PDP, and the first real turn through PDP with a proxy-held account.
 - Installation, local dependency startup, versioned worker lifecycle and deployment permissions.
 - Prompt storage, refresh boundary and provenance for long-running workflows.
 - Evaluation datasets, metrics and authority for improvement promotion/reversion.
 - Cross-process agent-session restoration and limits for long idle sessions.
 - Browser CORS policy for third-party clients, if required.
 
-A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID, model accounts, the Postgres backup bucket and the agent harness.
+A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID, PDP refresh for the model logins and the Wasabi credentials for Postgres backups.
 
 Device-specific providers and remote development environments are consumer concerns and are not prerequisites for this implementation path.

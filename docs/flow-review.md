@@ -2,9 +2,9 @@
 
 Written 2026-11-12 against `docs/plan.md` and updated the same day with the decisions below. Nothing here is built.
 
-Sources: `gfx-labs/pdp` local `main` at `1c3e9f8`, acphost tags, a read-only look at the `talos-metal` cluster, `gfx-labs/baremetal` at `948cd40`, and `elee1766/jobcity` at `5c76f7a`.
+Sources: `gfx-labs/pdp` at `aeaca30`, `gfx-labs/acpharness` at `4e3e959`, acphost tags, a read-only look at the `talos-metal` cluster, `gfx-labs/baremetal` at `948cd40`, and `elee1766/jobcity` at `5c76f7a`.
 
-Correction: the first version of this review read PDP's `origin/main` and described the older two-route gateway. PDP's local `main` is 25 commits ahead of it and is a generic forward proxy. The claims that PDP had no streaming, proxying or model-provider path were wrong and are removed.
+Correction: the first version of this review read PDP's `origin/main` and described the older two-route gateway. PDP's local `main` was then 25 commits ahead of it and is a generic forward proxy. Those commits are now on `origin/main`. The claims that PDP had no streaming, proxying or model-provider path were wrong and are removed.
 
 ## Decisions
 
@@ -25,6 +25,10 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | Chart | Published as an OCI artifact and installed by a Flux `HelmRelease` declared in `gfx-labs/baremetal`'s cdk8s code |
 | `p7.OnEvent` | Removed |
 | Session limit | 20 open agent sessions across the deployment |
+| Agent harness | `gfx-labs/acpharness` |
+| Model logins | Codex and four or five Claude accounts, used by protocol7 only |
+| Maintenance chat | Changes workflows and cluster configuration by pull request. No direct write access to the cluster |
+| Postgres backup target | Wasabi, as the cluster used before |
 | GitHub identities | Separate author and reviewer identities |
 | Rollout | The reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing ones are shut down once it is proven |
 | Webhooks | protocol7 ships its own receiver, `webhookd`, which publishes to NATS JetStream. Consumers pull from the stream |
@@ -134,11 +138,12 @@ Three properties do the work that jobcity's waits do badly today:
 
 PDP's design now covers what the flows need. What is left, from its own docs:
 
-- **Nothing has run against a real provider.** Its acceptance notes say no real GitHub or Linear call, no subscription client such as Jcode, no SPIRE and no cluster has been tried. Milestone 1 is the first real run.
+- **Nothing has run against a real provider.** Its acceptance notes say no real GitHub or Linear call, no subscription client, no SPIRE and no cluster has been tried. Milestone 1 is the first real run.
 - **Presenting the SVID.** Many HTTP clients cannot present a client certificate to a proxy. PDP lists this as open. The plan proposes that the runner holds the SVID and runs a local forwarder in the pod.
 - **Run scope in policy.** PDP loads policy data from one file at reload. A grant for one run, such as "this pod may read this repository", needs either a SPIFFE ID that carries the scope or a lookup of run assignments in ticketd.
 - **git and model streaming.** PDP speaks HTTP/1.1 only, sends `Accept-Encoding: identity` and refuses a compressed response when it injected a credential. git clone and push and a model stream should be the first things tried through it.
-- **Unpushed work.** The 25 commits that make PDP a forward proxy exist only in the local checkout.
+- **Refresh for subscription logins.** PDP's `oauth_refresh` sends a form body with a client secret. The Claude login refreshes with a JSON body and a scope, and neither the Claude nor the Codex login has a client secret. PDP needs a refresh adapter for each.
+- **Getting a login into PDP.** PDP has no login command and expects a state file that already holds a refresh token. The plan proposes logging in with `acpharness login` and moving the refresh token across.
 
 ### 2. SPIRE on `talos-metal`
 
@@ -146,15 +151,17 @@ Mostly a deployment: SPIRE server, node agents, the SPIFFE CSI driver and spire-
 
 ### 3. Model accounts
 
-The limit of 20 sessions is in section 8. Accounts are not settled. A model account is one login or API key at a provider, and every session on it shares its rate limit. jobcity's notes say a login must not be copied between credential stores, because both copies rotate the same refresh token and one of them gets revoked. PDP therefore needs logins of its own for protocol7, or ones that nothing else uses. How many there are decides how far 20 sessions can go before rate limits.
+Decided: protocol7 gets Codex and four or five Claude logins of its own. acpharness takes an ordered model list and moves to the next entry on a rate limit, so spreading sessions over the Claude accounts needs no protocol7 code. Not measured: how many concurrent sessions those accounts carry before every entry is rate limited. The limit of 20 is a starting number.
 
-### 4. Maintenance chat reach
+### 4. Kubernetes reads for the maintenance chat
 
-You asked for a chat that can change workflows and configure Kubernetes. The plan proposes that it changes both by pull request: workflows through the development loop, and cluster configuration through `gfx-labs/baremetal`, which Flux applies. It reads cluster state through PDP with a read-only credential. It does not get direct write access to the cluster. Reading the Kubernetes API through PDP has not been tried.
+Decided: the chat changes workflows and cluster configuration by pull request and has no direct write access. Its read access is open. Reading the Kubernetes API through PDP with a read-only credential has not been tried.
 
 ### 5. Agent harness
 
-The plan assumes Jcode. `docs/acpharness-needs.md` says acpharness has only a stub turn and no model. Session restore in a new pod, tool-load events for the journal and placeholder credentials all depend on the harness. A flow that lasts days should not depend on restoring a conversation: the branch, the pull request and the ticket hold enough to start a fresh session on the next wake.
+Decided: acpharness. `docs/acpharness-needs.md` in this repo is out of date. It says only a stub turn exists. At `4e3e959` acpharness has Claude and Codex logins, proxy-held accounts, proxy and CA support in every HTTP client, model fallback, typed stop reasons, a `hosts` command and a session directory that a new process can load. Those cover most of what that file asks for.
+
+Not established: a proxy-held account against a real provider, and moving a session directory between pods. Whether it reports tool-load events for the journal was not checked. It has no release tag, so protocol7 pins a commit. A flow that lasts days should still not depend on restoring a conversation: the branch, the pull request and the ticket hold enough to start a fresh session on the next wake.
 
 ### 6. Webhook delivery
 
@@ -166,7 +173,9 @@ GitHub marks a delivery failed after 10 seconds without a 2xx and does not redel
 
 ### 8. Postgres backups
 
-No CNPG cluster on `talos-metal` has a backup today, although the Barman Cloud plugin is installed. The two new clusters need a bucket and credentials. SeaweedFS on the same cluster is a poor target because its own metadata database there has no backup. With one instance each, a lost volume means restoring from backup, and Temporal is down until then.
+The cluster did back up to Wasabi, and no longer does. `gitlab-postgres` wrote to the bucket `talos-cnpg-backups` at `s3.us-central-1.wasabisys.com` through the Barman Cloud plugin, with 30 days of retention. GitLab was removed on 2026-09-18 (`gfx-labs/baremetal` `340093d`). A backup of the SeaweedFS database to the same bucket was added and reverted that day (`4ffc6cb`, `ab350ca`). Today no `ObjectStore` or `ScheduledBackup` exists and the three CNPG clusters have no backup.
+
+The plugin is still installed, so the two new clusters reuse that pattern. The `wasabi-s3-creds` secret lived only in the `gitlab` namespace and was deleted with it, so the keys must be supplied again. Whether the bucket still exists was not checked. With one instance each, a lost volume means restoring from backup, and Temporal is down until then.
 
 ## Smaller inconsistencies in the plan
 
@@ -179,6 +188,5 @@ Remaining:
 
 ## Questions
 
-1. **Model accounts.** Which provider logins will protocol7 have, and how many? They need to be separate from the ones jobcity and you use.
-2. **Backup bucket.** Where should the two Postgres backups go? An off-cluster bucket is safer than SeaweedFS on the same cluster.
-3. **Maintenance chat.** Is changing Kubernetes by pull request to `gfx-labs/baremetal` enough, or do you want the chat to apply changes to the cluster directly?
+1. **Wasabi keys.** Does the bucket `talos-cnpg-backups` still exist, and can you supply new keys for it? The old secret was lost with the `gitlab` namespace.
+2. **Codex logins.** I read your answer as Codex plus four or five Claude accounts. Is Codex one login or several?
