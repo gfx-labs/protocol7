@@ -26,7 +26,7 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | `p7.OnEvent` | Removed |
 | Session limit | 20 open agent sessions across the deployment |
 | Agent harness | `gfx-labs/acpharness` |
-| Model logins | Codex and four or five Claude accounts, used by protocol7 only |
+| Model logins | One Codex login and four or five Claude accounts, used by protocol7 only |
 | Maintenance chat | Changes workflows and cluster configuration by pull request. No direct write access to the cluster |
 | GitHub identities | Separate author and reviewer identities |
 | Rollout | The reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing ones are shut down once it is proven |
@@ -150,7 +150,7 @@ Mostly a deployment: SPIRE server, node agents, the SPIFFE CSI driver and spire-
 
 ### 3. Model accounts
 
-Decided: protocol7 gets Codex and four or five Claude logins of its own. acpharness takes an ordered model list and moves to the next entry on a rate limit, so spreading sessions over the Claude accounts needs no protocol7 code. Not measured: how many concurrent sessions those accounts carry before every entry is rate limited. The limit of 20 is a starting number.
+Decided: protocol7 gets one Codex login and four or five Claude logins of its own. acpharness takes an ordered model list and moves to the next entry on a rate limit, so spreading sessions over the Claude accounts needs no protocol7 code. The single Codex login has no second account to fall back to, so every Codex session shares one rate limit. Not measured: how many concurrent sessions those accounts carry before every entry is rate limited. The limit of 20 is a starting number.
 
 ### 4. Kubernetes reads for the maintenance chat
 
@@ -189,4 +189,4 @@ Remaining:
 
 ## Questions
 
-1. **Codex logins.** I read your answer as Codex plus four or five Claude accounts. Is Codex one login or several?
+None open. All earlier questions are answered in the decisions table.
