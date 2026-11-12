@@ -16,9 +16,9 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | Review eligibility | A pull request from a collaborator in a configured repository, not a draft, with our review requested by a ping or a label |
 | Credentials | Wait for PDP. No interim mode with keys mounted in pods. protocol7 adds the Rego and policies it needs, and PDP gains features as they are needed |
 | Workload identity | Install SPIRE on `talos-metal` |
-| Human decisions | A basic generic web UI with chat, in protocol7. No authentication during development. Reached by port-forward |
+| Human decisions | A basic generic web UI with chat, in protocol7. No authentication of its own during development. People reach it through PDP |
 | GitHub identities | Separate author and reviewer identities |
-| Rollout | The reviewer is added beside the existing reviewers on the same pull requests. The existing ones are shut down once it is proven. Other flows start on a subset jobcity does not serve |
+| Rollout | The reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing ones are shut down once it is proven |
 | Webhooks | protocol7 ships its own receiver, `webhookd`, which publishes to NATS JetStream. Consumers pull from the stream |
 
 ## The flows
@@ -150,7 +150,7 @@ GitHub marks a delivery failed after 10 seconds without a 2xx and does not redel
 
 ### 6. Shared cluster exposure
 
-`talos-metal` also runs GitHub Actions runners. Cilium is in default policy mode, so nothing is denied until a policy selects a pod. With the API and web UI unauthenticated, the NetworkPolicies in section 11 are a precondition for the first deployment.
+`talos-metal` also runs GitHub Actions runners. Cilium is in default policy mode, so nothing is denied until a policy selects a pod. With the API and web UI holding no authentication of their own, the NetworkPolicies in section 11 are a precondition for the first deployment.
 
 ### 7. Postgres durability
 
@@ -170,7 +170,8 @@ Existing CNPG clusters on `talos-metal` run one instance. Temporal's database ho
 2. **Collaborator.** GitHub labels an author as owner, member or collaborator. I would accept all three, meaning anyone with write access. Is that the rule?
 3. **Ping.** I took a ping to be a comment that mentions the reviewer. Must the person who pings also be a collaborator? Does a push after a review trigger a new review, or only a new ping or label?
 4. **Verdict.** While it runs beside the existing reviewers, does it post approvals and change requests that count toward branch protection, or comments only until it is proven?
-5. **Postgres.** One instance with backups, or replicas, for Temporal's database and for protocol7's?
-6. **Chart.** Render the Helm chart through cdk8s in `gfx-labs/baremetal`, or use a Flux HelmRelease?
-7. **`p7.OnEvent`.** Remove it, or redefine it as a handler on the consumer's pull loop?
-8. **Capacity.** How many agent sessions should run at once, across how many model accounts?
+5. **UI through PDP.** PDP is a forward proxy for workloads. How does a person's browser reach the UI through it: a proxy setting on your machine, or something in front of the UI? And should PDP pass the person's identity so decisions record who made them?
+6. **Postgres.** One instance with backups, or replicas, for Temporal's database and for protocol7's?
+7. **Chart.** Render the Helm chart through cdk8s in `gfx-labs/baremetal`, or use a Flux HelmRelease?
+8. **`p7.OnEvent`.** Remove it, or redefine it as a handler on the consumer's pull loop?
+9. **Capacity.** How many agent sessions should run at once, across how many model accounts?

@@ -251,7 +251,7 @@ A basic, provider-neutral web UI handles escalations. ticketd serves it as stati
 - Ticket view: fields, history, comments, runs, linked external objects and approvals. An approval is resolved by choosing one of its options or writing a reply.
 - Chat: the conversation of a session attached to a ticket, live through `WatchSession`, with a box that sends an operator message into that session.
 
-It has no authentication during development. It has no Ingress and is reached by port-forward. The actor recorded on a decision is then a name the user typed, and is stored as unverified. External objects render from their schema metadata, with no provider-specific views at first.
+It has no authentication of its own during development. People reach it through PDP. It gets no Ingress while that is the case. The actor recorded on a decision is stored as unverified unless PDP supplies a verified identity for the request, which is not designed yet. External objects render from their schema metadata, with no provider-specific views at first.
 
 ## 7. Go workflow library
 
@@ -451,7 +451,7 @@ A pull request is eligible when all of these hold, checked against live GitHub s
 One ticket covers one pull request head and request. The workflow checks out that exact head read-only with the guidance collection mounted, runs the repository's checks and the review, and returns a typed report. Before publishing it re-reads the head, and discards the result if the head moved. It publishes one consolidated review, then follows the pull request with a state-based wait for replies on its threads, a new head or request, and close or merge. It never merges.
 
 - The reviewer is its own GitHub identity, separate from any identity that authors pull requests, because GitHub does not accept an approval from the author.
-- Rollout: the reviewer is requested in addition to today's reviewers on the same pull requests. The existing reviewers are shut down once this one is proven.
+- Rollout: the reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing reviewers are shut down once this one is proven.
 - Pull request text is untrusted input. The collaborator rule is the admission gate, and the session has read-only repository grants.
 
 ### Safety and operational controls
@@ -515,7 +515,7 @@ Permission to create pods in a namespace allows use of any service account in it
 
 ### Network paths
 
-Agent and step pods may reach DNS, PDP, the ticketd run API and the artifact endpoint, and accept the ACP connection from the core worker. They must not reach Temporal, Postgres, NATS, the ticketd admin API or the Kubernetes API. Temporal, NATS and ticketd accept connections only from the control and consumer namespaces. With human authentication off, these policies are the access boundary on a shared cluster. `webhookd` is the only component with an Ingress. The API and web UI have none.
+Agent and step pods may reach DNS, PDP, the ticketd run API and the artifact endpoint, and accept the ACP connection from the core worker. They must not reach Temporal, Postgres, NATS, the ticketd admin API or the Kubernetes API. Temporal, NATS and ticketd accept connections only from the control and consumer namespaces. With human authentication off, these policies are the access boundary on a shared cluster. `webhookd` is the only component with an Ingress. The API and web UI have none, and are reached through PDP.
 
 ### First deployment: `talos-metal`
 
