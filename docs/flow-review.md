@@ -135,14 +135,14 @@ Three properties do the work that jobcity's waits do badly today:
 
 ### 1. PDP
 
-PDP's design now covers what the flows need. What is left, from its own docs:
+PDP's design now covers what the flows need. Four of the items below now have a design in `docs/pdp-integration.md`, checked locally against the real `pdp` and harness binaries. What is left:
 
 - **Nothing has run against a real provider.** Its acceptance notes say no real GitHub or Linear call, no subscription client, no SPIRE and no cluster has been tried. Milestone 1 is the first real run.
-- **Presenting the SVID.** Many HTTP clients cannot present a client certificate to a proxy. PDP lists this as open. The plan proposes that the runner holds the SVID and runs a local forwarder in the pod.
-- **Run scope in policy.** PDP loads policy data from one file at reload. A grant for one run, such as "this pod may read this repository", needs either a SPIFFE ID that carries the scope or a lookup of run assignments in ticketd.
+- **Presenting the SVID.** Designed: the harness cannot present a client certificate to a proxy, so the runner holds the SVID and runs a loopback forwarder in the pod. The shape ran locally with a plain forwarder. The mTLS leg and SPIRE are untested.
+- **Run scope in policy.** Designed: the SPIFFE ID carries the profile, the repository and the run ID, and policy data says what each profile may do. A lookup in ticketd was rejected because PDP's Rego has no `http.send` and a data reload empties the credential cache. The proposed policy passes sixteen `pdp explain` cases. Rendering the ID on the cluster is untested.
 - **git and model streaming.** PDP speaks HTTP/1.1 only, sends `Accept-Encoding: identity` and refuses a compressed response when it injected a credential. git clone and push and a model stream should be the first things tried through it.
-- **Refresh for subscription logins.** PDP's `oauth_refresh` sends a form body with a client secret. The Claude login refreshes with a JSON body and a scope, and neither the Claude nor the Codex login has a client secret. PDP needs a refresh adapter for each.
-- **Getting a login into PDP.** PDP has no login command and expects a state file that already holds a refresh token. The plan proposes logging in with `acpharness login` and moving the refresh token across.
+- **Refresh for subscription logins.** PDP refreshes them itself (user, 2026-11-12). That needs one PDP change, written on the local branch `refresh-public-clients` (`e6edc6b`) and not merged: `oauth_refresh` without a client secret, with an optional JSON body and scope. Both logins refreshed and rotated against a local stand-in. The real token endpoints are untried, and PDP locks a binding if a real response fails its checks.
+- **Getting a login into PDP.** Designed: `acph login`, one `jq` command that writes the refresh token and scopes to the binding's state file, then `acph logout`. PDP accepted a file made this way from a made-up login. Placing the file on PDP's volume in the cluster is not tried.
 
 ### 2. SPIRE on `talos-metal`
 

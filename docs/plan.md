@@ -334,7 +334,7 @@ Waiting sessions retain their execution environment until an idle limit expires.
 
 ### Agent harness
 
-The agent harness is `github.com/gfx-labs/acpharness` (decided 2026-11-12). It was read at `origin/master` `4e3e959` and has no release tag, so protocol7 pins a commit. This plan relies on the following:
+The agent harness is `github.com/gfx-labs/acpharness` (decided 2026-11-12). It is being renamed to `towa` (user, 2026-11-12). The rename is not in the repository yet, so this plan uses the current names. It was read at `origin/master` `4e3e959`, and its login and provider code again at `53c4a2a`, which renames the binary to `acph`. It has no release tag, so protocol7 pins a commit. This plan relies on the following:
 
 - It speaks ACP only, over stdio, a Unix socket or TCP with mTLS. The runner starts it under acphost.
 - It supports Claude and Codex subscription logins, and Chat Completions and Responses endpoints.
@@ -354,11 +354,11 @@ A model account is one login or API key at a model provider. Sessions on the sam
 
 The real tokens live in PDP, one binding per account, and each binding's placeholder is the harness's placeholder for that account (section 9). The workflow gives a session an ordered model list, and the runner starts the harness with it. The harness moves down the list within a turn, so a rate-limited Claude account falls through to the next one with no protocol7 code. When every entry is exhausted, the turn stops with `rate_limit` and a reset time, and Temporal retries after that time. PDP policy must grant the run every account on its list. protocol7 keeps no per-account limits.
 
-Open:
+PDP refreshes each login itself. The design, the PDP change it needs and what was run are in `docs/pdp-integration.md`:
 
-- PDP's `oauth_refresh` sends a form body with a client secret. The Claude login refreshes with a JSON body and a scope, and neither login has a client secret. PDP needs a refresh adapter for each.
-- PDP has no login command. It expects a state file that already holds a refresh token. Proposed: log in once with `acpharness login`, move the refresh token into the binding's state file, and remove the local copy with `acpharness logout`, which does not revoke the login at the provider.
-- A proxy-held Codex account needs its ChatGPT account ID in the harness configuration, because the harness has no ID token to read it from.
+- PDP's `oauth_refresh` at `aeaca30` requires a client secret and sends a form body. Both logins are public clients with no secret, and the Claude one refreshes with a JSON body and a scope. A PDP change on the local branch `refresh-public-clients` (`e6edc6b`, not merged) makes the secret optional and adds the JSON body and the scope. With it, PDP refreshed and rotated both logins against a local stand-in. Neither real token endpoint has been tried.
+- PDP has no login command and needs none. Log in once with `acph login`, write the refresh token and scopes to the binding's state file, and remove the local copy with `acph logout`, which does not revoke the login at the provider.
+- The Codex login's ChatGPT account ID is a fixed header on the PDP binding. PDP replaces the caller's value, so the harness configuration does not need it.
 
 ### Session journal, catalog and search
 
@@ -433,8 +433,8 @@ PDP is an identity-aware HTTP forward proxy. Any destination can be reached, Reg
 - Container execution uses isolated networking with PDP as the permitted outbound route. Do not claim enforcement if alternate routes remain.
 - DNS routing is not identity or authorization. Block bypass through direct IPs, alternate DNS and unsupported transports in enforced mode. Do not use host networking for isolated steps.
 - SPIFFE mTLS is the network identity mechanism, issued by SPIRE (section 11). Each run pod gets its own SPIFFE ID, rendered from pod metadata that only the executor can set. An unverified header, placeholder or pod IP alone must not establish authority.
-- Many HTTP clients cannot present a client certificate to a proxy, which PDP lists as an open question. Proposed: the runner holds the pod's SVID and runs a local forwarder that the pod's proxy settings point at.
-- How a run's scope, such as its repository, reaches policy is open. PDP loads policy data from one file at reload. Either the SPIFFE ID carries the scope, or PDP reads run assignments from ticketd.
+- acpharness, git and most other clients cannot present a client certificate to a proxy. Proposed: the runner holds the pod's SVID and runs a loopback forwarder that the pod's proxy settings point at (`docs/pdp-integration.md`, section 4). The shape ran locally with a plain forwarder to PDP's Unix socket. The mTLS leg is untested.
+- A run's scope reaches policy in the pod's SPIFFE ID, which carries the profile, the repository and the run ID: `spiffe://<trust domain>/p7/profile/<profile>/repo/<owner>/<repo>/run/<run id>`. Policy data says what each profile may do, so starting a run changes nothing in PDP. The proposed policy passes sixteen `pdp explain` cases (`docs/pdp-integration.md`, section 3). The ID is rendered from pod metadata, so only the core worker may create or patch pods in the run namespace.
 - Explicit proxy configuration remains an option for cooperative clients. Clients that ignore it use the DNS/TLS route where supported.
 - Worker-originated API actions require distinct grants from agent traffic. Listener/network separation supplements authorization, not replaces it.
 
@@ -444,11 +444,11 @@ Audit run, verified identity, destination, operation, credential reference, poli
 
 ### Agent compatibility and placeholders
 
-acpharness's own HTTP clients honour `HTTPS_PROXY` and the system certificate pool, so the pod's proxy settings cover its model, MCP and web traffic once PDP's CA is installed. DNS steering is then needed only for other programs in the pod that ignore proxy settings. This has not been run against PDP.
+acpharness's own HTTP clients honour `HTTPS_PROXY` and the system certificate pool, so the pod's proxy settings cover its model, MCP and web traffic once PDP's CA is installed. DNS steering is then needed only for other programs in the pod that ignore proxy settings. One harness turn ran through a local PDP this way with a deliberately invalid token: PDP picked the binding from the harness's placeholder and applied policy per account. A turn with a real token has not been run. A policy denial reaches the harness as a 403, which it reports as stop reason `auth`, not `denied`.
 
 For multiple providers, supply distinct non-secret placeholders in the harness's required environment/auth-file formats. PDP chooses the real credential from verified assignment, destination and allowed binding. Placeholders are routing hints, never authorization. Multiple accounts on one provider endpoint need an explicit permitted binding. Replace account-specific auth headers as well as bearer/API-key fields where required.
 
-PDP owns real login and refresh. With a proxy-held account, acpharness holds only a placeholder and never refreshes, so by design no real token reaches the pod. Verify that on a real provider, including an expired token and a refresh. Configure daemon-owned provider traffic, not merely an agent shell. PDP's refresh adapters for the Claude and Codex logins remain to be written (section 8).
+PDP owns real login and refresh. With a proxy-held account, acpharness holds only a placeholder and never refreshes, so by design no real token reaches the pod. Verify that on a real provider, including an expired token and a refresh. Configure daemon-owned provider traffic, not merely an agent shell. PDP's refresh adapters for the Claude and Codex logins are written and depend on one PDP change that is not merged (section 8, `docs/pdp-integration.md`).
 
 Certificate pinning and client-key-bound provider credentials may prevent interception. Do not assume all provider authentication can be substituted. Validate supported routes explicitly and keep unsupported routes fail-closed in enforced mode.
 
@@ -603,13 +603,13 @@ Open implementation questions:
 
 - Identity issuance/attestation, runner-to-run assignment and revocation across deployment backends.
 - Concrete API signatures, schemas/migrations, commit-safe change cursors, command identity/receipt retention and closed-ticket command semantics.
-- PDP refresh adapters for the Claude and Codex logins, moving a login into PDP, and the first real turn through PDP with a proxy-held account.
+- Merging the PDP refresh change, the first real refresh of each login, and the first real turn through PDP with a proxy-held account.
 - Installation, local dependency startup, versioned worker lifecycle and deployment permissions.
 - Prompt storage, refresh boundary and provenance for long-running workflows.
 - Evaluation datasets, metrics and authority for improvement promotion/reversion.
 - Cross-process agent-session restoration and limits for long idle sessions.
 - Browser CORS policy for third-party clients, if required.
 
-A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID and PDP refresh for the model logins.
+A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12. The PDP integration design is in `docs/pdp-integration.md`: refresh for the model logins, moving a login into PDP, run scope in policy and how a pod presents its SVID.
 
 Device-specific providers and remote development environments are consumer concerns and are not prerequisites for this implementation path.

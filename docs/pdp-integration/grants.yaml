@@ -1,0 +1,10 @@
+# What each run profile may do. policy.rego reads this as data.profiles.
+profiles:
+  review:
+    model_accounts:
+      - claude-1
+      - codex-1
+    git: read
+  triage:
+    model_accounts:
+      - claude-2

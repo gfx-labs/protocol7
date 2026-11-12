@@ -1,0 +1,14 @@
+version: pdp.authz/v2
+identity:
+  id: "spiffe://p7.example/p7/profile/review/repo/gfx-labs/protocol7/run/r-0001"
+  auth_method: spiffe
+  spiffe_id: "spiffe://p7.example/p7/profile/review/repo/gfx-labs/protocol7/run/r-0001"
+protocol: http
+destination:
+  scheme: https
+  host: github.com
+  port: 443
+binding: github-read
+http:
+  method: POST
+  path: /gfx-labs/protocol7.git/git-upload-pack

@@ -1,0 +1,17 @@
+version: pdp.authz/v2
+identity:
+  id: "spiffe://p7.example/p7/profile/admin/repo/gfx-labs/protocol7/run/r-0003"
+  auth_method: spiffe
+  spiffe_id: "spiffe://p7.example/p7/profile/admin/repo/gfx-labs/protocol7/run/r-0003"
+protocol: http
+destination:
+  scheme: https
+  host: api.anthropic.com
+  port: 443
+binding: claude-1
+http:
+  method: POST
+  path: /v1/messages
+  query:
+    beta:
+      - "true"

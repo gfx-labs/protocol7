@@ -1,0 +1,82 @@
+# PDP configuration for protocol7, proposed. Checked with pdp validate and
+# pdp explain only. Not served against a provider, SPIRE or a cluster.
+version: pdp.config/v3
+revision: p7-design-2
+
+transport:
+  spiffe:
+    address: ":8443"
+    workload_api: unix:///run/spire/sockets/agent.sock
+
+interception:
+  certificate_file: /etc/pdp/ca/tls.crt
+  key_file: /etc/pdp/ca/tls.key
+
+upstreams:
+  - host: api.anthropic.com
+    bindings: [claude-1, claude-2]
+    scopes:
+      - user:file_upload
+      - user:inference
+      - user:mcp_servers
+      - user:profile
+      - user:sessions:claude_code
+  - host: chatgpt.com
+    bindings: [codex-1]
+    scopes:
+      - api.connectors.invoke
+      - api.connectors.read
+      - email
+      - offline_access
+      - openid
+      - profile
+  - host: github.com
+    binding: github-read
+
+credentials:
+  providers:
+    claude:
+      script_file: claude.star
+      endpoints:
+        token: https://platform.claude.com/v1/oauth/token
+    codex:
+      script_file: codex.star
+      endpoints:
+        token: https://auth.openai.com/oauth/token
+    static:
+      script: |
+        def acquire(request):
+            return static(secret("token"), kind="basic", username="x-access-token")
+  bindings:
+    claude-1:
+      provider: claude
+      placeholder: acpharness-proxied-claude-1
+      parameters:
+        client_id: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
+      scopes: [user:file_upload, user:inference, user:mcp_servers, user:profile, "user:sessions:claude_code"]
+      state_file: /var/lib/pdp/claude-1/state.json
+    claude-2:
+      provider: claude
+      placeholder: acpharness-proxied-claude-2
+      parameters:
+        client_id: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
+      scopes: [user:file_upload, user:inference, user:mcp_servers, user:profile, "user:sessions:claude_code"]
+      state_file: /var/lib/pdp/claude-2/state.json
+    codex-1:
+      provider: codex
+      placeholder: acpharness-proxied-codex-1
+      headers:
+        chatgpt-account-id: 00000000-0000-0000-0000-000000000000
+      parameters:
+        client_id: app_EMoamEEZ73f0CkXaXp7hrann
+      scopes: [api.connectors.invoke, api.connectors.read, email, offline_access, openid, profile]
+      state_file: /var/lib/pdp/codex-1/state.json
+    github-read:
+      provider: static
+      secrets:
+        token:
+          file: /run/secrets/github-read/token
+
+policy:
+  modules: [policy.rego]
+  data: [grants.yaml]
