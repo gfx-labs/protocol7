@@ -21,14 +21,13 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | Human decisions | A basic generic web UI in protocol7 with two kinds of chat: one attached to a ticket, and a new chat for maintenance |
 | UI access | No authentication of its own. Reached with `kubectl port-forward` for now. Tailscale or Google sign-in in front is later |
 | Actor identity | A name the user gives, recorded as unverified, until an authenticating proxy supplies a verified one |
-| Postgres | For development, one CNPG cluster each for Temporal and protocol7, one instance, with backups |
+| Postgres | One CNPG cluster each for Temporal and protocol7, with a primary and one replica for failover. No backups, because this deployment is for testing |
 | Chart | Published as an OCI artifact and installed by a Flux `HelmRelease` declared in `gfx-labs/baremetal`'s cdk8s code |
 | `p7.OnEvent` | Removed |
 | Session limit | 20 open agent sessions across the deployment |
 | Agent harness | `gfx-labs/acpharness` |
 | Model logins | Codex and four or five Claude accounts, used by protocol7 only |
 | Maintenance chat | Changes workflows and cluster configuration by pull request. No direct write access to the cluster |
-| Postgres backup target | Wasabi, as the cluster used before |
 | GitHub identities | Separate author and reviewer identities |
 | Rollout | The reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing ones are shut down once it is proven |
 | Webhooks | protocol7 ships its own receiver, `webhookd`, which publishes to NATS JetStream. Consumers pull from the stream |
@@ -171,11 +170,13 @@ GitHub marks a delivery failed after 10 seconds without a 2xx and does not redel
 
 `talos-metal` also runs GitHub Actions runners. Cilium is in default policy mode, so nothing is denied until a policy selects a pod. The API and web UI have no authentication of their own, so the NetworkPolicies in section 11 are a precondition for the first deployment. Anyone who can port-forward into the control namespace can act as any name.
 
-### 8. Postgres backups
+### 8. Postgres has no backups
 
 The cluster did back up to Wasabi, and no longer does. `gitlab-postgres` wrote to the bucket `talos-cnpg-backups` at `s3.us-central-1.wasabisys.com` through the Barman Cloud plugin, with 30 days of retention. GitLab was removed on 2026-09-18 (`gfx-labs/baremetal` `340093d`). A backup of the SeaweedFS database to the same bucket was added and reverted that day (`4ffc6cb`, `ab350ca`). Today no `ObjectStore` or `ScheduledBackup` exists and the three CNPG clusters have no backup.
 
-The plugin is still installed, so the two new clusters reuse that pattern. The `wasabi-s3-creds` secret lived only in the `gitlab` namespace and was deleted with it, so the keys must be supplied again. Whether the bucket still exists was not checked. With one instance each, a lost volume means restoring from backup, and Temporal is down until then.
+Decided: the first deployment is for testing and has no backups. Each of the two new clusters runs a primary and one replica, so a lost node or volume fails over. Losing both instances, a bad migration or a mistaken delete loses the data, including every running workflow. Unless synchronous replication is configured, a failover can also lose the most recent commits.
+
+Add backups before the deployment holds work that must not be lost. The plugin is still installed. The `wasabi-s3-creds` secret lived only in the `gitlab` namespace and was deleted with it, so that step needs new keys.
 
 ## Smaller inconsistencies in the plan
 
@@ -188,5 +189,4 @@ Remaining:
 
 ## Questions
 
-1. **Wasabi keys.** Does the bucket `talos-cnpg-backups` still exist, and can you supply new keys for it? The old secret was lost with the `gitlab` namespace.
-2. **Codex logins.** I read your answer as Codex plus four or five Claude accounts. Is Codex one login or several?
+1. **Codex logins.** I read your answer as Codex plus four or five Claude accounts. Is Codex one login or several?

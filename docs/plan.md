@@ -543,7 +543,7 @@ Permission to create pods in a namespace allows use of any service account in it
 | Dependency | Requirement |
 |---|---|
 | Temporal | Self-hosted in the cluster on its own Postgres, separate from protocol7's database, with a Visibility store. Worker Versioning needs Temporal Server v1.29.1, CLI v1.4.1, UI v2.38.0 and Go SDK v1.35.0 or later. The history shard count is fixed when the cluster is created. Retention is set per Temporal namespace |
-| protocol7 Postgres | One database owned by ticketd, with backups. It holds records kept indefinitely |
+| protocol7 Postgres | One database owned by ticketd. It holds records kept indefinitely, so a deployment that must keep its data needs backups. The first deployment is for testing and has none |
 | NATS JetStream | File-backed storage for live output and the webhook stream |
 | Artifact storage | An S3-compatible bucket reachable from pods through presigned URLs |
 | PDP | Required for enforced credential and egress isolation |
@@ -561,7 +561,7 @@ The first deployment targets the `talos-metal` cluster. Read from the cluster on
 |---|---|
 | Talos v1.14.5, Kubernetes v1.35.0, three control-plane nodes and three workers with 24, 24 and 32 CPUs and about 62 GiB each | The Kubernetes executor is needed for the first deployment, not as a later milestone |
 | Cilium with `enable-policy: default` | NetworkPolicy is available. Nothing is denied until a policy selects a pod, so every protocol7 namespace needs its own default-deny policy |
-| CloudNativePG operator with the Barman Cloud plugin CRDs. The three existing clusters run one instance each, and no `ScheduledBackup` or `ObjectStore` exists | For development, protocol7 and Temporal each get their own CNPG cluster with one instance and scheduled backups. They go to Wasabi through the Barman Cloud plugin. This cluster backed up to Wasabi before: `gitlab-postgres` wrote to the bucket `talos-cnpg-backups` until GitLab was removed on 2026-09-18. Nothing writes there now. The `wasabi-s3-creds` secret existed only in the `gitlab` namespace and went with it, so new credentials are needed. Whether the bucket still exists was not checked |
+| CloudNativePG operator with the Barman Cloud plugin CRDs. The three existing clusters run one instance each, and no `ScheduledBackup` or `ObjectStore` exists | protocol7 and Temporal each get their own CNPG cluster with two instances, a primary and one replica on different nodes, so the operator fails over when a node or volume is lost. This deployment is for testing and has no backups (user, 2026-11-12). Losing both instances, a bad migration or a mistaken delete loses the data. Unless synchronous replication is configured, a failover can also lose the most recent commits. Add backups before it holds work that must not be lost |
 | SeaweedFS with an S3 service | Candidate artifact store |
 | Flux reconciles `gfx-labs/baremetal`, whose manifests are written in cdk8s and committed under `kubernetes/rendered/prod`. The Flux helm controller CRD is present | protocol7 publishes its chart as an OCI artifact. `gfx-labs/baremetal` declares a Flux `HelmRepository` and `HelmRelease` for it in a cdk8s chart file, as it does for its other charts, for example `reflector.ts`. A private chart needs a pull secret on the `HelmRepository` |
 | No RuntimeClass | No gVisor. Pods run on the default containerd runtime |
@@ -610,6 +610,6 @@ Open implementation questions:
 - Cross-process agent-session restoration and limits for long idle sessions.
 - Browser CORS policy for third-party clients, if required.
 
-A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID, PDP refresh for the model logins and the Wasabi credentials for Postgres backups.
+A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12 and what is still open: how a run's scope reaches PDP policy, how clients present their SVID and PDP refresh for the model logins.
 
 Device-specific providers and remote development environments are consumer concerns and are not prerequisites for this implementation path.
