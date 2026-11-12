@@ -33,6 +33,7 @@ package reviews
 import (
     "errors"
     "fmt"
+    "slices"
     "time"
 
     p7 "github.com/gfx-labs/protocol7"
@@ -65,7 +66,10 @@ func (w *Workflows) Review(
     }
 
     spec := w.config.ReviewSession
-    spec.Repos = []p7.Repo{{Name: request.Repository, Ref: request.Head}}
+    spec.Inputs = append(slices.Clone(spec.Inputs), p7.Input{
+        Source:      p7.GitClone{Repository: request.Repository, Ref: request.Head},
+        Destination: "/work",
+    })
     session, err := p7.OpenSession(ctx, spec)
     if err != nil {
         return nil, fmt.Errorf("open reviewer: %w", err)

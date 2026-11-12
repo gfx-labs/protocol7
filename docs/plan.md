@@ -194,11 +194,12 @@ Admission checks the verified worker, repository scope, image, command and reque
 
 ### Inputs and knowledge collections
 
-`SessionSpec`, the step specification and `OpenEnvironment` accept `Inputs`: read-only files or directory trees placed at explicit destination paths, for example a prompt and guidance directory at `/guidance`. An agent reads those files on demand. Mounting an input does not add its contents to a prompt.
+`SessionSpec`, the step specification and `OpenEnvironment` accept `Inputs`: files, directory trees or git clones placed at explicit destination paths, for example a prompt and guidance directory at `/guidance` and the code under work at `/work`. Trees and artifacts are read-only. A clone is writable unless marked read-only. An agent reads those files on demand. Mounting an input does not add its contents to a prompt.
 
 | Source | Resolution |
 |---|---|
 | Git tree | Repository, path and a commit, tag or branch. A tag or branch is resolved to a commit once, by an activity, when the step, session or environment is created. Retries, replay and reattachment reuse the recorded commit and never resolve the name again |
+| Git clone | Repository and a commit, tag or branch, resolved and recorded like a git tree. The destination is a working clone with history, so `git diff` and `git range-diff` work and a coding session can commit in it. `Fetch` lists extra commits to have in the clone, such as the head a previous review covered, which a rewritten branch no longer reaches. This replaces a separate repository field on a session: the code under work is one more input |
 | Artifact | Content-addressed artifact reference with its digest |
 | Knowledge collection | A named collection that resolves to a git tree as above |
 
@@ -250,7 +251,7 @@ A basic, provider-neutral web UI handles escalations. ticketd serves it as stati
 - Attention list: pending approvals and questions, with blocked and quarantined work.
 - Ticket view: fields, history, comments, runs, linked external objects and approvals. An approval is resolved by choosing one of its options or writing a reply.
 - New chat: a conversation that belongs to no existing work, for maintenance. See below.
-- Ticket chat: the conversation of a session attached to a ticket, live through `WatchSession`, with a box that sends an operator message into that session.
+- Ticket chat: the conversation of a session attached to a ticket, live through `WatchSession`, with a box that sends an operator message into that session, queued or as an interrupt (section 8, "Steering a running session").
 
 A new chat is a ticket like any other. The UI lists the ticket kinds that consumers registered as chat kinds and files one. That kind's workflow opens a session, waits for each operator message with a state-based wait, prompts the session with it, and closes the session after an idle limit. What the agent can reach is set by that workflow's image, tools and grants. protocol7 ships the chat surface and no maintenance agent of its own. Chats count toward the session limit (section 8).
 
@@ -271,7 +272,8 @@ The following surface is proposed, not a published API:
 | `p7.Register` | Register ticket kind, protobuf fields schema, workflow type and consumer queue |
 | `p7.Step[T]` | Execute one command and return a validated typed result |
 | `p7.Agent[T]` | Run an ACP session to a typed result and close it |
-| `p7.OpenSession`, `p7.Prompt[T]`, `session.Close` | Retain a session across multiple turns |
+| `p7.OpenSession`, `p7.Prompt[T]`, `session.Close` | Retain a session across multiple turns. A turn can be resteered from outside (section 8) |
+| `p7.Input` with `p7.GitTree`, `p7.GitClone`, artifact and collection sources | Files, trees and clones placed in a session, step or environment (section 5). There is no `p7.Repo` |
 | `p7.OpenEnvironment`, `environment.Exec`, `environment.Close` | Keep an execution environment across commands and sessions |
 | `p7.Ask` | Create an approval and wait for its decision |
 | `p7.WaitEvent`, `p7.Watch` | Wait for changes to named external objects, approvals and tickets since the revisions already handled. Future-returning forms compose in a `workflow.Selector` |
@@ -394,6 +396,36 @@ A session that several workflows use is owned by its own long-lived session work
 Choosing which idle session takes a turn is consumer code: a pool workflow that queues requests and hands out compatible idle sessions. protocol7 provides handles and serialized turn submission, not a scheduler.
 
 A warm environment and a warm conversation are different things to reuse. A reused conversation carries its earlier context, workspace and grants into the next task. Use a fresh conversation for unrelated work and reuse a conversation only within the same project and context.
+
+### Steering a running session
+
+Proposed 2026-11-12. Not built or tested.
+
+A person or an authorized agent session, such as an admin session, can send a message to another session or interrupt it while it works. ACP runs one prompt turn per session at a time. Its only control during a turn is `session/cancel`, after which the agent answers the pending prompt with stop reason `cancelled` and the client may send another prompt in the same conversation (ACP v1 "Prompt Turn", read 2026-11-12). A resteer is therefore a cancel followed by a new prompt. The conversation keeps its context.
+
+One command, `SteerSession(session, message, mode, request ID)`, serves every sender:
+
+| Mode | Effect |
+|---|---|
+| `queue` | The message is delivered after the current turn ends, ahead of the workflow's next prompt |
+| `interrupt` | The current turn is cancelled, then the message is sent as the next prompt |
+| `stop` | The current turn is cancelled and no message is sent |
+
+- The command enters Temporal like other execution-affecting commands. An activity stores the steer on the session record with its command receipt. A repeated request ID returns the first outcome.
+- The activity that runs the turn holds the ACP connection. It observes pending steers for its session through ticketd, with LISTEN/NOTIFY hints and polling fallback, the same way a wait activity observes an approval. The owning workflow does not need a signal handler for this.
+- After an `interrupt`, that activity sends `session/cancel`, waits for the `cancelled` stop reason, sends the steer as a prompt and keeps running. The typed result the agent then submits is the result of the workflow's pending `p7.Prompt`. A consumer workflow needs no code for a resteer. The result carries the steers that were applied, so a workflow that cares can read them.
+- After a `stop`, `p7.Prompt` returns a distinct non-retryable error that names the actor. The workflow decides what to do next. It is not reported as a failure of the agent.
+- A session shared across workflows applies the same three modes in its session workflow, which already runs one turn at a time.
+- A steer cannot change the session's grants, egress, inputs or tools. It is a message, delivered with trusted provenance and the session nonce (section 6). The receiving agent treats it as an operator instruction, and authorization is checked by ticketd before delivery, never inferred from the text.
+- A person steers through the chat box in the web UI. An agent session steers through a `steer_session` tool that is off by default. Its grant names the sessions it covers, for example sessions of tickets under one parent, or of one project. A session cannot steer itself or widen its own grant.
+- Every steer is a journal entry on the target session with the sender, mode, message, the turn it interrupted and the time the cancel took. The cancelled turn's partial output stays in the journal.
+- The turn's timeout and heartbeat keep running across a steer. A harness that does not stop within a bounded time after `session/cancel` fails the turn with its own failure class and the environment is closed.
+
+Open:
+
+- A `queue` or `interrupt` steer sent to an idle session that only one workflow uses has nothing to run it until that workflow's next prompt. Either it waits, or the workflow opts in to wake on session steers and run the turn. Not decided. The chat box needs an answer here, because a person expects a reply.
+- Whether work the agent did in the cancelled turn (edits in the workspace, a half-written review) should be described to it in the steer prompt. The conversation has it, but a harness may drop a cancelled turn's tool output.
+- How promptly each harness honours `session/cancel` during a long tool call, and whether the conversation is usable afterwards. This needs an acceptance test per harness.
 
 ## 9. PDP integration and credential boundary
 
@@ -580,7 +612,7 @@ Build complete paths in this order. Do not finish every backend or integration b
 |---|---|---|
 | 1. Credentialed execution | Container executor, runner/manifest, file artifacts, NATS output and PDP integration including static and OAuth credentials | Run a command and private checkout; preserve output/artifacts; deny unauthorized access and prove no upstream token reaches the step |
 | 2. Durable work | Ticket core, Temporal commands, atomic mutation receipts, CAS/ownership fences, run projections and reconciliation | Retry a command across client timeout and commit-before-response loss; preserve cross-ticket atomicity and approval single resolution; restart between persistence and workflow start; lose NOTIFY events and reconnect listeners while approval/dependency waits still complete through polling; cancel and retry waiting activities; duplicate starts create one execution; expose accepted versus persisted status correctly; a workflow waiting on an approval, an external object and a timer wakes on each, and a change committed while it was busy is returned by its next wait |
-| 3. Agent sessions | ACP/acphost integration, scoped tools, typed reports, declared inputs, session journal and catalog, and the session limit | Complete real turns through PDP; reconnect after worker failure; verify placeholders, refresh, streaming and provider isolation; a session over the limit waits and opens when another closes; mount a guidance tree from a tag and record its commit; find a session by task queue and time and read its full ordered conversation after its pod is gone |
+| 3. Agent sessions | ACP/acphost integration, scoped tools, typed reports, declared inputs, session journal and catalog, and the session limit | Complete real turns through PDP; reconnect after worker failure; verify placeholders, refresh, streaming and provider isolation; a session over the limit waits and opens when another closes; mount a guidance tree from a tag and record its commit; interrupt a running turn from a second session with a new instruction and get the typed result of the steered turn back in the waiting workflow, with the steer and its sender in the journal; refuse a steer from a session without the grant; find a session by task queue and time and read its full ordered conversation after its pod is gone |
 | 4. Development loop | Minimal GitHub operations, approvals, web UI and consumer edit/check/review/PR workflows | An explicit request produces a checked, independently reviewed PR with traceable evidence and intact gates; an escalation is answered in the web UI and the waiting workflow continues; a maintenance chat opened in the web UI takes messages across several turns |
 | 5. Kubernetes execution and cluster deployment | Kubernetes executor, S3 artifacts, backend admission, Helm chart, SPIRE identity and PDP enforcement on `talos-metal` | Execute the same contract on container and Kubernetes, including DNS/trust, cancellation, denied bypass and artifact access; PDP accepts a run pod's identity and denies a neighbouring pod |
 | 6. Versioned rollout | Consumer deployment activities, concurrent builds, promotion/rollback and draining | Existing executions finish on A while new ones use B; rollback future traffic; validate Continue-As-New separately; recover a stuck pinned execution on a replay-compatible fixed build and validate reset/ownership/external-effect handling |
