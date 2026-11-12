@@ -4,7 +4,7 @@ Written 2026-11-12. This is a design. Each section says what was run and what wa
 
 Sources:
 
-- `gfx-labs/pdp` at `origin/main` `aeaca30`, plus the local branch `refresh-public-clients` at `e6edc6b`. That branch holds the one PDP change this design needs. It is not pushed and not merged.
+- `gfx-labs/pdp` at `origin/main` `e6edc6b`. That commit is the one PDP change this design needed: `oauth_refresh` for a login with no client secret. It was merged and pushed on 2026-11-12. `aeaca30` is the commit before it.
 - `gfx-labs/towa` at `origin/master` `7bff6dc`. This is the agent harness.
 
 towa was named acpharness until 2026-11-12 (`7ff30fa`). The local checks here were first run on the acpharness build at `53c4a2a` and run again on towa at `7bff6dc`. The rename changed three names this design uses:
@@ -17,7 +17,7 @@ towa was named acpharness until 2026-11-12 (`7ff30fa`). The local checks here we
 
 towa has no code that reads the old names. A PDP binding that still has an `acpharness-proxied-` placeholder matches nothing towa sends. Run locally, PDP found no binding and denied every request.
 
-The files in `docs/pdp-integration/` are the proposed PDP configuration, policy, grants and refresh adapters, with eighteen `pdp explain` inputs. The trust domain `p7.example` in `policy.rego` and the inputs is a stand-in. To rerun the checks with a `pdp` built from the branch:
+The files in `docs/pdp-integration/` are the proposed PDP configuration, policy, grants and refresh adapters, with eighteen `pdp explain` inputs. The trust domain `p7.example` in `policy.rego` and the inputs is a stand-in. To rerun the checks with a `pdp` built from `main`:
 
 ```sh
 cd docs/pdp-integration
@@ -29,7 +29,7 @@ for input in explain/*.yaml; do pdp explain --config pdp.yaml --input "$input"; 
 
 | Question | Answer |
 | --- | --- |
-| Who refreshes the Claude and Codex logins | PDP, by itself. The harness holds a placeholder and never sees or refreshes a token. This needs one PDP change, written and tested locally. |
+| Who refreshes the Claude and Codex logins | PDP, by itself. The harness holds a placeholder and never sees or refreshes a token. This needed one PDP change, which is merged. |
 | How a login gets into PDP | Log in once with `towa login`, write the refresh token and scopes to the binding's state file, then `towa logout`. No PDP login command is needed. |
 | How a run's scope reaches policy | The run pod's SPIFFE ID carries the profile, the repository and the run ID. Policy data holds what each profile may do. Nothing changes in PDP when a run starts. |
 | How a run pod presents its SVID | The harness cannot present a client certificate to a proxy. The runner holds the SVID and runs a loopback forwarder that the pod's proxy settings point at. |
@@ -38,14 +38,14 @@ for input in explain/*.yaml; do pdp explain --config pdp.yaml --input "$input"; 
 
 | Check | Result |
 | --- | --- |
-| `pdp validate` on `docs/pdp-integration/pdp.yaml` | Valid. It is also valid on the unpatched binary, because `validate` compiles an adapter and does not run it. |
+| `pdp validate` on `docs/pdp-integration/pdp.yaml` | Valid. It is also valid on a build of `aeaca30`, because `validate` compiles an adapter and does not run it. |
 | `pdp explain` on the eighteen inputs | 6 allowed, 12 denied, as intended. See the table in section 3. |
 | `towa accounts` and `towa hosts` on a configuration with three proxy-held accounts | All three report "held by a proxy". Hosts are `api.anthropic.com:443` and `chatgpt.com:443`. No token endpoint is listed. `towa login` refuses a proxy-held account. |
 | One towa turn through a local PDP. towa had `HTTPS_PROXY` and PDP's CA in `SSL_CERT_FILE`. PDP held a deliberately invalid token, so no real credential was used. The model's context size and output limit were set in towa's configuration, because the model list cannot be read with an invalid token | PDP intercepted the connection, picked the binding from `towa-proxied-claude-1`, allowed it and forwarded the request to `api.anthropic.com`, which answered 401 as expected. towa then fell back to `claude-2`, which the test policy did not grant, and PDP answered 403. The acpharness build gave the same result. |
 | The same turn without those two figures in towa's configuration | towa exited at start. It could not read the model list and reported that nothing is known about the model. See the findings. |
 | The same turn with PDP's bindings still on `acpharness-proxied-` placeholders | PDP selected no binding and answered 403 to every request. |
 | PDP unit test `TestRefreshPublicClient` | Fails on `aeaca30`, passes on `e6edc6b`. `make check` passes on `e6edc6b`. |
-| The patched `pdp` binary serving `claude.star` and `codex.star` against a local stand-in for both token endpoints. The stand-in accepts only the request shape each provider's CLI sends and rejects a reused refresh token | Both logins refreshed, rotated and persisted twice. The stand-in received the real access token and no placeholder. For Codex it received the binding's `chatgpt-account-id`, not the wrong value the caller sent. State files stayed `0600` with no recovery marker. The unpatched binary answered 502 without sending a token request. |
+| A `pdp` built from `e6edc6b` serving `claude.star` and `codex.star` against a local stand-in for both token endpoints. The stand-in accepts only the request shape each provider's CLI sends and rejects a reused refresh token | Both logins refreshed, rotated and persisted twice. The stand-in received the real access token and no placeholder. For Codex it received the binding's `chatgpt-account-id`, not the wrong value the caller sent. State files stayed `0600` with no recovery marker. A build of `aeaca30` answered 502 without sending a token request. |
 
 Not run: any refresh against the real Claude or Codex token endpoint, a real turn or model list with a real token, SPIRE, the mTLS listener, a cluster, and git through PDP.
 
@@ -53,7 +53,7 @@ Not run: any refresh against the real Claude or Codex token endpoint, a real tur
 
 PDP owns the refresh. It keeps each login's refresh token in the binding's `state_file`, exchanges it when it has no unexpired access token cached, writes the rotated pair back before using it, and serializes this with a file lock.
 
-PDP at `aeaca30` cannot refresh these two logins. Its `oauth_refresh` requires a client secret and sends a form body. Both logins are public clients with no secret. The requests the provider CLIs send, read from `src/auth/oauth.go` in towa:
+PDP before `e6edc6b` could not refresh these two logins. Its `oauth_refresh` required a client secret and sent a form body. Both logins are public clients with no secret. The requests the provider CLIs send, read from `src/auth/oauth.go` in towa:
 
 | | Claude | Codex |
 | --- | --- | --- |
@@ -201,8 +201,7 @@ The shape was run locally with a plain forwarder in place of the mTLS one: `HTTP
 
 ## Order of the first real tests
 
-1. Merge the PDP refresh change.
-2. One real refresh per provider with a login that can be lost, then read the state file for `recovery_required`.
-3. One real towa start and turn per provider through PDP on a Unix socket: the model list, streaming, a turn that outlives the access token, and the fallback from one Claude account to the next.
-4. git fetch through PDP with the GitHub App binding. The `github-read` binding in `pdp.yaml` is a static token standing in for it.
-5. SPIRE, the `ClusterSPIFFEID` and the runner forwarder on `talos-metal`.
+1. One real refresh per provider with a login that can be lost, then read the state file for `recovery_required`.
+2. One real towa start and turn per provider through PDP on a Unix socket: the model list, streaming, a turn that outlives the access token, and the fallback from one Claude account to the next.
+3. git fetch through PDP with the GitHub App binding. The `github-read` binding in `pdp.yaml` is a static token standing in for it.
+4. SPIRE, the `ClusterSPIFFEID` and the runner forwarder on `talos-metal`.

@@ -359,7 +359,7 @@ The real tokens live in PDP, one binding per account, and each binding's placeho
 
 PDP refreshes each login itself. The design, the PDP change it needs and what was run are in `docs/pdp-integration.md`:
 
-- PDP's `oauth_refresh` at `aeaca30` requires a client secret and sends a form body. Both logins are public clients with no secret, and the Claude one refreshes with a JSON body and a scope. A PDP change on the local branch `refresh-public-clients` (`e6edc6b`, not merged) makes the secret optional and adds the JSON body and the scope. With it, PDP refreshed and rotated both logins against a local stand-in. Neither real token endpoint has been tried.
+- PDP's `oauth_refresh` used to require a client secret and send a form body. Both logins are public clients with no secret, and the Claude one refreshes with a JSON body and a scope. PDP commit `e6edc6b`, merged on 2026-11-12, makes the secret optional and adds the JSON body and the scope. With it, PDP refreshed and rotated both logins against a local stand-in. Neither real token endpoint has been tried.
 - PDP has no login command and needs none. Log in once with `towa login`, write the refresh token and scopes to the binding's state file, and remove the local copy with `towa logout`, which does not revoke the login at the provider.
 - The Codex login's ChatGPT account ID is a fixed header on the PDP binding. PDP replaces the caller's value, so the harness configuration does not need it.
 
@@ -481,7 +481,7 @@ towa's own HTTP clients honour `HTTPS_PROXY` and the system certificate pool, so
 
 For multiple providers, supply distinct non-secret placeholders in the harness's required environment/auth-file formats. PDP chooses the real credential from verified assignment, destination and allowed binding. Placeholders are routing hints, never authorization. Multiple accounts on one provider endpoint need an explicit permitted binding. Replace account-specific auth headers as well as bearer/API-key fields where required.
 
-PDP owns real login and refresh. With a proxy-held account, towa holds only a placeholder and never refreshes, so by design no real token reaches the pod. Verify that on a real provider, including an expired token and a refresh. Configure daemon-owned provider traffic, not merely an agent shell. PDP's refresh adapters for the Claude and Codex logins are written and depend on one PDP change that is not merged (section 8, `docs/pdp-integration.md`).
+PDP owns real login and refresh. With a proxy-held account, towa holds only a placeholder and never refreshes, so by design no real token reaches the pod. Verify that on a real provider, including an expired token and a refresh. Configure daemon-owned provider traffic, not merely an agent shell. PDP's refresh adapters for the Claude and Codex logins are written and need PDP at `e6edc6b` or later (section 8, `docs/pdp-integration.md`).
 
 Certificate pinning and client-key-bound provider credentials may prevent interception. Do not assume all provider authentication can be substituted. Validate supported routes explicitly and keep unsupported routes fail-closed in enforced mode.
 
@@ -636,7 +636,7 @@ Open implementation questions:
 
 - Identity issuance/attestation, runner-to-run assignment and revocation across deployment backends.
 - Concrete API signatures, schemas/migrations, commit-safe change cursors, command identity/receipt retention and closed-ticket command semantics.
-- Merging the PDP refresh change, the first real refresh of each login, and the first real turn through PDP with a proxy-held account.
+- The first real refresh of each login, and the first real turn through PDP with a proxy-held account.
 - Installation, local dependency startup, versioned worker lifecycle and deployment permissions.
 - Prompt storage, refresh boundary and provenance for long-running workflows.
 - Evaluation datasets, metrics and authority for improvement promotion/reversion.
