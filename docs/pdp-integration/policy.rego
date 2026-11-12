@@ -13,6 +13,8 @@ default allow := false
 
 allow if model_call
 
+allow if model_list
+
 allow if git_fetch
 
 # Undefined for any caller that is not a protocol7 run, so every rule below
@@ -46,6 +48,25 @@ model_call if {
 	input.destination.port == 443
 	input.http.method == "POST"
 	input.http.path in model_paths[input.destination.host]
+	input.binding in profile.model_accounts
+}
+
+model_list_paths := {
+	"api.anthropic.com": {"/v1/models"},
+	"chatgpt.com": {"/backend-api/codex/models"},
+}
+
+default model_list := false
+
+# towa reads an account's model list at start, for the context size and output
+# limit of a model its built-in table does not have. Without it and without
+# both figures in its configuration, the session does not start.
+model_list if {
+	input.protocol == "http"
+	input.destination.scheme == "https"
+	input.destination.port == 443
+	input.http.method == "GET"
+	input.http.path in model_list_paths[input.destination.host]
 	input.binding in profile.model_accounts
 }
 
@@ -87,6 +108,8 @@ git_fetch if {
 }
 
 matched_rules contains sprintf("model:%s", [input.binding]) if model_call
+
+matched_rules contains sprintf("model-list:%s", [input.binding]) if model_list
 
 matched_rules contains "git-fetch" if git_fetch
 

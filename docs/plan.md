@@ -330,19 +330,20 @@ The session activity redacts and publishes output frames to `p7.session.<id>.out
 
 Clients read through ticketd, never directly from NATS or acphost. A new acphost controller connection can replace the current one, so viewers must not connect to it. Archive streams/journals to artifact storage before purging live data. Frames do not enter workflow history, but final typed results and ordinary activity results do.
 
-Waiting sessions retain their execution environment until an idle limit expires. Workflows can close and reopen for long waits. acpharness keeps everything a session needs under one directory, and a new process can load a copy of it. Moving a session to a new pod means saving and restoring that directory. That is not designed here and needs an acceptance test.
+Waiting sessions retain their execution environment until an idle limit expires. Workflows can close and reopen for long waits. towa keeps everything a session needs under one directory, and a new process can load a copy of it. Moving a session to a new pod means saving and restoring that directory. That is not designed here and needs an acceptance test.
 
 ### Agent harness
 
-The agent harness is `github.com/gfx-labs/acpharness` (decided 2026-11-12). It is being renamed to `towa` (user, 2026-11-12). The rename is not in the repository yet, so this plan uses the current names. It was read at `origin/master` `4e3e959`, and its login and provider code again at `53c4a2a`, which renames the binary to `acph`. It has no release tag, so protocol7 pins a commit. This plan relies on the following:
+The agent harness is `github.com/gfx-labs/towa` (decided 2026-11-12). It was named acpharness until `7ff30fa` on the same day. It was read at `origin/master` `4e3e959`, and its login, provider and model code again at `7bff6dc`. It has no release tag, so protocol7 pins a commit. This plan relies on the following:
 
 - It speaks ACP only, over stdio, a Unix socket or TCP with mTLS. The runner starts it under acphost.
 - It supports Claude and Codex subscription logins, and Chat Completions and Responses endpoints.
-- An account can be proxy-held (`proxied_oauth`, `proxied_api_key`). The harness sends the placeholder `acpharness-proxied-<account id>`, builds the rest of the request as usual, and never holds or refreshes the token.
-- Its own HTTP clients all honour `HTTPS_PROXY` and the system certificate pool. `acpharness hosts` prints the hosts a configuration will contact, which gives the run's egress list.
+- An account can be proxy-held (`proxied_oauth`, `proxied_api_key`). The harness sends the placeholder `towa-proxied-<account id>`, builds the rest of the request as usual, and never holds or refreshes the token.
+- Its own HTTP clients all honour `HTTPS_PROXY` and the system certificate pool. `towa hosts` prints the hosts a configuration will contact, which gives the run's egress list.
 - Models are one ordered list of `provider:account/model#effort`. On a rate limit, exhausted quota, auth failure or overload, the request moves to the next entry and the client is told.
 - A turn that stops for a reason the client can act on carries a typed stop: `rate_limit`, `auth`, `overload`, `context_full`, `limit`, `network`, `request` or `denied`, with the reset time and the account where they apply. protocol7 maps it to the run's failure class.
-- It builds as a static Go binary and runs `rg` and a shell, so the image needs both.
+- It builds as a static Go binary. It runs a shell and tells the model to search with `rg` through it, so the image needs both.
+- At start it reads the provider's model list for each configured model its built-in table does not have, which is every Claude model. If that fails and its configuration does not give the model's context size and output limit, it exits. PDP policy must allow the model list for every account on a run's list (`docs/pdp-integration.md`).
 
 Not established: a turn with a proxy-held account against a real provider. Its proxy test replays a recorded exchange through a local `CONNECT` proxy with a test CA. Real Claude and Codex turns have been run with logins the harness held itself.
 
@@ -357,7 +358,7 @@ The real tokens live in PDP, one binding per account, and each binding's placeho
 PDP refreshes each login itself. The design, the PDP change it needs and what was run are in `docs/pdp-integration.md`:
 
 - PDP's `oauth_refresh` at `aeaca30` requires a client secret and sends a form body. Both logins are public clients with no secret, and the Claude one refreshes with a JSON body and a scope. A PDP change on the local branch `refresh-public-clients` (`e6edc6b`, not merged) makes the secret optional and adds the JSON body and the scope. With it, PDP refreshed and rotated both logins against a local stand-in. Neither real token endpoint has been tried.
-- PDP has no login command and needs none. Log in once with `acph login`, write the refresh token and scopes to the binding's state file, and remove the local copy with `acph logout`, which does not revoke the login at the provider.
+- PDP has no login command and needs none. Log in once with `towa login`, write the refresh token and scopes to the binding's state file, and remove the local copy with `towa logout`, which does not revoke the login at the provider.
 - The Codex login's ChatGPT account ID is a fixed header on the PDP binding. PDP replaces the caller's value, so the harness configuration does not need it.
 
 ### Session journal, catalog and search
@@ -433,8 +434,8 @@ PDP is an identity-aware HTTP forward proxy. Any destination can be reached, Reg
 - Container execution uses isolated networking with PDP as the permitted outbound route. Do not claim enforcement if alternate routes remain.
 - DNS routing is not identity or authorization. Block bypass through direct IPs, alternate DNS and unsupported transports in enforced mode. Do not use host networking for isolated steps.
 - SPIFFE mTLS is the network identity mechanism, issued by SPIRE (section 11). Each run pod gets its own SPIFFE ID, rendered from pod metadata that only the executor can set. An unverified header, placeholder or pod IP alone must not establish authority.
-- acpharness, git and most other clients cannot present a client certificate to a proxy. Proposed: the runner holds the pod's SVID and runs a loopback forwarder that the pod's proxy settings point at (`docs/pdp-integration.md`, section 4). The shape ran locally with a plain forwarder to PDP's Unix socket. The mTLS leg is untested.
-- A run's scope reaches policy in the pod's SPIFFE ID, which carries the profile, the repository and the run ID: `spiffe://<trust domain>/p7/profile/<profile>/repo/<owner>/<repo>/run/<run id>`. Policy data says what each profile may do, so starting a run changes nothing in PDP. The proposed policy passes sixteen `pdp explain` cases (`docs/pdp-integration.md`, section 3). The ID is rendered from pod metadata, so only the core worker may create or patch pods in the run namespace.
+- towa, git and most other clients cannot present a client certificate to a proxy. Proposed: the runner holds the pod's SVID and runs a loopback forwarder that the pod's proxy settings point at (`docs/pdp-integration.md`, section 4). The shape ran locally with a plain forwarder to PDP's Unix socket. The mTLS leg is untested.
+- A run's scope reaches policy in the pod's SPIFFE ID, which carries the profile, the repository and the run ID: `spiffe://<trust domain>/p7/profile/<profile>/repo/<owner>/<repo>/run/<run id>`. Policy data says what each profile may do, so starting a run changes nothing in PDP. The proposed policy passes eighteen `pdp explain` cases (`docs/pdp-integration.md`, section 3). The ID is rendered from pod metadata, so only the core worker may create or patch pods in the run namespace.
 - Explicit proxy configuration remains an option for cooperative clients. Clients that ignore it use the DNS/TLS route where supported.
 - Worker-originated API actions require distinct grants from agent traffic. Listener/network separation supplements authorization, not replaces it.
 
@@ -444,11 +445,11 @@ Audit run, verified identity, destination, operation, credential reference, poli
 
 ### Agent compatibility and placeholders
 
-acpharness's own HTTP clients honour `HTTPS_PROXY` and the system certificate pool, so the pod's proxy settings cover its model, MCP and web traffic once PDP's CA is installed. DNS steering is then needed only for other programs in the pod that ignore proxy settings. One harness turn ran through a local PDP this way with a deliberately invalid token: PDP picked the binding from the harness's placeholder and applied policy per account. A turn with a real token has not been run. A policy denial reaches the harness as a 403, which it reports as stop reason `auth`, not `denied`.
+towa's own HTTP clients honour `HTTPS_PROXY` and the system certificate pool, so the pod's proxy settings cover its model, MCP and web traffic once PDP's CA is installed. DNS steering is then needed only for other programs in the pod that ignore proxy settings. One harness turn ran through a local PDP this way with a deliberately invalid token: PDP picked the binding from the harness's placeholder and applied policy per account. A turn with a real token has not been run. A policy denial reaches the harness as a 403, which it reports as stop reason `auth`, not `denied`.
 
 For multiple providers, supply distinct non-secret placeholders in the harness's required environment/auth-file formats. PDP chooses the real credential from verified assignment, destination and allowed binding. Placeholders are routing hints, never authorization. Multiple accounts on one provider endpoint need an explicit permitted binding. Replace account-specific auth headers as well as bearer/API-key fields where required.
 
-PDP owns real login and refresh. With a proxy-held account, acpharness holds only a placeholder and never refreshes, so by design no real token reaches the pod. Verify that on a real provider, including an expired token and a refresh. Configure daemon-owned provider traffic, not merely an agent shell. PDP's refresh adapters for the Claude and Codex logins are written and depend on one PDP change that is not merged (section 8, `docs/pdp-integration.md`).
+PDP owns real login and refresh. With a proxy-held account, towa holds only a placeholder and never refreshes, so by design no real token reaches the pod. Verify that on a real provider, including an expired token and a refresh. Configure daemon-owned provider traffic, not merely an agent shell. PDP's refresh adapters for the Claude and Codex logins are written and depend on one PDP change that is not merged (section 8, `docs/pdp-integration.md`).
 
 Certificate pinning and client-key-bound provider credentials may prevent interception. Do not assume all provider authentication can be substituted. Validate supported routes explicitly and keep unsupported routes fail-closed in enforced mode.
 
@@ -597,7 +598,7 @@ The selfdev repository exists with a bootstrap roadmap. No selfdev runtime is de
 
 Previously measured in a scratch Temporal development server: an incompatible workflow deployment left the workflow open, and redeploying the original code completed it without repeating the two completed activities. A separate payload test confirmed that ordinary activity inputs/results are visible in history unless protected by a codec. These are narrow platform experiments, not protocol7 end-to-end acceptance.
 
-Container execution, Kubernetes deployment, PDP integration, SPIFFE lifecycle, provider placeholder compatibility and versioned rollout remain unverified here. PDP CA/TLS/DNS work is happening separately. acpharness uses explicit proxy settings, so the model path does not depend on DNS steering. A turn through PDP with a proxy-held account has not been run.
+Container execution, Kubernetes deployment, PDP integration, SPIFFE lifecycle, provider placeholder compatibility and versioned rollout remain unverified here. PDP CA/TLS/DNS work is happening separately. towa uses explicit proxy settings, so the model path does not depend on DNS steering. A turn through PDP with a proxy-held account has not been run.
 
 Open implementation questions:
 

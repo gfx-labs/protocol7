@@ -1,7 +1,7 @@
 # PDP configuration for protocol7, proposed. Checked with pdp validate and
 # pdp explain only. Not served against a provider, SPIRE or a cluster.
 version: pdp.config/v3
-revision: p7-design-2
+revision: p7-design-3
 
 transport:
   spiffe:
@@ -50,21 +50,21 @@ credentials:
   bindings:
     claude-1:
       provider: claude
-      placeholder: acpharness-proxied-claude-1
+      placeholder: towa-proxied-claude-1
       parameters:
         client_id: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
       scopes: [user:file_upload, user:inference, user:mcp_servers, user:profile, "user:sessions:claude_code"]
       state_file: /var/lib/pdp/claude-1/state.json
     claude-2:
       provider: claude
-      placeholder: acpharness-proxied-claude-2
+      placeholder: towa-proxied-claude-2
       parameters:
         client_id: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
       scopes: [user:file_upload, user:inference, user:mcp_servers, user:profile, "user:sessions:claude_code"]
       state_file: /var/lib/pdp/claude-2/state.json
     codex-1:
       provider: codex
-      placeholder: acpharness-proxied-codex-1
+      placeholder: towa-proxied-codex-1
       headers:
         chatgpt-account-id: 00000000-0000-0000-0000-000000000000
       parameters:

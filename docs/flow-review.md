@@ -2,7 +2,7 @@
 
 Written 2026-11-12 against `docs/plan.md` and updated the same day with the decisions below. Nothing here is built.
 
-Sources: `gfx-labs/pdp` at `aeaca30`, `gfx-labs/acpharness` at `4e3e959`, acphost tags, a read-only look at the `talos-metal` cluster, `gfx-labs/baremetal` at `948cd40`, and `elee1766/jobcity` at `5c76f7a`.
+Sources: `gfx-labs/pdp` at `aeaca30`, `gfx-labs/towa` at `4e3e959` and `7bff6dc` (named acpharness until 2026-11-12), acphost tags, a read-only look at the `talos-metal` cluster, `gfx-labs/baremetal` at `948cd40`, and `elee1766/jobcity` at `5c76f7a`.
 
 Correction: the first version of this review read PDP's `origin/main` and described the older two-route gateway. PDP's local `main` was then 25 commits ahead of it and is a generic forward proxy. Those commits are now on `origin/main`. The claims that PDP had no streaming, proxying or model-provider path were wrong and are removed.
 
@@ -25,7 +25,7 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | Chart | Published as an OCI artifact and installed by a Flux `HelmRelease` declared in `gfx-labs/baremetal`'s cdk8s code |
 | `p7.OnEvent` | Removed |
 | Session limit | 20 open agent sessions across the deployment |
-| Agent harness | `gfx-labs/acpharness` |
+| Agent harness | `gfx-labs/towa`, named acpharness when this was decided |
 | Model logins | One Codex login and four or five Claude accounts, used by protocol7 only |
 | Maintenance chat | Changes workflows and cluster configuration by pull request. No direct write access to the cluster |
 | GitHub identities | Separate author and reviewer identities |
@@ -139,10 +139,11 @@ PDP's design now covers what the flows need. Four of the items below now have a 
 
 - **Nothing has run against a real provider.** Its acceptance notes say no real GitHub or Linear call, no subscription client, no SPIRE and no cluster has been tried. Milestone 1 is the first real run.
 - **Presenting the SVID.** Designed: the harness cannot present a client certificate to a proxy, so the runner holds the SVID and runs a loopback forwarder in the pod. The shape ran locally with a plain forwarder. The mTLS leg and SPIRE are untested.
-- **Run scope in policy.** Designed: the SPIFFE ID carries the profile, the repository and the run ID, and policy data says what each profile may do. A lookup in ticketd was rejected because PDP's Rego has no `http.send` and a data reload empties the credential cache. The proposed policy passes sixteen `pdp explain` cases. Rendering the ID on the cluster is untested.
+- **Run scope in policy.** Designed: the SPIFFE ID carries the profile, the repository and the run ID, and policy data says what each profile may do. A lookup in ticketd was rejected because PDP's Rego has no `http.send` and a data reload empties the credential cache. The proposed policy passes eighteen `pdp explain` cases. Rendering the ID on the cluster is untested.
 - **git and model streaming.** PDP speaks HTTP/1.1 only, sends `Accept-Encoding: identity` and refuses a compressed response when it injected a credential. git clone and push and a model stream should be the first things tried through it.
 - **Refresh for subscription logins.** PDP refreshes them itself (user, 2026-11-12). That needs one PDP change, written on the local branch `refresh-public-clients` (`e6edc6b`) and not merged: `oauth_refresh` without a client secret, with an optional JSON body and scope. Both logins refreshed and rotated against a local stand-in. The real token endpoints are untried, and PDP locks a binding if a real response fails its checks.
-- **Getting a login into PDP.** Designed: `acph login`, one `jq` command that writes the refresh token and scopes to the binding's state file, then `acph logout`. PDP accepted a file made this way from a made-up login. Placing the file on PDP's volume in the cluster is not tried.
+- **Getting a login into PDP.** Designed: `towa login`, one `jq` command that writes the refresh token and scopes to the binding's state file, then `towa logout`. PDP accepted a file made this way from a made-up login. Placing the file on PDP's volume in the cluster is not tried.
+- **Model list at start.** towa reads each Claude account's model list when it starts, and exits if it cannot and its configuration does not give the model's figures. The proposed policy allows the model list for the accounts a profile grants. This was found by running the checks again on towa. The first version of the policy would have stopped every Claude session at start.
 
 ### 2. SPIRE on `talos-metal`
 
@@ -150,7 +151,7 @@ Mostly a deployment: SPIRE server, node agents, the SPIFFE CSI driver and spire-
 
 ### 3. Model accounts
 
-Decided: protocol7 gets one Codex login and four or five Claude logins of its own. acpharness takes an ordered model list and moves to the next entry on a rate limit, so spreading sessions over the Claude accounts needs no protocol7 code. The single Codex login has no second account to fall back to, so every Codex session shares one rate limit. Not measured: how many concurrent sessions those accounts carry before every entry is rate limited. The limit of 20 is a starting number.
+Decided: protocol7 gets one Codex login and four or five Claude logins of its own. towa takes an ordered model list and moves to the next entry on a rate limit, so spreading sessions over the Claude accounts needs no protocol7 code. The single Codex login has no second account to fall back to, so every Codex session shares one rate limit. Not measured: how many concurrent sessions those accounts carry before every entry is rate limited. The limit of 20 is a starting number.
 
 ### 4. Kubernetes reads for the maintenance chat
 
@@ -158,7 +159,7 @@ Decided: the chat changes workflows and cluster configuration by pull request an
 
 ### 5. Agent harness
 
-Decided: acpharness. `docs/acpharness-needs.md` in this repo is out of date. It says only a stub turn exists. At `4e3e959` acpharness has Claude and Codex logins, proxy-held accounts, proxy and CA support in every HTTP client, model fallback, typed stop reasons, a `hosts` command and a session directory that a new process can load. Those cover most of what that file asks for.
+Decided: towa, named acpharness when this was decided. `docs/acpharness-needs.md` in this repo is out of date. It says only a stub turn exists. At `4e3e959` the harness has Claude and Codex logins, proxy-held accounts, proxy and CA support in every HTTP client, model fallback, typed stop reasons, a `hosts` command and a session directory that a new process can load. Those cover most of what that file asks for.
 
 Not established: a proxy-held account against a real provider, and moving a session directory between pods. Whether it reports tool-load events for the journal was not checked. It has no release tag, so protocol7 pins a commit. A flow that lasts days should still not depend on restoring a conversation: the branch, the pull request and the ticket hold enough to start a fresh session on the next wake.
 
