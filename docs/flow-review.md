@@ -56,12 +56,12 @@ The plan has this in section 7 ("Waiting on several conditions", "Long-lived flo
 Every pass of each loop does the same five things:
 
 1. Continue as new if history is long or a newer build is the target.
-2. Read the revision of each watched record with `p7.GetObject`.
+2. Read the revision of the pull request record, and of the base branch record where it is watched, with `p7.GetObject`.
 3. Read GitHub in one activity.
 4. Call `Decide`, which has no side effects, on what was read, and carry out the one action it returns.
-5. If the action was to wait, call `prflow.WaitForChange` (in `docs/example-pr-flows.md`) with the revisions from step 2 and a recheck timer.
+5. If the action was to wait, call `prflow.WaitForChange` (in `docs/example-pr-flows.md`) with those revisions and a recheck timer.
 
-No handled revisions are carried across Continue-As-New, because step 2 reads them again on every pass.
+The merge workflow gets each dependency's revision from the read in step 3, which returns it beside the dependency's state. No handled revisions are carried across Continue-As-New, because every pass reads them again.
 
 Three properties do the work that jobcity's waits do badly today:
 
