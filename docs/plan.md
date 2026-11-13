@@ -359,7 +359,7 @@ The real tokens live in PDP, one binding per account, and each binding's placeho
 
 PDP refreshes each login itself. The design, the PDP change it needs and what was run are in `docs/pdp-integration.md`:
 
-- PDP's `oauth_refresh` used to require a client secret and send a form body. Both logins are public clients with no secret, and the Claude one refreshes with a JSON body and a scope. PDP commit `e6edc6b`, merged on 2026-11-12, makes the secret optional and adds the JSON body and the scope. With it, PDP refreshed and rotated both logins against a local stand-in. One real Claude login then refreshed twice through PDP, and a towa session started through it. The real Codex endpoint has not been tried.
+- PDP's `oauth_refresh` used to require a client secret and send a form body. Both logins are public clients with no secret, and the Claude one refreshes with a JSON body and a scope. PDP commit `e6edc6b`, merged on 2026-11-12, makes the secret optional and adds the JSON body and the scope. With it, PDP refreshed and rotated both logins against a local stand-in. One real login per provider then refreshed twice through PDP. A Codex turn streamed an answer through it, and a Claude session started and reached the account's rate limit.
 - PDP has no login command and needs none. Log in once with `towa login`, write the refresh token and scopes to the binding's state file, and remove the local copy with `towa logout`, which does not revoke the login at the provider.
 - The Codex login's ChatGPT account ID is a fixed header on the PDP binding. PDP replaces the caller's value, so the harness configuration does not need it.
 
@@ -636,7 +636,7 @@ Open implementation questions:
 
 - Identity issuance/attestation, runner-to-run assignment and revocation across deployment backends.
 - Concrete API signatures, schemas/migrations, commit-safe change cursors, command identity/receipt retention and closed-ticket command semantics.
-- The first real refresh of the Codex login, and a real turn through PDP that streams an answer. A real Claude refresh and session start were run, on a rate-limited account (`docs/pdp-integration.md`).
+- A real Claude turn through PDP that streams an answer, and a turn that outlives its access token. One real refresh per provider and a streamed Codex turn were run (`docs/pdp-integration.md`).
 - Installation, local dependency startup, versioned worker lifecycle and deployment permissions.
 - Prompt storage, refresh boundary and provenance for long-running workflows.
 - Evaluation datasets, metrics and authority for improvement promotion/reversion.
