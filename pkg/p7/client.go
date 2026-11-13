@@ -23,17 +23,17 @@ type Client struct {
 	frames *stream.Stream
 }
 
-// NewClient connects a client.
-func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
+// NewClient returns a client that is not connected yet. Call Connect before
+// reading, and Close when done.
+func NewClient(config ClientConfig) (*Client, error) {
 	if config.NATSURL == "" {
 		return nil, errors.New("new client: a NATS URL is required")
 	}
-	frames, err := stream.Connect(ctx, config.NATSURL)
-	if err != nil {
-		return nil, err
-	}
-	return &Client{frames: frames}, nil
+	return &Client{frames: stream.New(config.NATSURL)}, nil
 }
+
+// Connect opens the client's connections.
+func (c *Client) Connect(ctx context.Context) error { return c.frames.Connect(ctx) }
 
 // Close ends the client's connections.
 func (c *Client) Close() { c.frames.Close() }

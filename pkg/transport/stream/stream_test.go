@@ -13,13 +13,16 @@ import (
 // A reader gets one session's frames from the first on, each once, then the
 // frames published while it reads.
 func TestAReaderGetsOneSessionsFramesOnceAndThenNewOnes(t *testing.T) {
-	server, err := stream.StartEmbedded("127.0.0.1", -1, t.TempDir())
+	server, err := stream.NewEmbedded("127.0.0.1", -1, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
 	defer server.Stop()
-	frames, err := stream.Connect(t.Context(), server.URL())
-	if err != nil {
+	frames := stream.New(server.URL())
+	if err := frames.Connect(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	defer frames.Close()

@@ -37,21 +37,28 @@ func Subject(session string) string { return "p7.session." + session + ".out" }
 
 // Stream is a connection to the session frame stream.
 type Stream struct {
+	url        string
 	connection *nats.Conn
 	jetstream  jetstream.JetStream
 	stream     jetstream.Stream
 }
 
-// Connect dials NATS at url and creates the stream if it does not exist.
-func Connect(ctx context.Context, url string) (*Stream, error) {
-	connection, err := nats.Connect(url, nats.Name("protocol7"), nats.MaxReconnects(-1))
+// New returns a stream on the NATS server at url. It is not connected:
+// call Connect before any other method.
+func New(url string) *Stream { return &Stream{url: url} }
+
+var errNotConnected = errors.New("the session frame stream is not connected")
+
+// Connect dials NATS and creates the stream if it does not exist.
+func (s *Stream) Connect(ctx context.Context) error {
+	connection, err := nats.Connect(s.url, nats.Name("protocol7"), nats.MaxReconnects(-1))
 	if err != nil {
-		return nil, fmt.Errorf("connect to NATS at %s: %w", url, err)
+		return fmt.Errorf("connect to NATS at %s: %w", s.url, err)
 	}
 	js, err := jetstream.New(connection)
 	if err != nil {
 		connection.Close()
-		return nil, fmt.Errorf("open JetStream: %w", err)
+		return fmt.Errorf("open JetStream: %w", err)
 	}
 	created, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:       Name,
@@ -63,18 +70,27 @@ func Connect(ctx context.Context, url string) (*Stream, error) {
 	})
 	if err != nil {
 		connection.Close()
-		return nil, fmt.Errorf("create stream %s: %w", Name, err)
+		return fmt.Errorf("create stream %s: %w", Name, err)
 	}
-	return &Stream{connection: connection, jetstream: js, stream: created}, nil
+	s.connection, s.jetstream, s.stream = connection, js, created
+	return nil
 }
 
-// Close ends the connection.
-func (s *Stream) Close() { s.connection.Close() }
+// Close ends the connection. Closing a stream that never connected does
+// nothing.
+func (s *Stream) Close() {
+	if s.connection != nil {
+		s.connection.Close()
+	}
+}
 
 // Publish adds one frame of a session. The message ID is the session and the
 // frame's sequence number, so a frame published twice is stored once while
 // the server remembers the ID.
 func (s *Stream) Publish(ctx context.Context, session string, frame domain.Frame) error {
+	if s.stream == nil {
+		return errNotConnected
+	}
 	payload, err := json.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("encode frame %d of session %s: %w", frame.Seq, session, err)
@@ -89,6 +105,9 @@ func (s *Stream) Publish(ctx context.Context, session string, frame domain.Frame
 // LastSeq is the sequence number of the last frame of a session in the
 // stream, or 0 if it has none.
 func (s *Stream) LastSeq(ctx context.Context, session string) (int64, error) {
+	if s.stream == nil {
+		return 0, errNotConnected
+	}
 	message, err := s.stream.GetLastMsgForSubject(ctx, Subject(session))
 	if errors.Is(err, jetstream.ErrMsgNotFound) {
 		return 0, nil
@@ -108,6 +127,9 @@ func (s *Stream) LastSeq(ctx context.Context, session string) (int64, error) {
 // returns an error. Frames arrive in order. A frame that was stored twice,
 // after the server forgot its ID, is passed once.
 func (s *Stream) Read(ctx context.Context, session string, handle func(domain.Frame) error) error {
+	if s.stream == nil {
+		return errNotConnected
+	}
 	consumer, err := s.jetstream.OrderedConsumer(ctx, Name, jetstream.OrderedConsumerConfig{
 		FilterSubjects: []string{Subject(session)},
 		DeliverPolicy:  jetstream.DeliverAllPolicy,

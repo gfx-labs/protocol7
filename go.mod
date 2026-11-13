@@ -9,6 +9,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.55.0
 	go.temporal.io/sdk v1.51.0
+	go.uber.org/fx v1.24.0
 )
 
 require (
@@ -33,6 +34,9 @@ require (
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	go.temporal.io/api v1.64.3 // indirect
+	go.uber.org/dig v1.19.0 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
+	go.uber.org/zap v1.26.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.60.0 // indirect

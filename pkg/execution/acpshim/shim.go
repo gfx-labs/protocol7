@@ -81,6 +81,25 @@ func JournalPath(dir string) string { return filepath.Join(dir, acphost.JournalF
 // Alive reports whether a shim runs for dir.
 func Alive(dir string) bool { return acphost.Alive(dir) }
 
+// Find returns the path of the shim command: configured if it is set, else
+// the one beside this executable, else the one in PATH.
+func Find(configured string) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+	if executable, err := os.Executable(); err == nil {
+		beside := filepath.Join(filepath.Dir(executable), Binary)
+		if info, err := os.Stat(beside); err == nil && !info.IsDir() {
+			return beside, nil
+		}
+	}
+	found, err := exec.LookPath(Binary)
+	if err != nil {
+		return "", errors.New(Binary + " was not found beside this executable or in PATH: build cmd/p7acpshim or name it with --shim")
+	}
+	return found, nil
+}
+
 // Start runs the shim command binary for dir, whose spec is written, and
 // returns once the harness has started. The shim keeps running after binary
 // exits. Starting a directory whose shim already runs is an error.

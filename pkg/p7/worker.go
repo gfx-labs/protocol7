@@ -34,8 +34,8 @@ type Worker struct {
 	worker   worker.Worker
 }
 
-// NewWorker connects to Temporal and returns a worker that is not yet
-// polling. Register workflows and activities, then call Run.
+// NewWorker returns a worker that is not connected and not polling.
+// Register workflows and activities, then call Run, or Start and Stop.
 func NewWorker(config WorkerConfig) (*Worker, error) {
 	if config.TaskQueue == "" {
 		return nil, errors.New("new worker: a task queue is required")
@@ -47,13 +47,14 @@ func NewWorker(config WorkerConfig) (*Worker, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	temporalClient, err := client.Dial(client.Options{
+	// The client connects when the worker starts, or on its first call.
+	temporalClient, err := client.NewLazyClient(client.Options{
 		HostPort:  config.TemporalAddress,
 		Namespace: config.TemporalNamespace,
 		Logger:    log.NewStructuredLogger(logger),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("new worker: connect to Temporal at %s: %w", config.TemporalAddress, err)
+		return nil, fmt.Errorf("new worker: configure the Temporal client for %s: %w", config.TemporalAddress, err)
 	}
 	options := worker.Options{}
 	if config.Deployment != "" {
@@ -79,13 +80,27 @@ func (w *Worker) RegisterActivities(activities any) { w.worker.RegisterActivity(
 // workflows from the same process.
 func (w *Worker) Temporal() client.Client { return w.temporal }
 
-// Run polls until ctx ends, then stops the worker and closes its client.
-func (w *Worker) Run(ctx context.Context) error {
-	defer w.temporal.Close()
+// Start connects to Temporal and begins polling. It returns at once.
+func (w *Worker) Start() error {
 	if err := w.worker.Start(); err != nil {
-		return fmt.Errorf("start worker on %s: %w", w.config.TaskQueue, err)
+		return fmt.Errorf("start worker on %s at %s: %w", w.config.TaskQueue, w.config.TemporalAddress, err)
+	}
+	return nil
+}
+
+// Stop stops polling, waits for running tasks and closes the client.
+func (w *Worker) Stop() {
+	w.worker.Stop()
+	w.temporal.Close()
+}
+
+// Run starts the worker, waits until ctx ends and stops it.
+func (w *Worker) Run(ctx context.Context) error {
+	if err := w.Start(); err != nil {
+		w.temporal.Close()
+		return err
 	}
 	<-ctx.Done()
-	w.worker.Stop()
+	w.Stop()
 	return nil
 }
