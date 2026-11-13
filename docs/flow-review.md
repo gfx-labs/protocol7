@@ -14,7 +14,7 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | First iteration | Not complete until the container and Kubernetes executors both work |
 | First consumer flow | Requested pull request review. Linear triage, the implementation flow and opencodereview are deferred |
 | Review eligibility | A pull request in a configured repository, not a draft, whose author has write access, with our review requested by a ping from someone with write access or by a label |
-| Re-review | A push after a review starts a review of the new head once pushes go quiet. No new ping is needed |
+| Re-review | A new review starts only on a new request: a ping, a re-request or the label. A push alone starts none. This replaces the earlier answer, that a push starts a review once pushes go quiet (`plan.md` section 10 records the change as the user's, 2026-11-12) |
 | Verdict | Real approvals and change requests that count toward branch protection, from the start |
 | Credentials | Wait for PDP. No interim mode with keys mounted in pods. protocol7 adds the Rego and policies it needs, and PDP gains features as they are needed |
 | Workload identity | Install SPIRE on `talos-metal` |

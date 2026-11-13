@@ -201,7 +201,7 @@ Admission checks the verified worker, repository scope, image, command and reque
 | Source | Resolution |
 |---|---|
 | Git tree | Repository, path and a commit, tag or branch. A tag or branch is resolved to a commit once, by an activity, when the step, session or environment is created. Retries, replay and reattachment reuse the recorded commit and never resolve the name again |
-| Git clone | Repository and a commit, tag or branch, resolved and recorded like a git tree. The destination is a working clone with history, so `git diff` and `git range-diff` work and a coding session can commit in it. `Fetch` lists extra commits to have in the clone, such as the head a previous review covered, which a rewritten branch no longer reaches. This replaces a separate repository field on a session: the code under work is one more input |
+| Git clone | Repository and a commit, tag or branch, resolved and recorded like a git tree. The destination is a working clone with history, so `git diff` and `git range-diff` work and a coding session can commit in it. `Fetch` lists extra commits to have in the clone, such as the head a previous review covered, which a rewritten branch no longer reaches. `Branch` checks the clone out on a named branch at that commit, so a coding session can commit and push without setting anything up (`docs/example-pr-author.md`). This replaces a separate repository field on a session: the code under work is one more input |
 | Artifact | Content-addressed artifact reference with its digest |
 | Knowledge collection | A named collection that resolves to a git tree as above |
 
@@ -366,6 +366,32 @@ A flow that follows one issue or pull request for days is a loop over a serializ
 - A session or environment that must outlive one run is owned by its own workflow and addressed by handle.
 - Event History is limited to 51,200 events or 50 MB. Agent turns, tool activities and waits all add events, so a multi-week flow needs the Continue-As-New boundary whether or not anything is deployed.
 
+### Requirements from the pull request examples
+
+`docs/example-pr-review.md` ports jobcity's review flow, and `docs/example-pr-author.md` follows a pull request that one of our own agents opened. Neither compiles or has run. They were compared with this plan on 2026-11-12. "Specified" means this plan already says it. "New" means an example assumes it and this table is where the plan first states it.
+
+| Requirement | Used by | State |
+|---|---|---|
+| `p7.Watch(ctx, since...)` takes `p7.Since{Record, Revision, Kinds}` values and returns a future of `[]p7.Event`. An event has its record, revision, kind, actor and payload | Both | The wait is specified in "Waiting on several conditions". This shape is new |
+| `p7.GetObject` returns the record's revision. A ticket filed with an object reference creates the object record, so the read works before the first webhook | Both | The revision is specified. Creating the record at filing is new |
+| `p7.NewTicket` has `Kind`, `Once`, `Title`, `Fields` and `Objects`, a list of provider-neutral `p7.ObjectRef` | Both | `Objects` is new |
+| A ticket workflow is `func(workflow.Context, p7.Ticket[T]) (R, error)`. `p7.Register(worker, kind, fn)` gives it a workflow type name derived from the kind and not from the Go method name, so renaming a method does not strand running executions | Both | New |
+| `p7.NewWorker(p7.WorkerConfig{...})` takes the task queue, deployment name, build ID, Temporal address and namespace, and the ticketd URL. `p7.Worker` embeds Temporal's worker, so plain workflows and activities register on it too | Review | New |
+| `p7.Child(ctx, ticket, p7.ChildOptions{ParentClosePolicy})` returns the child's future once the child ticket is persisted and the child is started | Review | Specified. The options type is named here |
+| `p7.UpdateFields`, `p7.ContinueAsNew`, cancellation of every long call, `p7.Ask`, `p7.Notify`, `p7.SetEscalation`, `session.Hold`, `Limits` and `Priority` | Both | Specified |
+| A session or agent spec has `Model`, `Image`, `Inputs`, `Egress`, `Tools`, `Limits`, `Priority` and an idle limit or timeout. An agent spec also takes `Placement` and `Environment`, in the example a named host and the variables a device lease returned | Review | Placement and non-secret environment are in section 5. The two fields on an agent spec are new |
+| A tool registered with `p7.Tool` on one worker is callable from a session that another worker placed, so the call has to reach the queue of the worker that registered it | Review | New |
+| A consumer activity reads an artifact a session saved, by name, to publish it somewhere else | Review | New. Section 5 covers upload from a run only |
+| Every timeline event carries its actor. For a provider event the actor is the provider login, so a workflow can compare it with the login it writes as | Author | The actor is specified. The comparison with a login is new |
+| `Branch` on a `p7.GitClone` | Author | Added to section 5 |
+| A push grant limited to one branch | Author | Not available. See section 9 |
+
+Three things in the examples do not fit this plan as written:
+
+- **Model.** The examples pass one `p7.Model{Name, Effort}` and name a limit after it, such as `model:openai-oauth:gpt-6.1-sol`. Section 8 gives a session an ordered model list, and towa names a model as `<provider>:<account>/<model>`. How a `p7.Model` becomes that list is not defined. A limit per model name also does not match a rate limit that is per account.
+- **Intake.** The review example runs its own HTTP receiver and starts one workflow per delivery. This plan ships `webhookd` and a stream consumer (section 10), and that is the path to build. The example lists this as open. It also still mentions `p7.OnEvent`, which this plan removed.
+- **Host placement.** A capture session runs on the host that has the device. Milestones 1 to 9 deliver the container and Kubernetes executors and no host backend or joined worker. Milestone 10 names it as a prerequisite.
+
 ### Routing and tools
 
 Route activities through configured Temporal task queues to workers serving the required backend, host and capabilities. Executors and their backends enforce execution capacity. Limits that must hold across workflows are named shared limits (above). protocol7 has no resource registry, slot allocator for specific machines or provider lifecycle workflow. Consumers needing exclusive access to a specific device across steps implement leases through their own activities.
@@ -527,6 +553,18 @@ Enforce bounded HTTP requests and schema-normalized GraphQL fields/arguments, in
 
 Audit run, verified identity, destination, operation, credential reference, policy revision, decision and outcome without secret values. Recheck grants on reused connections and define revocation across replicas. Apply request/wall-clock budgets initially, with provider-specific token/cost accounting later. Do not blindly replay mutating requests after a 401 or connection failure.
 
+### What the pull request flows need from PDP
+
+Read on 2026-11-12 from PDP's code and documentation at `e6edc6b`, the proposed policy in `docs/pdp-integration/`, and GitHub's published REST description and GraphQL schema. Two things were run: the `pdp explain` cases, and PDP's schema compiler on GitHub's GraphQL schema. Nothing was run against GitHub.
+
+- **An egress reference is a profile and a repository.** The examples pass `github.ReadOnly(repo)` and `github.PushBranch(repo, branch)`. A run pod's identity carries one profile and one repository (`docs/pdp-integration.md`, section 3), so each reference has to resolve to those two. The `review` profile covers the first: in `pdp explain`, a fetch of the run's repository is allowed and a push is denied. No profile allows a push, and the identity has no place for a branch.
+- **A push cannot be limited to a branch in PDP today.** For a destination with no schema, policy sees the method, path and query and nothing of the body. The refs a push updates are in the body of the `git-receive-pack` request. A GitHub App installation token can be narrowed to repositories and permissions, not to a branch. Test first: a GitHub ruleset that restricts creating and updating refs outside an agent branch prefix, with the author App left off its bypass list. Not checked: what bypass entries people then need, and whether a role-based bypass also covers an App. If a ruleset cannot do it, PDP has to read the ref updates at the start of the push body, which is a new PDP feature.
+- **Guidance from another repository is denied.** The review example mounts guidance from `elee1766/jobcity` in a session whose run repository is the one under review. Section 5 has the runner place inputs, and the runner is in the pod, so the fetch carries the run's identity. The proposed policy denies a fetch of any repository but the run's own. Either a profile lists extra read-only repositories, a rule the policy does not have yet, or inputs are fetched under another identity than the session's.
+- **The consumer worker has no identity or rules yet.** Both examples make every GitHub API write in worker activities: reviews, comments, thread replies, review requests, branch updates and merges. Only the author's commits are pushed by a session. `docs/pdp-integration.md` covers run pods only. The worker needs its own SPIFFE ID and its own rules for `api.github.com`, separate from any session's.
+- **REST and GraphQL share `api.github.com`, and PDP pins one schema per host and port.** Without a schema, policy cannot tell a GraphQL query from a mutation, because both are a POST to `/graphql`. Whether a review thread is resolved, and resolving one, were found only in GraphQL: GitHub's REST description has no thread endpoint under pull requests and no resolved field on a review comment. A GraphQL schema upstream accepts only its one path, so REST calls to that host are then refused. Proposed: the worker's GitHub package uses GraphQL only. GitHub's schema has a mutation for each write the examples make. `mergePullRequest` and `updatePullRequestBranch` take `expectedHeadOid`, and `addPullRequestReview` takes a commit and no expected head. The reads were not checked one by one.
+- **GitHub's GraphQL schema does not load in PDP as published.** PDP rejects it for its custom directives, starting with `@possibleTypes`. With those removed in a scratch copy it compiled to 6,909 operations, and `mergePullRequest`, `resolveReviewThread` and `addPullRequestReview` were in the catalog. Either PDP accepts unknown schema directives, or the deployment keeps a stripped copy and reviews its digest at each update. The REST route is no easier: GitHub's full REST description is 14 MB against PDP's 4 MiB schema limit, and PDP's own `github-read` example uses a three-path extract.
+- **Merging needs more than the review flow's grant.** GitHub documents "Contents" write for a merge. Section 10 gives the review worker a grant limited to reviews and comments, which holds for milestone 7. A flow that merges needs an App with contents write and a rule that allows the merge mutation and no other contents write.
+
 ### Agent compatibility and placeholders
 
 towa's own HTTP clients honour `HTTPS_PROXY` and the system certificate pool, so the pod's proxy settings cover its model, MCP and web traffic once PDP's CA is installed. DNS steering is then needed only for other programs in the pod that ignore proxy settings. One harness turn ran through a local PDP this way with a deliberately invalid token: PDP picked the binding from the harness's placeholder and applied policy per account. A turn with a real token has not been run. A policy denial reaches the harness as a 403, which it reports as stop reason `auth`, not `denied`.
@@ -574,6 +612,24 @@ It then follows the pull request with a state-based wait. A new review is starte
 - Rollout: the reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing reviewers are shut down once this one is proven.
 - Its approvals and change requests are real GitHub reviews and count toward branch protection. GitHub counts an approval toward required reviews only from a reviewer with write permission, so the reviewer identity has write access on those repositories. Where a branch requires reviews, a change request from it blocks the merge until it approves or someone with write access dismisses the review.
 - Pull request text is untrusted input. The write-access rule is the admission gate. The session's own grants are read-only. Publishing is a worker activity under a separate PDP grant limited to submitting reviews and comments.
+
+### Full pull request flows
+
+Two examples go past milestone 7. Both are sketches that have not run. Milestone 10 in section 12 is where they would be delivered, and it is not part of the first iteration.
+
+- `docs/example-pr-review.md` is the whole jobcity review flow. Beyond the requested review above it adds device and browser captures as child tickets, a merge of other people's pull requests where the repository sets `merge_others`, required approvers, dependencies read from "Depends on" lines, following the deploy of the merge commit, a round limit that ends in a question to a person, and one overdue clock per wait.
+- `docs/example-pr-author.md` follows a pull request one of our agents opened. It fixes failed checks, conflicts and review comments in one coding session per round, updates a branch that is behind, requests review once per head and merges. jobcity has no flow like it.
+
+Both run the same loop. An event only wakes the workflow. It then reads GitHub, and one pure `Decide` function returns one action. What they add to the rules above:
+
+- **Merging is open.** The requested review flow above never merges. The port does: the reviewer merges where `merge_others` is set and the author is not one of our own agents, and the author workflow merges our own pull requests. `docs/flow-review.md` records no decision on merging.
+- **One owner per kind of write.** The author workflow owns commits, branch updates, thread replies and review requests. The reviewer workflow owns reviews and new threads. A person may do any of them, and both workflows read the result and carry on.
+- **Loops end in a question.** The examples allow eight review rounds, six fix rounds and two attempts per problem. A problem's key leaves out the head, so a new push does not reset its count. At a limit a person is asked.
+- **Repository settings.** Per repository: image, evidence platform, `merge_others`, required approvers and whether to follow the deploy. The review example drops jobcity's cap of ten open runs in favour of per-repository limits.
+- **Left open by the examples and affecting this plan.** A pull request that is closed and reopened is not followed again, because the `Once` key has no episode in it. Deploy state comes from GitHub deployment statuses, so a repository that deploys another way needs its own read. Our author and our reviewer can agree and be wrong, and `required_approvers` is the only gate that puts a person in the loop. Each example's own open list has the rest.
+- **GitHub behaviour.** The examples rely on a merge being refused when the head moved and on a review being accepted for an old commit. GitHub's REST description documents both: a merge takes `sha` and answers 409 when the head differs, and a review takes `commit_id`, which may name a commit that is not the latest. Neither was exercised.
+
+Beyond milestone 7 they need the entries marked new in section 7, the PDP items in section 9, the host backend for captures, and an author GitHub identity that can push.
 
 ### Safety and operational controls
 
@@ -671,6 +727,7 @@ Build complete paths in this order. Do not finish every backend or integration b
 | 7. Requested review flow | `webhookd`, consumer intake, the review workflow and a reviewer GitHub identity | A ping or label on an eligible pull request produces one review on the exact head; a replayed delivery produces none; a push during review discards the stale result; a push after a review produces no review until review is requested again, and that review is given the earlier one; an ineligible pull request is ignored; a receiver restart loses no accepted delivery |
 | 8. Evaluated improvement | Optional learnings plus consumer-owned incident groups, evaluation cases and improvement journal | Propose and evaluate a scoped change with external writes disabled, then record a justified keep/revert outcome |
 | 9. Broader integrations | Linear flows, the implementation flow, opencodereview and external-object metrics | Duplicate and out-of-order deliveries preserve one coherent object timeline; missed events reconcile; peak-volume load test and typed metrics agree with recorded transitions |
+| 10. Full pull request flows | The review port with captures and merging, and the author flow (section 10, "Full pull request flows"). Needs the host backend, an author GitHub identity, the worker's PDP identity and rules, and a decision on merging | A reviewer workflow and an author workflow follow one pull request to a merge and neither undoes the other's write; a push during a review round cancels the round and releases its devices; a fix round is cancelled by a person's push and not by its own; the same failed check after two fix attempts produces a question and no third fix; a coding session pushes to its own branch and is refused any other ref; a merge that names a moved head is refused and not retried until the state changes; a capture runs on the host that has the device |
 
 Worker Versioning configuration is required from the first Temporal worker. Milestone 6 validates the complete automated rollout, rather than postponing versioning until then. Budgets, redaction and denial checks land with the first path that needs them.
 
@@ -694,6 +751,7 @@ Open implementation questions:
 - Evaluation datasets, metrics and authority for improvement promotion/reversion.
 - Cross-process agent-session restoration and limits for long idle sessions.
 - Browser CORS policy for third-party clients, if required.
+- For the full pull request flows: the library entries marked new in section 7, how a `p7.Model` maps to a model list, the PDP items in section 9 (a push limited to a branch, the worker's identity and GitHub rules, loading GitHub's GraphQL schema, guidance from another repository), the host backend, and whether the reviewer merges. Milestone 10 depends on all of them.
 
 A review of this plan against the first four consumer flows is in `docs/flow-review.md`. It records the decisions taken on 2026-11-12. The PDP integration design is in `docs/pdp-integration.md`: refresh for the model logins, moving a login into PDP, run scope in policy and how a pod presents its SVID.
 
