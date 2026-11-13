@@ -68,13 +68,15 @@ func materialize(ctx context.Context, workspace string, input domain.Input) (dom
 	return resolved, nil
 }
 
-// insideWorkspace resolves a destination, which must be a relative path that
-// stays inside the workspace.
+// insideWorkspace resolves a destination to a path inside the workspace. The
+// host backend gives a session no filesystem root of its own, so a
+// destination such as /work/repo is placed at work/repo in the workspace.
 func insideWorkspace(workspace, destination string) (string, error) {
-	if destination == "" || filepath.IsAbs(destination) || !filepath.IsLocal(destination) {
-		return "", fmt.Errorf("input destination %q: must be a relative path inside the workspace", destination)
+	relative := strings.TrimLeft(destination, "/")
+	if relative == "" || !filepath.IsLocal(relative) {
+		return "", fmt.Errorf("destination %q: must name a path inside the workspace", destination)
 	}
-	return filepath.Join(workspace, destination), nil
+	return filepath.Join(workspace, relative), nil
 }
 
 // git runs one git command and returns its trimmed standard output.

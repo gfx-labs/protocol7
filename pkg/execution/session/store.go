@@ -36,13 +36,13 @@ type record struct {
 	Closed  bool `json:"closed,omitempty"`
 }
 
-// The ID is a directory name and part of a unix socket path, which Linux
-// limits to 107 bytes.
-var sessionID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,47}$`)
+// The ID is a directory name, part of a unix socket path, which Linux limits
+// to 107 bytes, and one token of a stream subject, so it holds no dot.
+var sessionID = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,47}$`)
 
 func checkID(id string) error {
 	if !sessionID.MatchString(id) {
-		return fmt.Errorf("session ID %q: use up to 48 lower-case letters, digits, '.', '_' or '-', starting with a letter or digit", id)
+		return fmt.Errorf("session ID %q: use up to 48 lower-case letters, digits, '_' or '-', starting with a letter or digit", id)
 	}
 	return nil
 }
