@@ -34,6 +34,8 @@ type SessionEvent struct {
 	Seq     int64     `json:"seq"`
 	Time    time.Time `json:"time"`
 	Kind    EventKind `json:"kind"`
+	// Turn is the ID of the turn a prompt starts.
+	Turn string `json:"turn,omitempty"`
 	// Text is the prompt, or a piece of a message or thought.
 	Text string      `json:"text,omitempty"`
 	Tool *ToolEvent  `json:"tool,omitempty"`
