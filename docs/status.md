@@ -50,7 +50,7 @@ All on one machine on 2026-11-13, with Temporal CLI 1.9.1 (server 1.32.0) and th
 | The same from a browser: start, tool calls, a message queued behind a turn, Stop, a further turn, reload, close | Passed. Stop ended a `sleep 120` turn in 1.3 seconds and dropped the queued message |
 | A chat with the default GitHub remotes, read only | Both repositories cloned over ssh |
 | `p7 dev` stopped with SIGTERM during a turn, then started again | The turn ended while Temporal and the worker were down. After the restart the chat read its result from the journal. Two prompts for two turns |
-| `p7-worker` killed with SIGKILL during a turn, against a separate NATS server (2.10.20) and Temporal | The activity timed out on its heartbeat, the retry on a new worker attached to the running turn, and it ended normally. One prompt |
+| `p7-worker` killed with SIGKILL during a turn, against a separate NATS server (2.10.20) and Temporal | The harness kept running and ended the turn 8 seconds later, with no worker. The activity timed out on its heartbeat. A new worker started 5 seconds after that, and the retry returned the result from the journal. One prompt |
 | Continue-As-New, with the server's suggestion lowered to 60 events | The chat continued as new after its fifth turn. Turns six to eight ran, the agent still knew a word from turn one, and the chat list showed one entry |
 | Session manager against towa, without Temporal: caller killed mid-turn, cancel, shim stopped between turns, shim stopped mid-turn, close then a turn | Each behaved as "How a turn survives" says. A turn on a closed session is refused |
 
@@ -95,4 +95,5 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 - A session whose shim exits on its idle limit. Stopping the shim by hand between turns was run, and the next turn loaded the conversation.
 - A harness that refuses to load a conversation, which starts a new one seeded with a summary of the journal.
 - A turn that reaches its activity timeout.
+- An activity retry that finds its turn still running and attaches to it. Both restart cases above ended their turn before the new worker started. The session manager does attach in its test and in the run against towa.
 - More than one machine, and any harness other than towa.
