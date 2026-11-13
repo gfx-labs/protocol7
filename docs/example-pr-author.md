@@ -1,10 +1,10 @@
 # Example: following our own pull request
 
-The author side of `example-pr-review.md`. That workflow reviews pull requests. This one follows a pull request that one of our own agents opened: it answers review comments, fixes failing checks, resolves conflicts, updates a branch that is behind, requests review and merges.
+The author workflow of the three in `example-pr-flows.md`. It follows a pull request that one of our own agents opened: it answers review comments, fixes failing checks, resolves conflicts, updates a branch that is behind and requests review. It does not merge. The merge workflow does (`example-pr-merge.md`).
 
 It is a sketch against the library proposed in `plan.md` section 7. Nothing here compiles or has run. It is not a port: jobcity has no flow like this.
 
-Both workflows can be open on the same pull request at once, one as author and one as reviewer, beside any number of people. The second half of this file is about how they avoid working against each other.
+The review workflow and the merge workflow can be open on the same pull request at once, beside any number of people. "What stops ping-pong" below is about how they avoid working against each other.
 
 ## The flow
 
@@ -12,36 +12,34 @@ Both workflows can be open on the same pull request at once, one as author and o
 flowchart TD
   R[Read the record's revision, then read GitHub] --> D{Decide}
   D -->|merged or closed| F[Finish]
+  D -->|the merge label was never put on| L[Add the merge label]
   D -->|unanswered threads, failed checks or conflicts| X[Fix round: one coding session, one push]
   D -->|the same problem is still there after a fix, or the round limit| Q[Ask a person]
   D -->|only behind, and otherwise ready| U[Update the branch]
   D -->|this head has no review request yet| V[Request review]
-  D -->|approved and nothing holds the merge| M[Merge]
-  D -->|anything else| W[Wait for a change or the recheck timer]
+  D -->|anything else, including approved| W[Wait for a change or the recheck timer]
+  L --> R
   X --> R
   Q --> R
   U --> R
   V --> R
-  M --> R
   W --> R
 ```
 
-The loop is the same as the reviewer's: events only wake it, every decision comes from a fresh read of GitHub, and `Decide` is one pure function.
+Once the pull request is approved and nothing is left to fix, this workflow waits. The merge workflow or a person merges it, and the next read finishes the ticket.
 
-## Who does what
+## What it does about a merge blocker
 
-Each kind of write to a pull request has one owner. A workflow never does another owner's write, and never undoes one.
+The merge workflow tells the author when a pull request cannot merge until the author acts (`example-pr-merge.md`, "Who must act on a blocker"). For one of our own pull requests no comment is posted. This workflow reads the same state from GitHub and acts on it.
 
-| Write | Owner |
+| Merge blocker | What this workflow does |
 |---|---|
-| Commits on the branch, branch updates | The author workflow |
-| Replies on review threads, and resolving a thread it answered | The author workflow |
-| Requesting review | The author workflow |
-| Reviews: approve, request changes, comment | The reviewer workflow |
-| Opening review threads | The reviewer workflow |
-| Merging a pull request one of our agents wrote | The author workflow |
-| Merging a pull request someone else wrote | The reviewer workflow, where the repository allows it |
-| Anything at all | A person. Both workflows read the result and carry on |
+| Conflicts with the base | A fix round. The session resolves the conflicts and pushes |
+| A check failed | A fix round |
+| Behind the base | Updates the branch, once nothing else is missing |
+| An approval is for an earlier head | Requests review of the current head, once |
+
+Each of them makes a new head or a new request, and the review workflow reviews it. The merge workflow waits for that review.
 
 ## What stops ping-pong
 
@@ -54,8 +52,9 @@ Each kind of write to a pull request has one owner. A workflow never does anothe
 | The author pushes while a review of the old head is running | The reviewer cancels that round and waits for the new request. One fix round handles every open problem in one push, so there are few heads |
 | A branch update makes a new head, which needs a new approval, while the base moves again | The branch is updated only when nothing else is missing. This still costs one review per update. A merge queue on the repository removes the problem, and is the better answer where it is available |
 | A person pushes to the branch during a fix | The fix round is cancelled. Events carry their actor, so the workflow can tell its own push from someone else's |
-| Both workflows try to merge | Only one of them owns the merge of a given pull request, decided by who the author is |
-| Both workflows ask a person about the same pull request | Questions name the pull request as their subject. The attention list groups them |
+| Two workflows try to merge | Only the merge workflow merges |
+| A person takes the merge label off and the workflow puts it back | The label is added once and recorded on the ticket. It is never added again |
+| Several workflows ask a person about the same pull request | Questions name the pull request as their subject. The attention list groups them |
 
 ## Types
 
@@ -65,28 +64,34 @@ message PRAuthor {
   string repo = 1;
   int32 pr = 2;
   string branch = 3;
-  string issue = 4;                       // Linear key, may be empty
+  string issue = 4;                     // Linear key, may be empty
   string image = 5;
-  repeated string reviewers = 6;          // who is asked to review
-  repeated string required_approvers = 7; // whose approval the merge waits for
-  int32 fix_rounds = 8;                   // fix rounds that finished
-  int32 extra_rounds = 9;                 // rounds a person allowed beyond MaxFixRounds
-  map<string, int32> attempts = 10;       // problem key to times a fix was tried
-  repeated string requested_heads = 11;   // heads review was requested for
-  repeated string cleared = 12;           // problem keys a person said to try again
+  repeated string reviewers = 6;        // who is asked to review
+  string merge_label = 7;               // the label that asks for a merge. Empty: do not ask
+  bool merge_label_added = 8;           // this workflow has put the merge label on once
+  int32 fix_rounds = 9;                 // fix rounds that finished
+  int32 extra_rounds = 10;              // rounds a person allowed beyond MaxFixRounds
+  map<string, int32> attempts = 11;     // problem key to times a fix was tried
+  repeated string requested_heads = 12; // heads review was requested for
+  repeated string cleared = 13;         // problem keys a person said to try again
 }
 
 // What the coding session submits at the end of a fix round.
 message FixReport {
-  FixOutcome outcome = 1;          // PUSHED, NOTHING_TO_DO or NEEDS_PERSON
-  string head = 2;                 // the commit it pushed, with PUSHED
+  FixOutcome outcome = 1;           // PUSHED, NOTHING_TO_DO or NEEDS_PERSON
+  string head = 2;                  // the commit it pushed, with PUSHED
   repeated ThreadReply replies = 3; // thread, text, and whether to resolve it
   string summary = 4;
-  string question = 5;             // with NEEDS_PERSON: what it needs to know
+  string question = 5;              // with NEEDS_PERSON: what it needs to know
+}
+
+// The result stored on the pr_author ticket when the workflow finishes.
+message Result {
+  Outcome outcome = 1; // MERGED, CLOSED or STOPPED
 }
 ```
 
-`Decide` reads this from the `github` package:
+`Decide` reads this from the `github` package. `Thread`, `Check` and `Mergeable` are in `example-pr-flows.md`.
 
 ```go
 // In package github.
@@ -107,7 +112,8 @@ type AuthorState struct {
 	Mergeable     Mergeable
 	// PendingReviewers have been asked for a review of this head and have not given one.
 	PendingReviewers []string
-	// ApprovedBy lists everyone whose approval stands for the current head.
+	// ApprovedBy lists everyone who approved the current head. An approval of
+	// an earlier head is not in it, whatever the repository's rules say.
 	ApprovedBy []string
 }
 ```
@@ -130,6 +136,7 @@ import (
 
 	authorv1 "example.com/gfx/gen/author/v1"
 	"example.com/gfx/github"
+	"example.com/gfx/prflow"
 	"example.com/gfx/prompts"
 )
 
@@ -140,14 +147,17 @@ const (
 	MaxAttemptsPerProblem = 2
 	// WorkDirectory is where the coding session finds its clone.
 	WorkDirectory = "/work"
+	// FixLimit is the shared limit every fix session counts against.
+	FixLimit = "author:fix"
 )
 
 // Config is everything that differs between installations.
 type Config struct {
 	// AuthorLogin is the GitHub login our agents open pull requests as.
 	AuthorLogin string
-	Coder       p7.Model
-	Guidance    []p7.Input
+	// Coder is the ordered model list of a fix session.
+	Coder    []string
+	Guidance []p7.Input
 	// Owners are asked the questions and told when something is overdue.
 	Owners []p7.Recipient
 	// ReviewOverdue says who is told, and when, if a requested review does not arrive.
@@ -158,9 +168,27 @@ type Config struct {
 	Recheck time.Duration
 }
 
+// Repo is one repository whose pull requests of ours are followed. Intake
+// copies it to the ticket.
+type Repo struct {
+	// Image is the image a fix session runs in.
+	Image string
+	// Reviewers are asked to review each head.
+	Reviewers []string
+	// RequestMerge puts the repository's merge label on each pull request of
+	// ours, so the merge workflow follows it.
+	RequestMerge bool
+}
+
 // Workflows holds the configuration that the workflows read.
 type Workflows struct {
 	config Config
+}
+
+// Register adds the author workflow to a worker.
+func Register(worker *p7.Worker, config Config) {
+	workflows := &Workflows{config: config}
+	p7.Register(worker, "pr_author", workflows.Follow)
 }
 
 // Follow follows one of our own pull requests until it is merged or closed.
@@ -169,9 +197,14 @@ func (w *Workflows) Follow(
 	ticket p7.Ticket[*authorv1.PRAuthor],
 ) (*authorv1.Result, error) {
 	pull := ticket.Fields
+	if pull.Attempts == nil {
+		pull.Attempts = map[string]int32{}
+	}
 	pullRequestRef := github.PullRequest(pull.Repo, pull.Pr)
 
 	for {
+		// Read the record's revision before reading GitHub, so a change that
+		// lands between the read and the wait still wakes the workflow.
 		object, err := p7.GetObject(ctx, pullRequestRef)
 		if err != nil {
 			return nil, fmt.Errorf("read pull request object: %w", err)
@@ -184,13 +217,25 @@ func (w *Workflows) Follow(
 
 		action := Decide(state, pull)
 		workflow.SetCurrentDetails(ctx, action.Reason)
-		if err := p7.SetEscalation(ctx, ticket, w.escalationFor(ticket.ID, action)); err != nil {
+		if err := p7.SetEscalation(ctx, ticket, w.escalationFor(ticket.ID, state, action)); err != nil {
 			return nil, fmt.Errorf("set escalation: %w", err)
 		}
 
 		switch action.Kind {
 		case ActionFinish:
 			return &authorv1.Result{Outcome: action.Outcome}, nil
+
+		case ActionRequestMerge:
+			if err := github.AddLabel(ctx, pull.Repo, pull.Pr, pull.MergeLabel); err != nil {
+				return nil, fmt.Errorf("add merge label: %w", err)
+			}
+			// Recorded, so the label is never added a second time. A person
+			// who takes it off has decided, and this workflow leaves it off.
+			pull.MergeLabelAdded = true
+			if err := p7.UpdateFields(ctx, ticket, pull); err != nil {
+				return nil, fmt.Errorf("record merge label: %w", err)
+			}
+			continue
 
 		case ActionFix:
 			// Count the attempt before it runs, so a fix that fails halfway
@@ -214,8 +259,12 @@ func (w *Workflows) Follow(
 			continue
 
 		case ActionAsk:
-			if err := w.askAndApply(ctx, ticket, pull, state, action, watched); err != nil {
+			stop, err := w.askAndApply(ctx, ticket, pull, state, action, watched)
+			if err != nil {
 				return nil, err
+			}
+			if stop {
+				return &authorv1.Result{Outcome: authorv1.Outcome_STOPPED}, nil
 			}
 			continue
 
@@ -236,18 +285,6 @@ func (w *Workflows) Follow(
 			}
 			continue
 
-		case ActionMerge:
-			err := github.Merge(ctx, github.MergeRequest{
-				Repo:         pull.Repo,
-				PullRequest:  pull.Pr,
-				Method:       github.Squash,
-				MatchHead:    state.Head,
-				OperationKey: fmt.Sprintf("merge:%s:%s", ticket.ID, state.Head),
-			})
-			if err != nil && !errors.Is(err, github.ErrHeadMoved) && !errors.Is(err, github.ErrNotMergeable) {
-				return nil, fmt.Errorf("merge pull request: %w", err)
-			}
-
 		case ActionWait:
 		}
 
@@ -255,10 +292,23 @@ func (w *Workflows) Follow(
 		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
 			return nil, p7.ContinueAsNew(ctx, ticket)
 		}
-		// waitForChange is the function of the same name in example-pr-review.md.
-		if err := waitForChange(ctx, w.config.Recheck, watched); err != nil {
+		if err := prflow.WaitForChange(ctx, w.config.Recheck, watched); err != nil {
 			return nil, err
 		}
+	}
+}
+
+// escalationFor returns the escalation that should run while a requested
+// review has not arrived, or nil. The head is in the key, so a new head
+// starts a new clock.
+func (w *Workflows) escalationFor(ticketID string, state github.AuthorState, action Action) *p7.Escalation {
+	if !action.ReviewOverdue {
+		return nil
+	}
+	return &p7.Escalation{
+		Key:     ticketID + ":review:" + state.Head,
+		Subject: action.Reason,
+		Steps:   w.config.ReviewOverdue,
 	}
 }
 
@@ -299,12 +349,12 @@ func (w *Workflows) fixRound(
 	// The clone is writable. The session may push to this branch and nowhere else.
 	clone := p7.GitClone{Repository: pull.Repo, Ref: state.Head, Branch: pull.Branch}
 	report, err := p7.Agent[*authorv1.FixReport](roundCtx, p7.AgentSpec{
-		Model:    w.config.Coder,
+		Models:   w.config.Coder,
 		Image:    pull.Image,
 		Prompt:   prompts.Fix(pull, state, problems),
 		Inputs:   slices.Concat([]p7.Input{{Source: clone, Destination: WorkDirectory}}, w.config.Guidance),
 		Egress:   []p7.EgressRef{github.PushBranch(pull.Repo, pull.Branch)},
-		Limits:   []string{"model:" + w.config.Coder.Name, "repo:" + pull.Repo},
+		Limits:   []string{FixLimit, "repo:" + pull.Repo},
 		Priority: p7.PriorityNormal,
 		Timeout:  2 * time.Hour,
 	})
@@ -341,7 +391,7 @@ func (w *Workflows) fixRound(
 }
 ```
 
-Left out: `askAndApply`, which asks the owners with `p7.Ask` the way `askAboutRoundLimit` does in the reviewer and applies the answer (try again, which adds the problem's key to `cleared`, allow more rounds, or stop following), and `escalationFor`, which is the reviewer's with one clock: review requested and not received.
+Left out: `askAndApply`. It asks the owners with `p7.Ask` the way `askAboutRoundLimit` does in the review workflow, and applies the answer: try again, which adds the problem's key to `cleared`, allow more rounds, or stop following, for which it returns true.
 
 ## Deciding
 
@@ -358,12 +408,19 @@ type Problem struct {
 type ActionKind int
 
 const (
+	// ActionWait waits for the pull request to change.
 	ActionWait ActionKind = iota
+	// ActionRequestMerge puts the merge label on the pull request.
+	ActionRequestMerge
+	// ActionFix runs one coding session on every open problem.
 	ActionFix
+	// ActionAsk asks a person what to do about a problem a fix did not clear.
 	ActionAsk
+	// ActionUpdateBranch merges the base branch into the pull request's branch.
 	ActionUpdateBranch
+	// ActionRequestReview asks the reviewers to review the current head.
 	ActionRequestReview
-	ActionMerge
+	// ActionFinish ends the workflow.
 	ActionFinish
 )
 
@@ -386,6 +443,8 @@ func Decide(state github.AuthorState, pull *authorv1.PRAuthor) Action {
 		return Action{Kind: ActionFinish, Outcome: authorv1.Outcome_CLOSED, Reason: "closed"}
 	case state.Draft:
 		return Action{Kind: ActionWait, Reason: "waiting: draft"}
+	case pull.MergeLabel != "" && !pull.MergeLabelAdded:
+		return Action{Kind: ActionRequestMerge, Reason: "asking for a merge with the label " + pull.MergeLabel}
 	}
 
 	if problems := Problems(state); len(problems) > 0 {
@@ -401,7 +460,7 @@ func Decide(state github.AuthorState, pull *authorv1.PRAuthor) Action {
 		return Action{Kind: ActionFix, Reason: fmt.Sprintf("fixing %d problems", len(problems)), Problems: problems}
 	}
 
-	approved := func(approver string) bool { return slices.Contains(state.ApprovedBy, approver) }
+	approved := func(reviewer string) bool { return slices.Contains(state.ApprovedBy, reviewer) }
 	switch {
 	case state.ChecksPending:
 		return Action{Kind: ActionWait, Reason: "waiting: checks running"}
@@ -414,14 +473,12 @@ func Decide(state github.AuthorState, pull *authorv1.PRAuthor) Action {
 	case !slices.ContainsFunc(pull.Reviewers, approved):
 		return requestReviewOnce(state, pull, "waiting: no approval for this head")
 	case state.Mergeable == github.MergeableBehind:
-		// Only now, when nothing else is missing. An update makes a new head.
+		// Only now, when nothing else is missing. An update makes a new head,
+		// and the next pass requests review of it.
 		return Action{Kind: ActionUpdateBranch, Reason: "updating the branch"}
-	case state.Mergeable != github.MergeableClean:
-		return Action{Kind: ActionWait, Reason: "waiting to merge: GitHub says it is not mergeable"}
-	case slices.ContainsFunc(pull.RequiredApprovers, func(approver string) bool { return !approved(approver) }):
-		return Action{Kind: ActionWait, Reason: "waiting to merge: required approval missing", ReviewOverdue: true}
 	}
-	return Action{Kind: ActionMerge, Reason: "merging " + state.Head}
+	// Approved and nothing left to fix. Merging is not this workflow's write.
+	return Action{Kind: ActionWait, Reason: "waiting: approved, the merge workflow or a person merges it"}
 }
 
 // requestReviewOnce asks for review of a head the first time and waits after that.
@@ -468,13 +525,14 @@ Everything `example-pr-review.md` lists, and three more:
 
 1. **The actor on every event.** `fixRound` tells its own push from a person's by `event.Actor`. Without it the workflow cancels its own fix round when its own push arrives.
 2. **A branch on a `p7.GitClone` input.** The clone is checked out on a named branch, so the session can commit and push without setting anything up.
-3. **A push grant limited to one branch.** `github.PushBranch` is this repo's egress reference. PDP needs a rule that allows a push to one ref of one repository (plan section 9 says push-ref restrictions are possible, not that they exist).
+3. **A push grant limited to one branch.** `github.PushBranch` is this repo's egress reference. PDP cannot limit a push to a branch today, because the refs a push updates are in the request body (plan section 9). The first thing to test is a GitHub ruleset that keeps the author identity to an agent branch prefix.
 
 ## Open
 
-- **How this ticket is filed.** The workflow that opened the pull request would file it, as its child or as independent work. Not shown.
-- **The first failed check is treated like any other.** A flaky check costs a coding session. Rerunning a failed check once before fixing would be cheaper.
+- **How the pull request is opened.** The workflow that writes the change opens it as the author login. Intake then files this ticket because of who the author is (`example-pr-flows.md`). The opening workflow is not shown.
+- **The first failed check is treated like any other.** A flaky check costs a coding session. Rerunning a failed check once before fixing would be cheaper. A failed check that the repository does not require is fixed too, though it does not block the merge.
 - **The reviewer sees every head the author requests review for.** With a reviewer that takes twenty minutes a round, six fix rounds is two hours of reviews. The limits on both sides bound it, but nothing makes the two sides converge faster.
-- **Two agents can agree with each other and be wrong.** Our author and our reviewer are both ours. `required_approvers` is the gate that puts a person in the loop.
-- **A merge refusal is not remembered here.** The reviewer example saves a refusal and does not retry until the state changes. This workflow should do the same and does not yet.
-- None of this has run. Every `p7`, `github` and `prompts` call is proposed.
+- **Review is requested for every head, whatever the merge criteria say.** `ApprovedBy` counts approvals of the current head only. Where a repository's criteria accept an approval of an earlier head, a branch update still costs a review here.
+- **Two agents can agree with each other and be wrong.** Our author and our reviewer are both ours. A person among the required approvers in the merge criteria is the gate that puts a person in the loop.
+- **The merge label is added before the first review.** That asks for a merge of whatever is approved later. The merge criteria decide when, so nothing merges early, but the label says nothing about whether the work is finished.
+- None of this has run. Every `p7`, `github`, `prflow` and `prompts` call is proposed.
