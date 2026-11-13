@@ -745,6 +745,8 @@ The first deployment targets the `talos-metal` cluster. Read from the cluster on
 | Storage classes `proxmox-lvm-xfs` (default) and `proxmox-scratch-xfs` | Persistent volumes for Postgres and NATS, scratch volumes for workspaces |
 | Traefik ingress class | Ingress for `webhookd` |
 
+Changed 2026-11-13 (user): the selfdev chat's deployment is part of the first milestone and lives in `gfx-labs/protocol7-selfdev` under `kubernetes/`, as its own cdk8s project with a Flux entry point, sops-encrypted secrets and the `elee-agent` GitHub App for git access. It installs Temporal, NATS and Postgres in its own namespace, without the chart, PDP or SPIRE described above. It is written and validated offline, and not applied. That repository's `kubernetes/README.md` has the state.
+
 SPIRE agents and the CSI driver run privileged with host paths, so their namespace needs the privileged pod-security label, as `csi-proxmox` has. SPIRE, NATS, Temporal, PDP and the Postgres clusters are added through `gfx-labs/baremetal`.
 
 ## 12. Delivery milestones and acceptance
