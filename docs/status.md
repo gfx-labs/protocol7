@@ -15,10 +15,17 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/execution/session` | Sessions on this machine: a directory per session with its workspace, shim directory and record. Places git clone inputs. Runs a turn that survives its caller |
 | `pkg/transport/stream` | Session frames on NATS JetStream, one subject per session, and an embedded NATS server for local use |
 | `pkg/orchestration/activity`, `pkg/orchestration/coreworker` | The activities `p7.OpenSession`, `p7.RunTurn` and `p7.CloseSession`, and the worker that serves them on `local-<host>` |
-| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, and `NewClient` with `WatchSession` |
-| `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process |
+| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx |
+| `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
+| `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
 
 The chat workflow and the web UI are in `gfx-labs/protocol7-selfdev`.
+
+### How a process is put together
+
+The commands of both repositories are composed with `go.uber.org/fx` (decided 2026-11-13, user). A long-lived component has a constructor that connects to nothing, and separate start and stop methods: `stream.New` then `Connect`, `stream.NewEmbedded` then `Start`, `coreworker.New` then `Start` and `Stop`, `p7.NewClient` then `Connect`, `p7.NewWorker` then `Start` and `Stop`. A command supplies its flags as configuration values and names its modules. fx starts the components in dependency order and stops them in reverse.
+
+fx resolves the components when the process starts, so a missing one is not a compile error. `wire_test.go` in each repository's `pkg/cli` checks every command's graph with `fx.ValidateApp`.
 
 ## How a turn survives
 
@@ -54,6 +61,18 @@ All on one machine on 2026-11-13, with Temporal CLI 1.9.1 (server 1.32.0) and th
 | Continue-As-New, with the server's suggestion lowered to 60 events | The chat continued as new after its fifth turn. Turns six to eight ran, the agent still knew a word from turn one, and the chat list showed one entry |
 | Session manager against towa, without Temporal: caller killed mid-turn, cancel, shim stopped between turns, shim stopped mid-turn, close then a turn | Each behaved as "How a turn survives" says. A turn on a closed session is refused |
 
+Run again after the commands were moved to fx (protocol7 `e21e2d1`, selfdev `4a0b3ec`):
+
+| Case | Result |
+|---|---|
+| `p7 dev` started, then stopped with SIGTERM | Exit status 0. No process and no listening port was left |
+| The Temporal development server killed under a running `p7 dev` | `p7 dev` logged the exit, stopped its other components and exited with status 1 |
+| `p7 dev` with a Temporal CLI path that does not exist, and `p7-worker` with no Temporal to reach | Each exited with status 1 and one line naming the cause |
+| The browser chat: a commit, a message queued behind a turn, Stop, a further turn, reload | Passed. The commit is on `chat/<id>` in the clone and the remote was unchanged. Stop took 8.9 seconds in this run |
+| `selfdev run` stopped with SIGTERM while a page held an event stream open, then started again | It exited in 0.3 seconds with status 0. The page that stayed open sent a message after the restart, showed the answer and closed the chat |
+
+The two Stop times, 1.3 and 8.9 seconds, both fit the limit the code states: a cancel reaches the activity in the answer to a heartbeat, and the SDK sends one at most every 8 seconds. That cause was not isolated by a separate measurement.
+
 ## Tests
 
 `go test ./...` in both repositories. They need no network and no harness.
@@ -63,6 +82,7 @@ All on one machine on 2026-11-13, with Temporal CLI 1.9.1 (server 1.32.0) and th
 | `pkg/execution/journal` | The decoder on the journal of a real towa session that was cancelled, loaded again and interrupted (`testdata/towa-recovery.ndjson`) |
 | `pkg/execution/session` | The manager with the real shim and a scripted ACP agent, both run from the test binary: a repeated turn, a turn picked up and cancelled, a shim stopped mid-turn, and context hidden from viewers |
 | `pkg/transport/stream` | Publish, deduplication and an ordered read against the embedded NATS server |
+| `pkg/transport/cli`, `protocol7-selfdev/pkg/cli` | Every command's fx graph has what its components ask for. Nothing is built or started |
 | `protocol7-selfdev/pkg/chat` | The chat workflow in Temporal's test environment: message order, stop, close and cancel |
 
 The recorded journal holds the scratch paths of the machine it was recorded on. It was checked for keys and tokens before it was committed, and holds none.
@@ -88,6 +108,7 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 - A closed chat answers its state query only while a selfdev worker runs and Temporal still keeps its history.
 - Frames stay in the stream for 30 days and nothing archives them. The journal on the session's machine is the full record.
 - A Stop that arrives before the turn's activity started drops that message without sending it.
+- Stop can take up to about nine seconds to end a turn, because the cancel waits for the activity's next heartbeat.
 
 ## Not run
 

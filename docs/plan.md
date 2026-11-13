@@ -30,6 +30,10 @@ Decided 2026-11-13 (user). Packages live in `pkg/` and commands in `cmd/`, group
 | `pkg/support/...` | Small shared helpers |
 | `cmd/p7`, `cmd/p7-worker`, `cmd/p7acpshim` | Thin entry points. Each calls into `pkg/` |
 
+### Process composition
+
+Decided 2026-11-13 (user). Processes are composed with `go.uber.org/fx`, starting now, because more components are coming. Packages keep plain constructors and separate start and stop methods. Only the command packages and `pkg/p7/p7fx` import fx, so a consumer can use `pkg/p7` without it. `docs/status.md` says what is built this way.
+
 ### First milestone
 
 Changed 2026-11-13 (user). The first milestone is still selfdev, and it is reached when a person can chat in a web UI with an orchestrated protocol7 ACP session that can change the git repositories and write the implementation. The rest of protocol7 and selfdev is then built from that chat. The milestone spans both repositories: sessions, the shim, the worker and the live output stream in `protocol7`, and the UI and the chat workflow in `protocol7-selfdev`. Section 12 has the order. `docs/status.md` says what exists and what was run.
