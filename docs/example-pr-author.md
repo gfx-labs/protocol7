@@ -81,7 +81,7 @@ message PRAuthor {
 message FixReport {
   FixOutcome outcome = 1;           // PUSHED, NOTHING_TO_DO or NEEDS_PERSON
   string head = 2;                  // the commit it pushed, with PUSHED
-  repeated ThreadReply replies = 3; // thread, text, and whether to resolve it
+  repeated ThreadReply replies = 3; // thread, body, and whether to resolve it
   string summary = 4;
   string question = 5;              // with NEEDS_PERSON: what it needs to know
 }

@@ -45,87 +45,23 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 
 ## Waking on several conditions
 
-The plan has this in section 7 ("Waiting on several conditions", "Long-lived flow workflows"). The loop below is for the deferred implementation flow, which has the most branches. The review flow uses the same loop with fewer of them. The p7 calls are proposed and this has not been compiled against an SDK.
+The plan has this in section 7 ("Waiting on several conditions", "Long-lived flow workflows"). Until 2026-11-13 this section held a sketch of one loop for the deferred implementation flow. That loop merged inside the issue workflow, which the merging decision above rules out, and it used a `p7.Watch` shape the examples no longer use. The worked loops are in the example files. None has been compiled against an SDK.
 
-```go
-// FlowState is everything a pull request flow carries across Continue-As-New.
-type FlowState struct {
-	Issue       p7.RecordRef
-	PullRequest p7.RecordRef
-	HeadCommit  string
-	// Handled is the last revision of each watched record this flow has acted on.
-	Handled map[string]int64
-}
+| Workflow | File | Watches | Decides in |
+|---|---|---|---|
+| `prreview.Review` | `docs/example-pr-review.md` | The pull request | `Decide(state, review)` |
+| `prauthor.Follow` | `docs/example-pr-author.md` | The pull request and its base branch | `Decide(state, pull)` |
+| `prmerge.Merge` | `docs/example-pr-merge.md` | The pull request, its base branch and each pull request it depends on | `Decide(state, criteria, merge)` |
 
-// FollowPullRequest runs after the pull request is open and ends when it is
-// merged or abandoned.
-func (w *Workflows) FollowPullRequest(ctx workflow.Context, state FlowState) error {
-	for {
-		info := workflow.GetInfo(ctx)
-		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
-			options := workflow.ContinueAsNewErrorOptions{
-				InitialVersioningBehavior: workflow.ContinueAsNewVersioningBehaviorAutoUpgrade,
-			}
-			return workflow.NewContinueAsNewErrorWithOptions(ctx, options, w.FollowPullRequest, state)
-		}
+Every pass of each loop does the same five things:
 
-		waitCtx, cancelWait := workflow.WithCancel(ctx)
-		changed := p7.Watch(waitCtx, p7.WatchRequest{
-			Records: []p7.RecordRef{state.PullRequest, state.Issue},
-			Handled: state.Handled,
-			Events:  w.config.WakeEvents,
-		})
-		recheck := workflow.NewTimer(waitCtx, w.config.RecheckInterval)
+1. Continue as new if history is long or a newer build is the target.
+2. Read the revision of each watched record with `p7.GetObject`.
+3. Read GitHub in one activity.
+4. Call `Decide`, which has no side effects, on what was read, and carry out the one action it returns.
+5. If the action was to wait, call `prflow.WaitForChange` (in `docs/example-pr-flows.md`) with the revisions from step 2 and a recheck timer.
 
-		var changes p7.Changes
-		var waitErr error
-		selector := workflow.NewSelector(ctx)
-		selector.AddFuture(changed, func(future workflow.Future) {
-			waitErr = future.Get(ctx, &changes)
-		})
-		selector.AddFuture(recheck, func(future workflow.Future) {
-			waitErr = future.Get(ctx, nil)
-		})
-		selector.Select(ctx)
-		cancelWait()
-		if waitErr != nil {
-			return fmt.Errorf("wait for changes to %s: %w", state.PullRequest.ID, waitErr)
-		}
-
-		// Decide from what is true now, not from which event woke the flow.
-		observed, err := w.readLiveState(ctx, state)
-		if err != nil {
-			return fmt.Errorf("read live state of %s: %w", state.PullRequest.ID, err)
-		}
-
-		switch {
-		case observed.Merged:
-			return w.finishIssue(ctx, state, observed)
-		case observed.Closed, observed.IssueCancelled:
-			return w.abandon(ctx, state, observed)
-		case observed.HasConflicts, observed.BehindBase:
-			state, err = w.updateFromBase(ctx, state, observed)
-		case len(observed.UnansweredFeedback) > 0:
-			state, err = w.addressFeedback(ctx, state, observed)
-		case observed.ChecksFailed:
-			state, err = w.repairChecks(ctx, state, observed)
-		case observed.ReadyToMerge:
-			state, err = w.merge(ctx, state, observed)
-		}
-		if err != nil {
-			return fmt.Errorf("handle changes to %s: %w", state.PullRequest.ID, err)
-		}
-		if state.Handled == nil {
-			state.Handled = make(map[string]int64, len(changes.Revisions))
-		}
-		for record, revision := range changes.Revisions {
-			state.Handled[record] = revision
-		}
-	}
-}
-```
-
-`readLiveState`, `finishIssue`, `abandon`, `updateFromBase`, `addressFeedback`, `repairChecks` and `merge` are consumer methods on `Workflows`. Each runs activities or agent turns and returns the updated state.
+No handled revisions are carried across Continue-As-New, because step 2 reads them again on every pass.
 
 Three properties do the work that jobcity's waits do badly today:
 

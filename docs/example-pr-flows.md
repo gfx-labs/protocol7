@@ -227,6 +227,18 @@ GitHub treats the writes differently, so each activity says what it checks itsel
 
 A coding session pushes with git, under the author's push grant. That is the only write to GitHub a session makes.
 
+Each write takes one request value that carries an `OperationKey`: `github.Review`, `github.ThreadReply`, `github.MergeRequest` and `github.IssueComment`. A `github.Review` has a `github.ReviewEvent`, one of `github.ReviewApprove`, `github.ReviewRequestChanges` and `github.ReviewComment`. `github.ReactionEyes` is the reaction the review workflow adds.
+
+### Reads
+
+| Function | Returns |
+|---|---|
+| `GetReviewState`, `GetAuthorState`, `GetMergeState` | The state value its workflow decides from, in one activity |
+| `ListFiles` | The changed files of a pull request, as `github.File` values with a path and line counts |
+| `CompareHeads` | A `github.Comparison` of an earlier head with the current one |
+| `ListThreadsBy` | The review threads a login opened |
+| `ListOpen`, `Client.GetSummary` | A `github.Summary` for each open pull request, or for one |
+
 `github.CommentNotifier` is the notifier this repo registers. It delivers a notice addressed to a GitHub login by calling `Comment` with a mention of that login. It posts nothing for a login in its `Skip` list.
 
 ### Timeline events
