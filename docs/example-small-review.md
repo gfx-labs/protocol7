@@ -1,6 +1,6 @@
 # Small example: internal PR review
 
-This is a small jobcity-style review stage, not the complete review/capture/merge pipeline. It checks out an exact PR head, asks a read-only agent to run repository checks and review the change, and returns a typed report. It does not publish a GitHub review or merge. Those are consumer-owned activities with current-head checks and operation-specific idempotency.
+This is a small jobcity-style review stage, not the complete pipeline. The complete one is worked through in `example-pr-flows.md` and the three workflow files it names, where a review workflow follows a pull request across heads and a separate workflow merges. This file checks out an exact PR head, asks a read-only agent to run repository checks and review the change, and returns a typed report. It does not publish a GitHub review or merge. Those are consumer-owned activities with current-head checks and operation-specific idempotency.
 
 The p7 SDK is proposed, not implemented. The names below follow the current design and have not been compiled against an SDK. The consumer owns the protobuf types, prompts, worker registration and PDP assignments. The configured session uses a pinned image/model and repository-scoped read-only PDP grants. The prompt is not the security boundary.
 
@@ -99,4 +99,4 @@ func (w *Workflows) Review(
 }
 ```
 
-A consumer receiver or workflow files the `pr_review` ticket with exact revisions and a business deduplication key scoped to repository/head/review cycle. Temporal controls execution and retries. p7 persists the typed outcome and run evidence. Before any later publication, a consumer activity rechecks the current PR head, grants and publication identity. Publishing is deliberately absent from this small example.
+Consumer intake files the `pr_review` ticket with exact revisions and a business deduplication key scoped to repository/head/review cycle. That is one ticket per reviewed head. The complete example files one ticket per pull request and records each review as a round on it. Temporal controls execution and retries. p7 persists the typed outcome and run evidence. Before any later publication, a consumer activity rechecks the current PR head, grants and publication identity. Publishing is deliberately absent from this small example.

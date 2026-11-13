@@ -32,13 +32,14 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | Rollout | The reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing ones are shut down once it is proven |
 | Webhooks | protocol7 ships its own receiver, `webhookd`, which publishes to NATS JetStream. Consumers pull from the stream |
 | Merging | The reviewer does not merge, because it may not be the last reviewer. A separate flow waits on merge readiness, merges a pull request that meets its repository's merge criteria, and tells the implementer about a blocker they must fix, such as a conflict, so that they fix it and get it reviewed again (user, 2026-11-13). `plan.md` section 10 and `docs/example-pr-merge.md` have the design |
+| Which pull requests the merge flow follows | Those that carry a merge label (user, 2026-11-13). The label name is not chosen |
 
 ## The flows
 
 | Flow | Status | Shape in protocol7 |
 |---|---|---|
 | Requested GitHub review | First consumer flow, milestone 7 | One ticket per pull request. Review the exact head, publish one review, follow replies, pushes and new requests |
-| Linear issue to merged PR | Deferred | One long-lived ticket workflow per issue |
+| Linear issue to merged PR | Deferred | One long-lived ticket workflow per issue. Proposed 2026-11-13: once the pull request is open, the author workflow and the merge workflow in `docs/example-pr-flows.md` follow it, and the issue workflow waits on the pull request |
 | Stale Linear issues | Deferred | A scheduled sweep with one short child per issue or batch |
 | opencodereview on a PR | Deferred | A `p7.Step` on the head, then a publish activity |
 
