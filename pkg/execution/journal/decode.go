@@ -21,13 +21,10 @@ const MetaKey = "p7"
 type PromptMeta struct {
 	// Turn identifies the turn the prompt starts.
 	Turn string `json:"turn"`
-}
-
-// BlockMeta is protocol7's _meta on a content block of a prompt.
-type BlockMeta struct {
-	// Context marks a block the workflow added in front of the prompt. It is
-	// not part of what the person wrote.
-	Context bool `json:"context,omitempty"`
+	// ContextBlocks is how many content blocks at the front of the prompt
+	// the workflow added. They are not part of what the person wrote. The
+	// count is kept here because go-acp sends no _meta on a content block.
+	ContextBlocks int `json:"context_blocks,omitempty"`
 }
 
 // Decoder turns the frames of one session's journal into events.
@@ -111,8 +108,8 @@ func (d *Decoder) fromController(frame domain.Frame, message rpcMessage) []domai
 		}
 		prompt.Turn = meta.Turn
 		var text strings.Builder
-		for _, block := range params.Prompt {
-			if block.isContext() {
+		for index, block := range params.Prompt {
+			if index < meta.ContextBlocks {
 				continue
 			}
 			text.WriteString(block.Text)
@@ -235,18 +232,8 @@ func failure(rpc rpcError) *domain.TurnFailure {
 }
 
 type contentBlock struct {
-	Meta map[string]json.RawMessage `json:"_meta"`
-	Type string                     `json:"type"`
-	Text string                     `json:"text"`
-}
-
-func (b contentBlock) isContext() bool {
-	raw, ok := b.Meta[MetaKey]
-	if !ok {
-		return false
-	}
-	var meta BlockMeta
-	return json.Unmarshal(raw, &meta) == nil && meta.Context
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 // sessionUpdate holds the fields of the session/update kinds this package

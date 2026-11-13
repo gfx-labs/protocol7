@@ -398,13 +398,13 @@ func interrupted(p *pump) domain.TurnResult {
 // the request's _meta, which the journal keeps, so a later attempt can tell
 // that the prompt was sent.
 func promptRequest(acpSession string, request domain.TurnRequest, seed string) (acp.PromptRequest, error) {
-	contextMeta := map[string]any{journal.MetaKey: journal.BlockMeta{Context: true}}
 	var blocks []acp.ContentBlock
 	for _, text := range []string{seed, request.Context} {
 		if text != "" {
-			blocks = append(blocks, acp.ContentBlock{Text: &acp.ContentBlockText{Type: "text", Text: text + "\n\n", Meta: contextMeta}})
+			blocks = append(blocks, acp.ContentBlock{Text: &acp.ContentBlockText{Type: "text", Text: text + "\n\n"}})
 		}
 	}
+	contextBlocks := len(blocks)
 	if request.Prompt == "" {
 		return acp.PromptRequest{}, errors.New("run turn: the prompt is empty")
 	}
@@ -412,7 +412,7 @@ func promptRequest(acpSession string, request domain.TurnRequest, seed string) (
 	return acp.PromptRequest{
 		SessionId: acp.SessionId(acpSession),
 		Prompt:    blocks,
-		Meta:      map[string]any{journal.MetaKey: journal.PromptMeta{Turn: request.Turn}},
+		Meta:      map[string]any{journal.MetaKey: journal.PromptMeta{Turn: request.Turn, ContextBlocks: contextBlocks}},
 	}, nil
 }
 
