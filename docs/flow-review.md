@@ -31,6 +31,7 @@ Correction: the first version of this review read PDP's `origin/main` and descri
 | GitHub identities | Separate author and reviewer identities |
 | Rollout | The reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing ones are shut down once it is proven |
 | Webhooks | protocol7 ships its own receiver, `webhookd`, which publishes to NATS JetStream. Consumers pull from the stream |
+| Merging | The reviewer does not merge, because it may not be the last reviewer. A separate flow waits on merge readiness, merges a pull request that meets its repository's merge criteria, and tells the implementer about a blocker they must fix, such as a conflict, so that they fix it and get it reviewed again (user, 2026-11-13). `plan.md` section 10 and `docs/example-pr-merge.md` have the design |
 
 ## The flows
 
