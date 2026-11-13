@@ -1,0 +1,7 @@
+# Only the Go source reaches the builder. The checkout's gitignored secrets
+# directory must never be sent to one.
+*
+!go.mod
+!go.sum
+!cmd
+!pkg

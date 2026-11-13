@@ -1,0 +1,22 @@
+#!/bin/sh
+# Build the protocol7 image from this checkout. The tag is the commit.
+#
+#   scripts/build-image          build into the local image store
+#   scripts/build-image --push   build and push to the registry
+set -eu
+
+cd "$(dirname "$0")/.."
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "build-image: the checkout has uncommitted changes, so a commit would not name what was built" >&2
+  exit 1
+fi
+
+image="ghcr.io/gfx-labs/protocol7:$(git rev-parse --short HEAD)"
+output=--load
+if [ "${1:-}" = --push ]; then
+  output=--push
+fi
+
+docker buildx build --platform linux/amd64 -f containers/p7/Dockerfile -t "$image" "$output" .
+echo "$image"
