@@ -8,13 +8,31 @@ The first delivery target is self-development and evidence-based self-improvemen
 
 | Repository | Owns |
 |---|---|
-| `gfx-labs/protocol7` | Go library, ticket API and store, core Temporal worker, runner, executors, CLI, webhook receiver, web UI and Helm chart |
+| `gfx-labs/protocol7` | Go library, ticket API and store, core Temporal worker, the ACP shim, runner, executors, CLI, webhook receiver and Helm chart |
 | `gfx-labs/pdp` | Workload authentication, request authorization, upstream credential acquisition and storage, OAuth refresh, TLS interception and DNS routing |
-| `gfx-labs/protocol7-selfdev` | Consumer worker, development/review and improvement workflows, prompts, deployment activities and end-to-end acceptance scenarios |
+| `gfx-labs/protocol7-selfdev` | Consumer worker, the web UI, the chat workflow, development/review and improvement workflows, prompts, deployment activities and end-to-end acceptance scenarios. It later takes on consumer flows for other repositories, such as the `trade` pull request reviews (user, 2026-11-13) |
 
 There is no workflow YAML, interpreter, orchestration DSL or custom retry/checkpoint engine. Branches, loops, conditions and error handling are Go code. Settings such as models, limits and repository lists are passed in Go configuration structs.
 
-protocol7 ships an API, a CLI and a basic web UI for escalations, tickets and session chat (section 6). The UI and other clients use the same published API. The platform contains no emulator, devbox or device-specific logic. Users implement domain-specific tools in their own workers.
+protocol7 ships an API and a CLI. The web UI is not part of protocol7 (user, 2026-11-13). It lives in `protocol7-selfdev` and uses the same published API as any other client (section 6). The platform contains no emulator, devbox or device-specific logic. Users implement domain-specific tools in their own workers.
+
+### Repository layout
+
+Decided 2026-11-13 (user). Packages live in `pkg/` and commands in `cmd/`, grouped the way `elee1766/jobshop` groups them. The module root holds no Go package. Consumers import `github.com/gfx-labs/protocol7/pkg/p7`, and `p7` is the one namespace they use.
+
+| Path | Holds |
+|---|---|
+| `pkg/p7` | The public library: worker, sessions, client. Everything a consumer imports |
+| `pkg/execution/...` | Backends and what runs in them: the shim client, session activities, the journal decoder |
+| `pkg/orchestration/...` | Core workflows and activities |
+| `pkg/storage/...` | The ticket store and artifact storage |
+| `pkg/transport/...` | The API server, the CLI commands and the live output stream |
+| `pkg/support/...` | Small shared helpers |
+| `cmd/p7`, `cmd/p7-worker`, `cmd/p7acpshim` | Thin entry points. Each calls into `pkg/` |
+
+### First milestone
+
+Changed 2026-11-13 (user). The first milestone is still selfdev, and it is reached when a person can chat in a web UI with an orchestrated protocol7 ACP session that can change the git repositories and write the implementation. The rest of protocol7 and selfdev is then built from that chat. The milestone spans both repositories: sessions, the shim, the worker and the live output stream in `protocol7`, and the UI and the chat workflow in `protocol7-selfdev`. Section 12 has the order. `docs/status.md` says what exists and what was run.
 
 ## 2. Components and ownership
 
@@ -22,11 +40,12 @@ protocol7 ships an API, a CLI and a basic web UI for escalations, tickets and se
 |---|---|
 | `ticketd` | Connect RPC API, run-scoped API, Temporal command submission, Postgres migrations and activity writes, ticket change stream |
 | `p7-worker` | Core command, RunStep, AcpSession and reconciliation workflows, execution activities and backends |
-| Consumer worker | User workflows importing `github.com/gfx-labs/protocol7`. Does not need backend administration rights |
+| Consumer worker | User workflows importing `github.com/gfx-labs/protocol7/pkg/p7`. Does not need backend administration rights |
+| `p7acpshim` | One process per agent session. It starts the agent harness, owns its process group, serves ACP on a socket, journals every frame and outlives the worker that started it (section 8) |
 | `runner` | Execute commands or host ACP sessions, expose `run.sock`, prepare workspaces and publish manifests/artifacts |
 | `p7` | Ticket operations, approvals, run tools and debugging commands using public APIs |
 | `webhookd` | Verify incoming webhook deliveries and publish them to a JetStream stream that consumers pull from |
-| Web UI | Attention list, tickets, approvals and session chat. Served by ticketd through the public API |
+| Web UI | Attention list, tickets, approvals and session chat. In `protocol7-selfdev`, served by its own binary, through the public API |
 | PDP | Shared credential and egress gateway. Separate from protocol7, optional for trusted host execution |
 | Temporal | Execution history, task dispatch, retries, timers, signals, child workflows and Worker Versioning |
 | Postgres | Tickets, intent, approvals, execution ownership bindings, execution projections, run outcomes, integration records and session records |
@@ -248,7 +267,7 @@ Approvals live in a separate table and are never schedulable tickets. One `Resol
 
 ### Web UI
 
-A basic, provider-neutral web UI handles escalations. ticketd serves it as static assets from the same origin as the API, and it calls only the published Connect API, so it needs no UI-only endpoints.
+A basic, provider-neutral web UI handles escalations. It is in `protocol7-selfdev`, not in this repository (user, 2026-11-13). Its own binary serves the static assets and calls only the published API, so protocol7 needs no UI-only endpoints. Until ticketd exists that binary uses the `p7` client and Temporal directly (`docs/status.md`).
 
 - Attention list: pending approvals and questions, with blocked and quarantined work.
 - Ticket view: fields, history, comments, runs, linked external objects and approvals. An approval is resolved by choosing one of its options or writing a reply.
@@ -263,7 +282,7 @@ The UI has no authentication of its own during development and no Ingress. Peopl
 
 ## 7. Go workflow library
 
-Consumer workers import `github.com/gfx-labs/protocol7`. Library calls start core child workflows or activities. Conditions and loops remain ordinary deterministic Go workflow logic. Filesystem/network access belongs in activities, not workflow functions.
+Consumer workers import `github.com/gfx-labs/protocol7/pkg/p7`. Library calls start core child workflows or activities. Conditions and loops remain ordinary deterministic Go workflow logic. Filesystem/network access belongs in activities, not workflow functions.
 
 A small illustrative consumer workflow is in `docs/example-small-review.md`. It uses the proposed SDK and consumer-owned protobuf types; it is not a compiled implementation.
 
@@ -408,7 +427,7 @@ Tool calls are recorded by name on the run. Activity results also enter Temporal
 
 ## 8. ACP sessions and live output
 
-Use `github.com/gfx-labs/acphost` as the ACP transport. Pin the current release when implementation starts. `v0.25.0` is the latest tag as of 2026-11-12. In networked backends use its TCP listener with per-session mTLS. The core worker provisions the session trust material and retains its client identity. Locally use a Unix socket. Do not build another ACP TCP/WebSocket bridge. These session transport credentials are distinct from upstream API secrets and PDP's interception CA.
+Use `github.com/gfx-labs/acphost` as the ACP transport, through protocol7's own shim. `cmd/p7acpshim` is the per-session host process, built on the acphost library, and `pkg/execution/acpshim` is the client the session activities use, built on `github.com/gfx-labs/go-acp`. protocol7 does not use `acpc` (user, 2026-11-13): that is a shell client with its own session directories, locks and prompt queue, and protocol7 keeps that state in Temporal. `v0.27.0` is the acphost release pinned as of 2026-11-13. In networked backends use its TCP listener with per-session mTLS. The core worker provisions the session trust material and retains its client identity. Locally use a Unix socket. Do not build another ACP TCP/WebSocket bridge. These session transport credentials are distinct from upstream API secrets and PDP's interception CA.
 
 acphost reconnect uses `Hello.Since` and replayed JSON-RPC requests. Deduplicate request IDs and responses. Reconnect within its controller lease. Validate process survival and reattachment after a core-worker restart.
 
@@ -725,6 +744,8 @@ The first deployment targets the `talos-metal` cluster. Read from the cluster on
 SPIRE agents and the CSI driver run privileged with host paths, so their namespace needs the privileged pod-security label, as `csi-proxmox` has. SPIRE, NATS, Temporal, PDP and the Postgres clusters are added through `gfx-labs/baremetal`.
 
 ## 12. Delivery milestones and acceptance
+
+Changed 2026-11-13 (user): the chat comes first. Before milestone 1, build the trusted-host path that the chat needs and nothing else: the shim, session activities on the host backend, the live output stream, the worker, and in `protocol7-selfdev` the chat workflow and the web UI. That path uses the machine's own logins and no PDP, which section 5 allows for trusted host execution. The milestones below then follow, built from the chat. The web UI in milestone 4 is the selfdev one.
 
 Build complete paths in this order. Do not finish every backend or integration before selfdev. The first iteration is milestones 1 to 5, and it is not complete until the container and Kubernetes executors both pass the same contract.
 

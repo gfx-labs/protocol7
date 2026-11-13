@@ -173,7 +173,7 @@ import (
 	"slices"
 	"time"
 
-	p7 "github.com/gfx-labs/protocol7"
+	"github.com/gfx-labs/protocol7/pkg/p7"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 

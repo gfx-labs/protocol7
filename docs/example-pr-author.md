@@ -133,7 +133,7 @@ import (
 	"strings"
 	"time"
 
-	p7 "github.com/gfx-labs/protocol7"
+	"github.com/gfx-labs/protocol7/pkg/p7"
 	"go.temporal.io/sdk/workflow"
 
 	authorv1 "example.com/gfx/gen/author/v1"

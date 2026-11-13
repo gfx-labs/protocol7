@@ -279,7 +279,7 @@ import (
 	"fmt"
 	"time"
 
-	p7 "github.com/gfx-labs/protocol7"
+	"github.com/gfx-labs/protocol7/pkg/p7"
 	"github.com/nats-io/nats.go/jetstream"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
@@ -526,7 +526,7 @@ package prflow
 import (
 	"time"
 
-	p7 "github.com/gfx-labs/protocol7"
+	"github.com/gfx-labs/protocol7/pkg/p7"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -573,7 +573,7 @@ package config
 import (
 	"time"
 
-	p7 "github.com/gfx-labs/protocol7"
+	"github.com/gfx-labs/protocol7/pkg/p7"
 
 	reviewv1 "example.com/gfx/gen/review/v1"
 	"example.com/gfx/github"
