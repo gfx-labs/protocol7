@@ -152,6 +152,8 @@ Activities can execute more than once. Every external mutation needs an operatio
 
 Failure classes distinguish rate limit, provider, launch, killed, timeout and real task failure. Temporal retry policies own activity attempt counts, backoff and timeouts; `runs` only projects execution evidence and does not advance an independent retry counter. `MaximumAttempts` includes the initial attempt. Investigation episodes, retry budgets beyond transport/execution recovery, and approval/escalation policy belong to consumer Go workflows, not a platform episode state machine. Waiting for capacity or outside events is not a task failure.
 
+A write to an outside system checks its own preconditions and finds its own earlier attempt. Providers differ, so this is the write activity's job and not a property of the operation key. GitHub refuses a merge that names a head which has moved, but accepts a review that names an old commit, and it has no idempotency key for reviews. A review activity therefore reads the head before posting, and looks for a review it already posted, by a marker carrying the operation key, before posting again. An integration package states for each write which of the two the provider does for it. `docs/example-pr-review.md` has the review case.
+
 ### Worker Versioning
 
 Worker Versioning is initial scope. Pin executions to their starting build and keep old workers available until those executions drain. A pinned run stays on its build across Continue-As-New by default. Long-lived workflows adopt a new build by continuing as new with the upgrade option, as described under long-lived flow workflows in section 7. CI replay checks are optional initially.
@@ -275,7 +277,9 @@ The following surface is proposed, not a published API:
 | `p7.OpenSession`, `p7.Prompt[T]`, `session.Close` | Retain a session across multiple turns. A turn can be resteered from outside (section 8) |
 | `p7.Input` with `p7.GitTree`, `p7.GitClone`, artifact and collection sources | Files, trees and clones placed in a session, step or environment (section 5). There is no `p7.Repo` |
 | `p7.OpenEnvironment`, `environment.Exec`, `environment.Close` | Keep an execution environment across commands and sessions |
-| `p7.Ask` | Create an approval and wait for its decision |
+| `p7.Ask`, `p7.Notify`, `p7.SetEscalation` | Ask people a question and wait for the decision, tell people something, and keep one overdue clock per ticket. See "Questions, notices and escalation" |
+| `Limits` and `Priority` on a session, agent or step | Count against named shared limits and wait in priority order. See "Shared limits and priority" |
+| `p7.GetObject`, `p7.UpdateFields`, `p7.ContinueAsNew` | Read an external object's record and revision, write the workflow's own ticket fields under its ownership fence, and continue a ticket workflow as new with ownership carried forward |
 | `p7.WaitEvent`, `p7.Watch` | Wait for changes to named external objects, approvals and tickets since the revisions already handled. Future-returning forms compose in a `workflow.Selector` |
 | `p7.Child`, `p7.File` | Create work with an independent lifecycle, with or without waiting |
 | `p7.WaitChildren[T]` | Wait on Temporal child-workflow futures for parent-started children; use database-backed waits for independently agent-filed tickets |
@@ -305,6 +309,54 @@ The wait cursor is a per-record revision that increases under the row lock, not 
 - Before a consequential action such as a merge, re-read live outside state at action time. Stored external-object state decides when to wake, not whether the action is still valid.
 - Signals stay available for operator commands and for messages that have no stored record.
 
+### Questions, notices and escalation
+
+Proposed 2026-11-12. Consumer flows need the same three things repeatedly: a decision from a person, a message to a person, and a reminder when something has waited too long. They are library calls so that each workflow does not build them from timers.
+
+- `p7.Ask` takes a key, a subject (a ticket or external object), a title and body, options, recipients and optional escalation steps. It returns a future of the decision. The key makes it idempotent: asking again with the same key, after a wake or a Continue-As-New, attaches to the open question. Cancelling the wait leaves the question open. A question still open when its ticket closes is withdrawn. This is the existing approval record and `WaitForApproval` path with a key and recipients added.
+- A gate such as "merge only after X approves" has two forms. Where the outside system records the approval, as GitHub does, the workflow reads it there and waits on the object. Where it does not, the workflow uses `p7.Ask` addressed to X and bound to the exact revision.
+- `p7.Notify` records a notice with a key, recipients, a subject, a title and a body. The same key is delivered once. A notice appears in the attention list. Delivery anywhere else, such as a chat room or a mention on the pull request, is a notifier activity that the consumer registers. protocol7 ships no chat integrations.
+- `p7.SetEscalation(ctx, ticket, escalation)` keeps at most one overdue clock per ticket. An escalation has a key, a subject line and steps, each a delay and the recipients to notify. Setting the same key again changes nothing, so a workflow can call it on every pass. A different key replaces the clock. Nil ends it, and so does closing the ticket. A question's own escalation steps run the same way until it is answered.
+- The clock is a core Temporal workflow with an ID derived from the key, started and ended through an activity. Its timers are durable and survive the caller's Continue-As-New. It is not a child of the caller, because a child does not carry over Continue-As-New.
+- Recipients are people or named groups. Group membership is deployment configuration. Until PDP supplies verified identities, a recipient is a routing hint and not an authorization check.
+
+Open: an on-call rota or working hours for escalation steps, and whether a notice can be acknowledged to stop later steps.
+
+### Shared limits and priority
+
+Proposed 2026-11-12. This reverses part of an earlier decision. The plan removed generic resource management, and a single deployment-wide session count was all that remained. The first flows need more: a cap per model, per repository and per device kind that holds across workflows, a repository that cannot take every slot, and a retried round that goes ahead of new work. A workflow cannot enforce any of that by itself, so it is a library feature.
+
+- A limit is a name and a number in deployment configuration, for example `model:<name>`, `repo:<owner>/<repo>` or `device:android`. A pattern such as `repo:*` gives every matching name the same number.
+- A session, agent or step names the limits it counts against, and a priority. The open call waits until every named limit has room and takes them together, so two callers cannot each hold half of what the other needs.
+- Waiters are served by priority, then by arrival. A caller that waits a long time is not starved by a stream of higher-priority work: its priority rises with age. The rate is configuration.
+- Slots are freed when the session, agent or step ends. Reconciliation frees slots whose holder is gone.
+- The deployment-wide session limit (section 8) becomes one more limit that every session counts against.
+- Holds and waiters are rows in ticketd's database, taken in the transaction that registers the session. The waiting call is an activity that observes its turn through ticketd with LISTEN/NOTIFY hints and polling fallback, like other waits. It heartbeats, and cancelling it removes the waiter.
+- The attention list and a ticket's view show what a waiting call waits for and its place in the queue.
+
+This is a counter with a queue. It is still not a resource registry: it does not create, boot, health-check or address anything. A consumer that needs a specific device still runs its own lease activity, and may count that lease against a limit to get the same ordering.
+
+Check before building: Temporal's task queue priority and fairness order the dispatch of single tasks. A session spans several activities, so they cannot count sessions, but they may cover the ordering part. Use them for that if they do.
+
+### Several workflows on one object
+
+More than one ticket can follow the same external object. A pull request can have a reviewer workflow and an author workflow open at once, beside people. `docs/example-pr-author.md` works through that case.
+
+- Any number of tickets link to one object, and each waits on it independently from its own revision.
+- Every timeline event carries its actor. A workflow can then tell its own write from another workflow's or a person's.
+- protocol7 does not lock an object or arbitrate between workflows. The flows divide the writes between them: each kind of write has one owner, and no flow undoes another's write.
+- Loops are prevented in the flows, with the same rules each time: decide from live state and not from events, count attempts against a problem and not against a head, give every loop a limit that ends in a question to a person, and only act on an explicit request from the other side.
+- ticketd can list the open tickets linked to an object, so a flow or a person can see who else follows it.
+
+Open: whether flows need to declare the kinds of write they own, so that a deployment can refuse two flows that claim the same one. Not built until two real flows collide.
+
+### Dependencies and follow-through
+
+- A flow that depends on other work watches that work's record with the same state-based wait: another ticket, or an external object such as another pull request or a deployment. There is no dependency edge table. The dependency is the wait.
+- What a ticket currently waits on is derived from its pending wait activity and shown on the ticket, so a person can see that pull request B is waiting for pull request A to deploy.
+- A flow does not have to finish when its main action is done. After a merge it can go on watching the deployment of the merge commit and report the result back to the pull request and to its owners. The deployment is one more external object with a timeline, written by the consumer's intake.
+- A dependency on work that fails or is closed without finishing completes the wait like any other change. The flow reads the state and decides. It usually asks a person.
+
 ### Long-lived flow workflows
 
 A flow that follows one issue or pull request for days is a loop over a serializable state value: wait, handle the change, repeat. At the top of the loop it continues as new when history is large or when `workflow.GetInfo(ctx).GetTargetWorkerDeploymentVersionChanged()` reports a newer target build, passing `ContinueAsNewVersioningBehaviorAutoUpgrade` so the next run starts on that build. Waiting flows then pick up a fix without an operator override, and an old build drains once its running turns finish. The Versioning Override in section 4 remains the path for a run that is stuck before it can reach that boundary.
@@ -316,7 +368,7 @@ A flow that follows one issue or pull request for days is a loop over a serializ
 
 ### Routing and tools
 
-Route activities through configured Temporal task queues to workers serving the required backend, host and capabilities. Executors and their backends enforce execution capacity. protocol7 has no generic resource registry, slot allocator, reservation tables or provider lifecycle workflow. Consumers needing exclusive access across steps implement reservations through their own activities.
+Route activities through configured Temporal task queues to workers serving the required backend, host and capabilities. Executors and their backends enforce execution capacity. Limits that must hold across workflows are named shared limits (above). protocol7 has no resource registry, slot allocator for specific machines or provider lifecycle workflow. Consumers needing exclusive access to a specific device across steps implement leases through their own activities.
 
 A session explicitly lists callable tools. `p7 call <name>` reaches ticketd through `run.sock`; ticketd checks the allowed tool and trusted run context before starting its activity. The function receives ticket/run context and can enforce additional domain checks.
 
@@ -332,7 +384,7 @@ The session activity redacts and publishes output frames to `p7.session.<id>.out
 
 Clients read through ticketd, never directly from NATS or acphost. A new acphost controller connection can replace the current one, so viewers must not connect to it. Archive streams/journals to artifact storage before purging live data. Frames do not enter workflow history, but final typed results and ordinary activity results do.
 
-Waiting sessions retain their execution environment until an idle limit expires. Workflows can close and reopen for long waits. towa keeps everything a session needs under one directory, and a new process can load a copy of it. Moving a session to a new pod means saving and restoring that directory. That is not designed here and needs an acceptance test.
+Waiting sessions retain their execution environment until an idle limit expires. The idle clock counts time in which nobody has prompted the session and nothing holds it. `session.Hold(ctx, reason, maximum)` stops the clock while the owning workflow waits for work it started on the session's behalf, such as device captures that queue for a free device. The next prompt ends the hold, and so does the maximum. A held session still counts against its limits. Workflows can close and reopen for long waits. towa keeps everything a session needs under one directory, and a new process can load a copy of it. Moving a session to a new pod means saving and restoring that directory. That is not designed here and needs an acceptance test.
 
 ### Agent harness
 
@@ -351,7 +403,7 @@ Not established: a turn with a proxy-held account against a real provider. Its p
 
 ### Session limit and model accounts
 
-At most 20 agent sessions are open at once across the deployment. Steps that only run a command do not count. The number is one ticketd setting. ticketd counts open session records and registers the new one in one transaction, serialized on that count so two concurrent opens cannot both take the last slot. Over the limit it refuses with a retryable capacity error. The open-session activity's Temporal retry policy does the waiting. There is no queue, reservation or fairness order. An idle session counts until it is closed, so a flow closes its session before a long wait. Reconciliation closes session records whose workflow is gone, so a crash cannot hold a slot for good. Temporal worker slot settings cannot provide this limit: they apply to each worker process separately, and a session spans several activities.
+At most 20 agent sessions are open at once across the deployment. Steps that only run a command do not count. The number is one ticketd setting. ticketd counts open session records and registers the new one in one transaction, serialized on that count so two concurrent opens cannot both take the last slot. Over the limit it refuses with a retryable capacity error. The open-session activity's Temporal retry policy does the waiting. That was the first design, with no queue or order. "Shared limits and priority" in section 7 replaces the retry with a priority queue and makes this number one limit among several. An idle session counts until it is closed, so a flow closes its session before a long wait. Reconciliation closes session records whose workflow is gone, so a crash cannot hold a slot for good. Temporal worker slot settings cannot provide this limit: they apply to each worker process separately, and a session spans several activities.
 
 A model account is one login or API key at a model provider. Sessions on the same account share its rate limit and its bill. protocol7 gets logins of its own: one Codex login and four or five Claude accounts (user, 2026-11-12). Every session on Codex shares that one login's rate limit, and a model list can fall back across the Claude accounts but not across Codex accounts. No other credential store uses them, because two stores that hold one login rotate the same refresh token and one of them is revoked (`elee1766/jobcity`, `docs/ops/agent-credentials.md`).
 
@@ -516,7 +568,7 @@ A pull request is eligible when all of these hold, checked against live GitHub s
 
 One ticket covers one pull request, from the first request until it closes. The workflow checks out the exact head read-only with the guidance collection mounted, runs the repository's checks and the review, and returns a typed report. Before publishing it re-reads the head, and discards the result if the head moved. It publishes one consolidated review as an approval, a change request or a comment.
 
-It then follows the pull request with a state-based wait. A push after a review starts a review of the new head with no new ping, once pushes have been quiet for a configured period. A new ping or label does the same. Replies on its threads are answered. It does not review while the pull request is a draft, and it ends when the pull request is closed or merged. It never merges.
+It then follows the pull request with a state-based wait. A new review is started only by a new request: a new ping, a re-request or the label (user, 2026-11-12). A push alone starts none. A later review is given the earlier reviews, how the new head relates to the last reviewed one, and the state of its own threads, so it can review what changed. Replies on its threads are answered. It does not review while the pull request is a draft, and it ends when the pull request is closed or merged. It never merges.
 
 - The reviewer is its own GitHub identity, separate from any identity that authors pull requests, because GitHub does not accept an approval from the author.
 - Rollout: the reviewer runs as an additional reviewer beside the existing jobcity reviewers, on its own configured subset of repositories. The existing reviewers are shut down once this one is proven.
@@ -613,10 +665,10 @@ Build complete paths in this order. Do not finish every backend or integration b
 | 1. Credentialed execution | Container executor, runner/manifest, file artifacts, NATS output and PDP integration including static and OAuth credentials | Run a command and private checkout; preserve output/artifacts; deny unauthorized access and prove no upstream token reaches the step |
 | 2. Durable work | Ticket core, Temporal commands, atomic mutation receipts, CAS/ownership fences, run projections and reconciliation | Retry a command across client timeout and commit-before-response loss; preserve cross-ticket atomicity and approval single resolution; restart between persistence and workflow start; lose NOTIFY events and reconnect listeners while approval/dependency waits still complete through polling; cancel and retry waiting activities; duplicate starts create one execution; expose accepted versus persisted status correctly; a workflow waiting on an approval, an external object and a timer wakes on each, and a change committed while it was busy is returned by its next wait |
 | 3. Agent sessions | ACP/acphost integration, scoped tools, typed reports, declared inputs, session journal and catalog, and the session limit | Complete real turns through PDP; reconnect after worker failure; verify placeholders, refresh, streaming and provider isolation; a session over the limit waits and opens when another closes; mount a guidance tree from a tag and record its commit; interrupt a running turn from a second session with a new instruction and get the typed result of the steered turn back in the waiting workflow, with the steer and its sender in the journal; refuse a steer from a session without the grant; find a session by task queue and time and read its full ordered conversation after its pod is gone |
-| 4. Development loop | Minimal GitHub operations, approvals, web UI and consumer edit/check/review/PR workflows | An explicit request produces a checked, independently reviewed PR with traceable evidence and intact gates; an escalation is answered in the web UI and the waiting workflow continues; a maintenance chat opened in the web UI takes messages across several turns |
+| 4. Development loop | Minimal GitHub operations, approvals, web UI and consumer edit/check/review/PR workflows | An explicit request produces a checked, independently reviewed PR with traceable evidence and intact gates; an escalation is answered in the web UI and the waiting workflow continues; a question asked twice with one key is one question; an overdue clock notifies once per step and stops when cleared; with a limit of two, three sessions that name it run two at a time and the high-priority waiter goes first; a session held for its children outlives its idle limit; a maintenance chat opened in the web UI takes messages across several turns |
 | 5. Kubernetes execution and cluster deployment | Kubernetes executor, S3 artifacts, backend admission, Helm chart, SPIRE identity and PDP enforcement on `talos-metal` | Execute the same contract on container and Kubernetes, including DNS/trust, cancellation, denied bypass and artifact access; PDP accepts a run pod's identity and denies a neighbouring pod |
 | 6. Versioned rollout | Consumer deployment activities, concurrent builds, promotion/rollback and draining | Existing executions finish on A while new ones use B; rollback future traffic; validate Continue-As-New separately; recover a stuck pinned execution on a replay-compatible fixed build and validate reset/ownership/external-effect handling |
-| 7. Requested review flow | `webhookd`, consumer intake, the review workflow and a reviewer GitHub identity | A ping or label on an eligible pull request produces one review on the exact head; a replayed delivery produces none; a push during review discards the stale result; a push after a review produces one review of the new head; an ineligible pull request is ignored; a receiver restart loses no accepted delivery |
+| 7. Requested review flow | `webhookd`, consumer intake, the review workflow and a reviewer GitHub identity | A ping or label on an eligible pull request produces one review on the exact head; a replayed delivery produces none; a push during review discards the stale result; a push after a review produces no review until review is requested again, and that review is given the earlier one; an ineligible pull request is ignored; a receiver restart loses no accepted delivery |
 | 8. Evaluated improvement | Optional learnings plus consumer-owned incident groups, evaluation cases and improvement journal | Propose and evaluate a scoped change with external writes disabled, then record a justified keep/revert outcome |
 | 9. Broader integrations | Linear flows, the implementation flow, opencodereview and external-object metrics | Duplicate and out-of-order deliveries preserve one coherent object timeline; missed events reconcile; peak-volume load test and typed metrics agree with recorded transitions |
 

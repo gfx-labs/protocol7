@@ -18,23 +18,26 @@ Source read: `elee1766/jobcity` at `7894440` (`packs/gfx/pack.cue`, `packs/gfx/w
 
 ```mermaid
 flowchart TD
-  R[Read timeline position, then read GitHub] --> D{Decide}
-  D -->|closed or merged by someone| F[Finish]
+  R[Read the record's revision, then read GitHub] --> D{Decide}
+  D -->|closed, or merged and nothing left to follow| F[Finish]
   D -->|a review request is not answered yet| V[Review round]
+  D -->|round limit reached| Q[Ask a person]
   D -->|approved and nothing holds the merge| M[Merge]
-  D -->|anything else| W[Wait for a change or the recheck timer]
+  D -->|anything else: held, dependency, deploy running| W[Wait for a change or the recheck timer]
   V -->|review posted| R
   V -->|head moved or closed: round cancelled| R
-  M -->|merged| F
-  M -->|GitHub refused| W
+  Q -->|answered, or the pull request changed| R
+  M -->|merged, or refused and the refusal recorded| R
   W --> R
 ```
+
+While the workflow reviews or waits, one escalation clock runs for what it is waiting on. If a requested review, a held merge or a deploy takes longer than configured, the owners are notified.
 
 Three rules keep the workflow correct when other people act on the pull request:
 
 1. **Events only wake it.** No decision is taken from what an event says. After every wake the workflow reads the pull request from GitHub and decides from that. A duplicate, late or missing webhook cannot put it in a wrong state.
 2. **`Decide` is one pure function.** It takes what GitHub says now and what this workflow has already reviewed, and returns one action. There is no stage the workflow can be stuck in.
-3. **Every write names the head it was decided for.** GitHub refuses a review or a merge for a head that has moved, and a refusal means "read again".
+3. **Every write checks the head it was decided for.** GitHub does this for a merge: a merge that names an old head is refused. It does not do it for a review: a review that names an old commit is accepted. So `PostReview` reads the head itself and refuses when it has moved. GitHub also has no idempotency key for reviews, so `PostReview` looks for its own earlier review before posting. See "Writes that check for themselves".
 
 ## What happens when someone else acts
 
@@ -46,6 +49,13 @@ Three rules keep the workflow correct when other people act on the pull request:
 | A push lands after the approval and before the merge | GitHub refuses the merge because the head does not match. The approval does not cover the new head, so the workflow waits for a new review request |
 | Someone else merges or closes the pull request | A round in progress is cancelled. The next read finishes the ticket as `MERGED_ELSEWHERE` or `CLOSED` |
 | Someone requests changes, opens a thread, or a check fails after the approval | `Decide` returns wait, with the blocker as the reason. When it clears, the next wake merges |
+| The branch falls behind, gets a conflict, or branch protection wants an approval that is missing | `WhyHeld` reads GitHub's own mergeable state and names the reason. No merge is tried |
+| GitHub refuses a merge for a reason the state did not show | The refusal is saved on the ticket and shown as the wait reason. The merge is not tried again until the merge-relevant state changes |
+| A named person must approve first | The merge waits on `REQUIRED_APPROVAL` until every required approver has approved the current head |
+| The pull request says it depends on another one | The merge waits on `DEPENDENCY`. The workflow also watches the other pull request, so it wakes when that one merges or deploys |
+| Nobody answers a held merge, an unanswered request or a question | The escalation clock for that wait notifies the owners after the configured time |
+| The pull request has had `MaxReviewRounds` reviews and another is requested | A person is asked whether to review again or stop. The ticket stays open |
+| The pull request is merged, by this workflow or by a person | With `FollowDeploy` the workflow keeps watching until the deploy of the merge commit finishes, comments the result on the pull request and then finishes |
 | Someone dismisses the approval | The merge waits on `APPROVAL_MISSING`. A new review request starts another round |
 | Review is requested again on a head already reviewed | The request has a new ID, so `NeedsReview` is true and another round runs. It is told the head has not moved, and looks at the replies on its threads |
 | The pull request becomes a draft | Wait until it is ready again |
@@ -72,6 +82,7 @@ Three rules keep the workflow correct when other people act on the pull request:
 | `tools/automation/start_review_capture.ts` (217 lines: checks that the caller holds the review step, that the run and subject match, that the platform fits the repo, then checks the run it started) | The reviewer returns capture requests in its typed `Turn`. `Workflows.runCaptures` checks the platform and the attempt limit in Go and starts each capture as a Temporal child. The agent files nothing, so the identity checks go away |
 | `review_capture_start` and the `_CAPTURES` table | `Workflows.Capture` and `EvidencePlatforms` |
 | `merge` step, an agent session | `Decide` returns merge and the loop calls `github.Merge`. No agent |
+| Pool session limits (`sol_review_sessions` and the rest) and the cap of 10 open runs | `Limits` and `Priority` on the session. See "Shared limits" |
 | A run that closed `held` or `blocked` stays closed until `bin/wake-ticket` or `run resume` | The workflow never parks on one condition. Every wake reads GitHub and decides again |
 | The reviewer posts one GitHub review with `gh` | `github.PostReview` in the workflow, under an operation key. The session can only read GitHub. This is the example's choice, not a rule of the library |
 | `jcx image upload` | `PublishEvidence`, an activity in this worker |
@@ -118,11 +129,60 @@ type ReviewState struct {
 	RequestComment int64
 	// ApprovedHead is the head this agent's standing approval is for. Empty
 	// when it has none, or the approval was dismissed.
-	ApprovedHead     string
+	ApprovedHead string
+	// ApprovedBy lists everyone whose approval stands for the current head.
+	ApprovedBy       []string
 	ChecksGreen      bool
 	ChangesRequested bool // by any reviewer other than this agent
-	OpenThreads      int
+	// OpenThreadsByOthers counts unresolved threads this agent did not open.
+	// Its own threads never hold its own merge: a MERGE verdict may leave notes.
+	OpenThreadsByOthers int
+	// Mergeable is GitHub's own answer to "can this be merged now". It covers
+	// what the fields above cannot see, such as branch protection rules.
+	Mergeable Mergeable
+	// Dependencies are the pull requests this one says it waits for, each read
+	// live. They come from "Depends on" lines in the description.
+	Dependencies []Dependency
+	// MergeCommit is set once the pull request is merged.
+	MergeCommit string
+	// Deploy is the state of the deployment of MergeCommit.
+	Deploy DeployState
 }
+
+// Mergeable mirrors GitHub's mergeable state.
+type Mergeable int
+
+const (
+	// MergeableUnknown means GitHub has not computed it yet. Read again later.
+	MergeableUnknown Mergeable = iota
+	MergeableClean
+	// MergeableBehind means the base branch has commits this branch must include first.
+	MergeableBehind
+	MergeableConflicts
+	// MergeableBlocked means a branch protection rule is not met.
+	MergeableBlocked
+)
+
+// Dependency is one thing a pull request waits for before it may merge.
+type Dependency struct {
+	// Object is the other pull request, as a p7 external object.
+	Object p7.ObjectRef
+	// Revision is the object's revision when Satisfied was read, so a wait can start from it.
+	Revision int64
+	// NeedsDeploy is set when the other pull request must be deployed, not only merged.
+	NeedsDeploy bool
+	Satisfied   bool
+}
+
+// DeployState is the state of the deployment of one commit.
+type DeployState int
+
+const (
+	DeployNone DeployState = iota
+	DeployPending
+	DeploySucceeded
+	DeployFailed
+)
 
 // Relation is how a pull request's current head relates to an earlier head.
 type Relation int
@@ -160,6 +220,51 @@ type Thread struct {
 }
 ```
 
+## Writes that check for themselves
+
+The two writes differ on GitHub, so the example treats them differently.
+
+| Write | What GitHub does | What the activity does |
+|---|---|---|
+| Merge with the expected head | Refuses when the head is different. Merging a merged pull request can be detected | Passes the head. Returns success if the pull request is already merged at that head |
+| Review with a commit | Accepts it for any commit of the pull request, including one that is no longer the head. No idempotency key | Reads the head and refuses if it moved. Finds its own earlier review by a marker before posting |
+
+```go
+// In package github.
+
+// PostReview posts one review, once, and only on the current head.
+func (a *Activities) PostReview(ctx context.Context, review Review) (PostedReview, error) {
+	// A hidden marker in the body carries the operation key. A review that has
+	// it was posted by an earlier attempt whose answer was lost.
+	marker := "<!-- p7:" + review.OperationKey + " -->"
+	earlier, err := a.client.ListReviewsBy(ctx, review.Repo, review.PullRequest, a.login)
+	if err != nil {
+		return PostedReview{}, fmt.Errorf("list reviews: %w", err)
+	}
+	for _, posted := range earlier {
+		if strings.Contains(posted.Body, marker) {
+			return PostedReview{ID: posted.ID, Head: posted.Commit}, nil
+		}
+	}
+
+	head, err := a.client.HeadOf(ctx, review.Repo, review.PullRequest)
+	if err != nil {
+		return PostedReview{}, fmt.Errorf("read head: %w", err)
+	}
+	if head != review.Head {
+		// Not retried. The workflow reads the pull request again.
+		return PostedReview{}, temporal.NewNonRetryableApplicationError("head moved", ErrHeadMovedType, nil)
+	}
+	posted, err := a.client.CreateReview(ctx, review, review.Body+"\n\n"+marker)
+	if err != nil {
+		return PostedReview{}, fmt.Errorf("create review: %w", err)
+	}
+	return PostedReview{ID: posted.ID, Head: review.Head}, nil
+}
+```
+
+Two windows stay open. A push between `HeadOf` and `CreateReview` puts the review on a commit that is no longer the head. GitHub shows it as outdated, and the next pass sees the new head and waits for a new request. And the marker lookup depends on GitHub listing a review it has just accepted. Neither was tested.
+
 ## Types
 
 ```proto
@@ -173,6 +278,17 @@ message PRReview {
   bool merge_others = 5;
   string image = 6;
   repeated Round rounds = 7; // one per finished review round, oldest first. The workflow appends
+  repeated string required_approvers = 8; // people whose GitHub approval the merge waits for
+  bool follow_deploy = 9;                 // after the merge, wait for the deploy and report it
+  int32 extra_rounds = 10;                // rounds a person allowed beyond MaxReviewRounds
+  bool merged_here = 11;                  // this workflow merged the pull request
+  MergeRefusal merge_refusal = 12;        // the last merge GitHub refused
+}
+
+// A merge GitHub refused, and the state it was refused in.
+message MergeRefusal {
+  string fingerprint = 1; // of the merge-relevant state at the time
+  string message = 2;     // what GitHub said
 }
 
 // One finished review round. Its review is posted on GitHub.
@@ -194,7 +310,7 @@ message Turn {
 
 // The result stored on the pr_review ticket when the workflow finishes.
 message Result {
-  Outcome outcome = 1; // MERGED, MERGED_ELSEWHERE, CLOSED or ROUND_LIMIT
+  Outcome outcome = 1; // MERGED, MERGED_ELSEWHERE, DEPLOYED, DEPLOY_FAILED, CLOSED or ROUND_LIMIT
 }
 
 // Ticket fields for kind review_capture. The reviewer fills in platform and
@@ -213,7 +329,7 @@ message CaptureReport {
 }
 ```
 
-`HeldReason` is `NOT_HELD`, `APPROVAL_MISSING`, `CHECKS`, `BLOCKING_REVIEW` or `OPEN_THREADS`. It is only used to say what a merge is waiting on.
+`HeldReason` is `NOT_HELD`, `APPROVAL_MISSING`, `REQUIRED_APPROVAL`, `DEPENDENCY`, `CHECKS`, `BLOCKING_REVIEW`, `OPEN_THREADS`, `MERGEABILITY_UNKNOWN`, `BEHIND`, `CONFLICTS` or `BRANCH_PROTECTION`. It is only used to say what a merge is waiting on.
 
 ## Workflows
 
@@ -248,6 +364,12 @@ const (
 	MaxReviewRounds = 8
 	// MaxCaptureAttempts is the number of captures one round may start per platform.
 	MaxCaptureAttempts = 2
+	// MaxCaptureTurns is the number of times a reviewer may ask for captures in
+	// one round. After that it must give a verdict from what it has.
+	MaxCaptureTurns = 3
+	// ReviewAgain and StopFollowing are the options of the round-limit question.
+	ReviewAgain   = "review_again"
+	StopFollowing = "stop"
 	// IntakeWakeSignal tells a repo's Intake workflow that one of its pull requests changed.
 	IntakeWakeSignal = "pull-request-activity"
 	// IntakePassesPerRun bounds the history of one Intake run before it continues as new.
@@ -269,8 +391,22 @@ const (
 type Config struct {
 	// TaskQueue is the queue this worker polls. Intake workflows are started on it.
 	TaskQueue string
-	// AgentLogin is the GitHub login reviews are posted as. Its own PRs are never merged here.
-	AgentLogin       string
+	// AgentLogin is the GitHub login reviews are posted as.
+	AgentLogin string
+	// OwnAuthors are the logins our own author workflows open pull requests as.
+	// This workflow reviews their pull requests and never merges them. The
+	// author workflow does (example-pr-author.md).
+	OwnAuthors []string
+	// Owners are told when something is overdue, and are asked the questions.
+	Owners []p7.Recipient
+	// ReviewOverdue says who is told, and when, if a requested review is not posted.
+	ReviewOverdue []p7.EscalationStep
+	// MergeOverdue is the same for an approved pull request that stays held.
+	MergeOverdue []p7.EscalationStep
+	// DeployOverdue is the same for a merged pull request whose deploy does not finish.
+	DeployOverdue []p7.EscalationStep
+	// QuestionOverdue is the same for a question nobody has answered.
+	QuestionOverdue  []p7.EscalationStep
 	HighRiskReviewer p7.Model
 	LowRiskReviewer  p7.Model
 	CaptureAgent     p7.Model
@@ -286,8 +422,11 @@ type Config struct {
 	// session. A source may name a tag. It is resolved to a commit once, when the
 	// session starts, and the commit is recorded on the run.
 	Guidance []p7.Input
-	// SessionIdleLimit closes a reviewer session that has waited this long for captures.
+	// SessionIdleLimit closes a reviewer session nobody has prompted for this
+	// long. Time the session is held for its own captures does not count.
 	SessionIdleLimit time.Duration
+	// CaptureHold is the longest a reviewer session is held for one set of captures.
+	CaptureHold time.Duration
 	// IntakeInterval is how often a repo is rescanned when no webhook arrives.
 	IntakeInterval time.Duration
 	// Recheck is how often a waiting pull request workflow reads GitHub when no event arrives.
@@ -303,6 +442,10 @@ type Repo struct {
 	Image       string // the image the reviewer runs the repo's checks in
 	Evidence    reviewv1.Evidence
 	MergeOthers bool
+	// RequiredApprovers must each approve the current head on GitHub before a merge.
+	RequiredApprovers []string
+	// FollowDeploy keeps the workflow open after the merge until the deploy finishes.
+	FollowDeploy bool
 }
 
 // Candidate is one open pull request that Discover found this agent should follow.
@@ -448,12 +591,14 @@ func (w *Workflows) fileEligibleReviews(ctx workflow.Context, repo Repo) error {
 			Title:   candidate.Title,
 			Objects: []p7.ObjectRef{github.PullRequest(repo.Name, candidate.PullRequest)},
 			Fields: &reviewv1.PRReview{
-				Repo:        repo.Name,
-				Pr:          candidate.PullRequest,
-				Issue:       candidate.Issue,
-				Evidence:    repo.Evidence,
-				MergeOthers: repo.MergeOthers,
-				Image:       repo.Image,
+				Repo:              repo.Name,
+				Pr:                candidate.PullRequest,
+				Issue:             candidate.Issue,
+				Evidence:          repo.Evidence,
+				MergeOthers:       repo.MergeOthers,
+				Image:             repo.Image,
+				RequiredApprovers: repo.RequiredApprovers,
+				FollowDeploy:      repo.FollowDeploy,
 			},
 		})
 		if err != nil {
@@ -473,10 +618,13 @@ func (w *Workflows) Review(
 	review := ticket.Fields
 	pullRequestRef := github.PullRequest(review.Repo, review.Pr)
 	logger := workflow.GetLogger(ctx)
+	// supersededRounds counts cancelled rounds in a row. A round that runs
+	// again goes ahead of new work in the session queue.
+	supersededRounds := 0
 
 	for {
-		// Read the timeline position before reading GitHub. The waits below ask
-		// for changes after this position, so a change that lands between the
+		// Read the record's revision before reading GitHub. The waits below ask
+		// for changes after this revision, so a change that lands between the
 		// read and the wait still wakes the workflow.
 		object, err := p7.GetObject(ctx, pullRequestRef)
 		if err != nil {
@@ -487,26 +635,60 @@ func (w *Workflows) Review(
 			return nil, fmt.Errorf("read pull request: %w", err)
 		}
 
-		action := Decide(state, review, w.config.AgentLogin)
+		// Everything that can change what Decide returns: the pull request, and
+		// the pull requests it depends on.
+		watched := []p7.Since{{Record: pullRequestRef, Revision: object.Revision, Kinds: github.ReviewRelevantEvents}}
+		for _, dependency := range state.Dependencies {
+			watched = append(watched, p7.Since{Record: dependency.Object, Revision: dependency.Revision})
+		}
+
+		action := Decide(state, review, w.config.OwnAuthors)
 		// Shown in the Temporal UI, so a waiting workflow says what it waits for.
 		workflow.SetCurrentDetails(ctx, action.Reason)
+		// A ticket has one escalation at a time. The same key keeps its clock
+		// running, a new key replaces it, and nil ends it.
+		if err := p7.SetEscalation(ctx, ticket, w.escalationFor(ticket.ID, action)); err != nil {
+			return nil, fmt.Errorf("set escalation: %w", err)
+		}
 
 		switch action.Kind {
 		case ActionFinish:
+			if err := w.report(ctx, ticket.ID, review, action); err != nil {
+				return nil, err
+			}
 			return &reviewv1.Result{Outcome: action.Outcome}, nil
 
+		case ActionAsk:
+			answer, err := w.askAboutRoundLimit(ctx, ticket.ID, review, state, watched)
+			if err != nil {
+				return nil, err
+			}
+			switch answer {
+			case StopFollowing:
+				return &reviewv1.Result{Outcome: reviewv1.Outcome_ROUND_LIMIT}, nil
+			case ReviewAgain:
+				review.ExtraRounds += MaxReviewRounds
+				if err := p7.UpdateFields(ctx, ticket, review); err != nil {
+					return nil, fmt.Errorf("record extra rounds: %w", err)
+				}
+			}
+			// No answer means the pull request changed first. Decide again.
+			continue
+
 		case ActionReview:
-			round, superseded, err := w.reviewRound(ctx, ticket.ID, review, state, object.Sequence)
+			round, superseded, err := w.reviewRound(ctx, ticket.ID, review, state, object.Revision, supersededRounds > 0)
 			if err != nil {
 				return nil, err
 			}
 			if superseded {
+				supersededRounds++
 				// Let a burst of pushes settle before reviewing the new head.
 				if err := workflow.Sleep(ctx, w.config.PushSettle); err != nil {
 					return nil, err
 				}
 				continue
 			}
+			supersededRounds = 0
 			// The round is saved on the ticket, so a later run of this
 			// workflow knows what has been reviewed.
 			review.Rounds = append(review.Rounds, round)
@@ -524,15 +706,27 @@ func (w *Workflows) Review(
 				MatchHead:    state.Head,
 				OperationKey: fmt.Sprintf("merge:%s:%s", ticket.ID, state.Head),
 			})
-			if err == nil {
-				return &reviewv1.Result{Outcome: reviewv1.Outcome_MERGED}, nil
-			}
-			if !errors.Is(err, github.ErrHeadMoved) && !errors.Is(err, github.ErrNotMergeable) {
+			switch {
+			case err == nil:
+				review.MergedHere = true
+				review.MergeRefusal = nil
+			case errors.Is(err, github.ErrHeadMoved), errors.Is(err, github.ErrNotMergeable):
+				// GitHub refused for a reason the state did not show. The refusal
+				// is saved with a fingerprint of the state it was refused in.
+				// Decide shows it and does not merge again until that state changes.
+				logger.Info("merge refused", "head", state.Head, "error", err)
+				review.MergeRefusal = &reviewv1.MergeRefusal{
+					Fingerprint: github.MergeFingerprint(state),
+					Message:     err.Error(),
+				}
+			default:
 				return nil, fmt.Errorf("merge pull request: %w", err)
 			}
-			// GitHub refused, so the pull request changed after it was read.
-			// Wait for that change to arrive, then decide again.
-			logger.Info("merge refused", "head", state.Head, "error", err)
+			if err := p7.UpdateFields(ctx, ticket, review); err != nil {
+				return nil, fmt.Errorf("record merge: %w", err)
+			}
+			// Read again. A merged pull request may still have a deploy to follow.
+			continue
 
 		case ActionWait:
 		}
@@ -544,22 +738,115 @@ func (w *Workflows) Review(
 		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
 			return nil, p7.ContinueAsNew(ctx, ticket)
 		}
-		if err := w.waitForChange(ctx, pullRequestRef, object.Sequence); err != nil {
+		if err := w.waitForChange(ctx, watched); err != nil {
 			return nil, err
 		}
 	}
 }
 
-// waitForChange returns when the pull request changes or the recheck timer
+// escalationFor returns the one escalation that should be running for an
+// action, or nil. Its key names what is overdue, so the clock keeps running
+// across passes and across Continue-As-New while the same thing is waited on.
+func (w *Workflows) escalationFor(ticketID string, action Action) *p7.Escalation {
+	var steps []p7.EscalationStep
+	switch action.Overdue {
+	case OverdueReview:
+		steps = w.config.ReviewOverdue
+	case OverdueMerge:
+		steps = w.config.MergeOverdue
+	case OverdueDeploy:
+		steps = w.config.DeployOverdue
+	default:
+		return nil
+	}
+	return &p7.Escalation{Key: ticketID + ":" + action.OverdueKey, Subject: action.Reason, Steps: steps}
+}
+
+// report comments the outcome on the pull request when the action has
+// something to report, and tells the owners about a failed deploy.
+func (w *Workflows) report(ctx workflow.Context, ticketID string, review *reviewv1.PRReview, action Action) error {
+	if action.Report == "" {
+		return nil
+	}
+	key := fmt.Sprintf("report:%s:%s", ticketID, action.Outcome)
+	err := github.Comment(ctx, github.IssueComment{
+		Repo:         review.Repo,
+		PullRequest:  review.Pr,
+		Body:         action.Report,
+		OperationKey: key,
+	})
+	if err != nil {
+		return fmt.Errorf("post report: %w", err)
+	}
+	if action.Outcome != reviewv1.Outcome_DEPLOY_FAILED {
+		return nil
+	}
+	return p7.Notify(ctx, p7.Notice{
+		Key:     key,
+		To:      w.config.Owners,
+		Subject: github.PullRequest(review.Repo, review.Pr),
+		Title:   action.Reason,
+		Body:    action.Report,
+	})
+}
+
+// askAboutRoundLimit asks the owners whether to review again. It returns the
+// chosen option, or "" when the pull request changed before anyone answered.
+func (w *Workflows) askAboutRoundLimit(
+	ctx workflow.Context,
+	ticketID string,
+	review *reviewv1.PRReview,
+	state github.ReviewState,
+	watched []p7.Since,
+) (string, error) {
+	askCtx, cancelAsk := workflow.WithCancel(ctx)
+	defer cancelAsk()
+
+	// The key holds the request, so asking again after a wake finds the same
+	// open question. Cancelling the context stops the wait and leaves the
+	// question open. A question still open when its ticket closes is withdrawn.
+	asked := p7.Ask(askCtx, p7.Question{
+		Key:        fmt.Sprintf("round-limit:%s:%d", ticketID, state.RequestID),
+		Subject:    github.PullRequest(review.Repo, review.Pr),
+		Title:      fmt.Sprintf("%s#%d has had %d reviews", review.Repo, review.Pr, len(review.Rounds)),
+		Body:       prompts.RoundLimit(review, state),
+		Options:    []p7.Option{{ID: ReviewAgain, Label: "Review again"}, {ID: StopFollowing, Label: "Stop following"}},
+		To:         w.config.Owners,
+		Escalation: w.config.QuestionOverdue,
+	})
+
+	answer := ""
+	var askErr error
+	selector := workflow.NewSelector(ctx)
+	selector.AddFuture(asked, func(answered workflow.Future) {
+		var decision p7.Decision
+		if askErr = answered.Get(ctx, &decision); askErr == nil {
+			answer = decision.Option
+		}
+	})
+	// A change to the pull request may make the question pointless: it was
+	// closed, or the request was withdrawn.
+	selector.AddFuture(p7.Watch(askCtx, watched...), func(changed workflow.Future) {})
+	selector.Select(ctx)
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if askErr != nil {
+		return "", fmt.Errorf("ask about the round limit: %w", askErr)
+	}
+	return answer, nil
+}
+
+// waitForChange returns when a watched record changes or the recheck timer
 // fires, whichever comes first. It does not say which. The caller reads GitHub
-// either way.
-func (w *Workflows) waitForChange(ctx workflow.Context, pullRequest p7.ObjectRef, cursor int64) error {
+// either way. A change that was already read once only costs one more read.
+func (w *Workflows) waitForChange(ctx workflow.Context, watched []p7.Since) error {
 	waitCtx, cancelWait := workflow.WithCancel(ctx)
 	defer cancelWait()
 
 	watchFailed := false
 	selector := workflow.NewSelector(ctx)
-	changed := p7.NextEvent(waitCtx, pullRequest, github.ReviewRelevantEvents, cursor)
+	changed := p7.Watch(waitCtx, watched...)
 	selector.AddFuture(changed, func(change workflow.Future) {
 		if err := change.Get(ctx, nil); err != nil {
 			watchFailed = true
@@ -583,7 +870,8 @@ func (w *Workflows) reviewRound(
 	ticketID string,
 	review *reviewv1.PRReview,
 	state github.ReviewState,
-	cursor int64,
+	revision int64,
+	retry bool,
 ) (round *reviewv1.Round, superseded bool, err error) {
 	// Everything in the round runs under roundCtx: the session, its turns and
 	// the captures. Cancelling it stops all of them.
@@ -592,15 +880,31 @@ func (w *Workflows) reviewRound(
 
 	// Cancel the round as soon as it is superseded. If the watch itself fails
 	// the round goes on, and PostReview still refuses a head that has moved.
-	pullRequestRef := github.PullRequest(review.Repo, review.Pr)
-	superseding := p7.NextEvent(roundCtx, pullRequestRef, github.SupersedingEvents, cursor)
+	since := p7.Since{
+		Record:   github.PullRequest(review.Repo, review.Pr),
+		Revision: revision,
+		Kinds:    github.SupersedingEvents,
+	}
 	workflow.Go(roundCtx, func(watchCtx workflow.Context) {
-		if superseding.Get(watchCtx, nil) == nil {
-			cancelRound()
+		for {
+			var events []p7.Event
+			if err := p7.Watch(watchCtx, since).Get(watchCtx, &events); err != nil {
+				return
+			}
+			for _, event := range events {
+				// The revision was read before GitHub was, so the event for
+				// the head under review can arrive here. Only a different head,
+				// a close or a merge supersedes the round.
+				if github.Supersedes(event, state.Head) {
+					cancelRound()
+					return
+				}
+				since.Revision = event.Revision
+			}
 		}
 	})
 
-	round, err = w.reviewHead(roundCtx, ticketID, review, state)
+	round, err = w.reviewHead(roundCtx, ticketID, review, state, retry)
 	if err == nil {
 		return round, false, nil
 	}
@@ -619,6 +923,7 @@ func (w *Workflows) reviewHead(
 	ticketID string,
 	review *reviewv1.PRReview,
 	state github.ReviewState,
+	retry bool,
 ) (round *reviewv1.Round, err error) {
 	// Route. Was a script step in the gate pool.
 	MarkSeen(ctx, review.Repo, review.Pr, state.RequestComment)
@@ -646,14 +951,23 @@ func (w *Workflows) reviewHead(
 	}
 	inputs := slices.Concat([]p7.Input{{Source: clone, Destination: WorkDirectory}}, w.config.Guidance)
 
+	// A round that was cancelled and runs again goes ahead of first rounds.
+	priority := p7.PriorityNormal
+	if retry {
+		priority = p7.PriorityHigh
+	}
+
 	// One session per round, kept open while captures run. It can read GitHub
-	// and cannot write to it.
+	// and cannot write to it. OpenSession waits until every named limit has
+	// room, in priority order. The limits are set in the deployment.
 	session, err := p7.OpenSession(ctx, p7.SessionSpec{
 		Model:     reviewer,
 		Image:     review.Image,
 		Inputs:    inputs,
 		Egress:    []p7.EgressRef{github.ReadOnly(review.Repo)},
 		IdleLimit: w.config.SessionIdleLimit,
+		Limits:    []string{"model:" + reviewer.Name, "repo:" + review.Repo},
+		Priority:  priority,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open reviewer: %w", err)
@@ -670,10 +984,24 @@ func (w *Workflows) reviewHead(
 		return nil, fmt.Errorf("review turn: %w", err)
 	}
 	captureAttempts := map[reviewv1.Platform]int{}
-	for turn.Verdict == reviewv1.Verdict_WAITING {
-		if len(turn.Captures) == 0 {
-			return nil, temporal.NewNonRetryableApplicationError(
-				"reviewer is waiting and requested no capture", "InvalidTurn", nil)
+	for captureTurns := 0; turn.Verdict == reviewv1.Verdict_WAITING; captureTurns++ {
+		if captureTurns == MaxCaptureTurns || len(turn.Captures) == 0 {
+			// The reviewer has had its captures, or asked for none. It must
+			// give a verdict from what it has.
+			turn, err = p7.Prompt[*reviewv1.Turn](ctx, session, prompts.VerdictWithoutCaptures())
+			if err != nil {
+				return nil, fmt.Errorf("final review turn: %w", err)
+			}
+			if turn.Verdict == reviewv1.Verdict_WAITING {
+				return nil, temporal.NewNonRetryableApplicationError(
+					"reviewer gave no verdict", "NoVerdict", nil)
+			}
+			break
+		}
+		// The session is waiting for its own captures, which can queue for a
+		// device. That time does not count as idle. The next prompt ends the hold.
+		if err := session.Hold(ctx, "captures", w.config.CaptureHold); err != nil {
+			return nil, fmt.Errorf("hold reviewer: %w", err)
 		}
 		reports, err := w.runCaptures(ctx, ticketID, review.Repo, state.Head, turn.Captures, platforms, captureAttempts)
 		if err != nil {
@@ -870,6 +1198,19 @@ func (w *Workflows) Capture(
 }
 ```
 
+## Shared limits
+
+A limit is a name and a number in the deployment's configuration. A session names the limits it counts against and a priority. `OpenSession` waits until all of them have room. Waiters are served by priority, then by arrival. The slots are freed when the session closes.
+
+| Limit | Value | Replaces |
+|---|---|---|
+| `model:openai-oauth:gpt-6.1-sol` | 4 | jobcity's `sol_review_sessions` pool |
+| `model:openai-oauth:gpt-6.1-terra` | 6 | The Terra pool |
+| `repo:oku-trade/retail` | 3 | Nothing. Retail could take every reviewer before |
+| `repo:*` | 2 | The cap of 10 open runs, per repository |
+
+The values are placeholders. The device leases stay in the `devices` package, because a lease also boots a device and returns where it is. A device count could be a limit too, which would give captures the same priority order.
+
 ## What a later round is given
 
 The first round reviews the whole pull request. Every later round gets, in its prompt and its checkout:
@@ -920,8 +1261,23 @@ const (
 	ActionReview
 	// ActionMerge merges the current head.
 	ActionMerge
+	// ActionAsk asks a person whether to go on reviewing.
+	ActionAsk
 	// ActionFinish ends the workflow.
 	ActionFinish
+)
+
+// Overdue names the escalation clock that runs while an action is in effect.
+type Overdue int
+
+const (
+	NothingOverdue Overdue = iota
+	// OverdueReview runs from a review request until its review is posted.
+	OverdueReview
+	// OverdueMerge runs while an approved pull request cannot be merged.
+	OverdueMerge
+	// OverdueDeploy runs from the merge until the deploy finishes.
+	OverdueDeploy
 )
 
 // Action is what Decide returns.
@@ -929,28 +1285,41 @@ type Action struct {
 	Kind ActionKind
 	// Outcome is set with ActionFinish.
 	Outcome reviewv1.Outcome
-	// Reason says why, for the Temporal UI and the logs.
+	// Reason says why, for the Temporal UI, the logs and the escalation.
 	Reason string
+	// Report is commented on the pull request before the workflow finishes.
+	Report string
+	// Overdue and OverdueKey pick the escalation clock. The key changes when
+	// the thing waited on changes, which starts a new clock.
+	Overdue    Overdue
+	OverdueKey string
 }
 
 // Decide returns what to do for a pull request, given what GitHub says now and
 // the rounds this workflow has finished. It has no other input, so the same
 // state always gives the same action, however the pull request got there.
-func Decide(state github.ReviewState, review *reviewv1.PRReview, agentLogin string) Action {
+func Decide(state github.ReviewState, review *reviewv1.PRReview, ownAuthors []string) Action {
 	switch {
 	case state.Merged:
-		return Action{Kind: ActionFinish, Outcome: reviewv1.Outcome_MERGED_ELSEWHERE, Reason: "merged by someone else"}
+		return afterMerge(state, review)
 	case !state.Open:
 		return Action{Kind: ActionFinish, Outcome: reviewv1.Outcome_CLOSED, Reason: "closed"}
+	case review.MergedHere:
+		return Action{Kind: ActionWait, Reason: "waiting: merged, GitHub does not show it yet"}
 	case state.Draft:
 		return Action{Kind: ActionWait, Reason: "waiting: draft"}
 	}
 
 	if NeedsReview(state, review.Rounds) {
-		if len(review.Rounds) >= MaxReviewRounds {
-			return Action{Kind: ActionFinish, Outcome: reviewv1.Outcome_ROUND_LIMIT, Reason: "review round limit reached"}
+		if len(review.Rounds) >= MaxReviewRounds+int(review.ExtraRounds) {
+			return Action{Kind: ActionAsk, Reason: "asking a person: review round limit reached"}
 		}
-		return Action{Kind: ActionReview, Reason: "reviewing " + state.Head}
+		return Action{
+			Kind:       ActionReview,
+			Reason:     "reviewing " + state.Head,
+			Overdue:    OverdueReview,
+			OverdueKey: fmt.Sprintf("review:%d", state.RequestID),
+		}
 	}
 
 	// NeedsReview is true when there is no round, so there is a last round here.
@@ -962,13 +1331,56 @@ func Decide(state github.ReviewState, review *reviewv1.PRReview, agentLogin stri
 		return Action{Kind: ActionWait, Reason: "waiting: reviewed, " + last.Verdict.String()}
 	case !review.MergeOthers:
 		return Action{Kind: ActionWait, Reason: "waiting: approved, this repo is not merged here"}
-	case state.Author == agentLogin:
-		return Action{Kind: ActionWait, Reason: "waiting: approved, own pull request"}
+	case slices.Contains(ownAuthors, state.Author):
+		return Action{Kind: ActionWait, Reason: "waiting: approved, its author workflow merges it"}
 	}
-	if held := WhyHeld(state); held != reviewv1.HeldReason_NOT_HELD {
-		return Action{Kind: ActionWait, Reason: "waiting to merge: " + held.String()}
+
+	held := Action{Kind: ActionWait, Overdue: OverdueMerge, OverdueKey: "merge:" + state.Head}
+	if reason := WhyHeld(state, review); reason != reviewv1.HeldReason_NOT_HELD {
+		held.Reason = "waiting to merge: " + reason.String()
+		return held
+	}
+	refusal := review.MergeRefusal
+	if refusal != nil && refusal.Fingerprint == github.MergeFingerprint(state) {
+		// Nothing GitHub bases a merge on has changed since it refused.
+		held.Reason = "waiting to merge: GitHub refused: " + refusal.Message
+		return held
 	}
 	return Action{Kind: ActionMerge, Reason: "merging " + state.Head}
+}
+
+// afterMerge returns what to do once the pull request is merged: finish, or
+// follow the deploy of the merge commit and report how it went.
+func afterMerge(state github.ReviewState, review *reviewv1.PRReview) Action {
+	if !review.FollowDeploy {
+		if review.MergedHere {
+			return Action{Kind: ActionFinish, Outcome: reviewv1.Outcome_MERGED, Reason: "merged"}
+		}
+		return Action{Kind: ActionFinish, Outcome: reviewv1.Outcome_MERGED_ELSEWHERE, Reason: "merged by someone else"}
+	}
+	switch state.Deploy {
+	case github.DeploySucceeded:
+		return Action{
+			Kind:    ActionFinish,
+			Outcome: reviewv1.Outcome_DEPLOYED,
+			Reason:  "deployed",
+			Report:  "Deployed in " + state.MergeCommit + ".",
+		}
+	case github.DeployFailed:
+		return Action{
+			Kind:    ActionFinish,
+			Outcome: reviewv1.Outcome_DEPLOY_FAILED,
+			Reason:  "deploy failed",
+			Report:  "The deploy of " + state.MergeCommit + " failed.",
+		}
+	default:
+		return Action{
+			Kind:       ActionWait,
+			Reason:     "waiting: merged, deploy of " + state.MergeCommit + " not finished",
+			Overdue:    OverdueDeploy,
+			OverdueKey: "deploy:" + state.MergeCommit,
+		}
+	}
 }
 
 // NeedsReview reports whether there is a review request this workflow has not
@@ -981,18 +1393,33 @@ func NeedsReview(state github.ReviewState, rounds []*reviewv1.Round) bool {
 	return state.RequestID != 0 && state.RequestID != rounds[len(rounds)-1].Request
 }
 
-// WhyHeld returns what stops a merge of the current head, or NOT_HELD. These
-// are the preconditions the merge agent's prompt listed.
-func WhyHeld(state github.ReviewState) reviewv1.HeldReason {
+// WhyHeld returns what stops a merge of the current head, or NOT_HELD. The
+// first six are this repo's own rules. The last four are GitHub's answer, so a
+// merge GitHub would refuse is not tried.
+func WhyHeld(state github.ReviewState, review *reviewv1.PRReview) reviewv1.HeldReason {
+	notApproved := func(approver string) bool { return !slices.Contains(state.ApprovedBy, approver) }
+	unmet := func(dependency github.Dependency) bool { return !dependency.Satisfied }
 	switch {
 	case state.ApprovedHead != state.Head:
 		return reviewv1.HeldReason_APPROVAL_MISSING
+	case slices.ContainsFunc(review.RequiredApprovers, notApproved):
+		return reviewv1.HeldReason_REQUIRED_APPROVAL
+	case slices.ContainsFunc(state.Dependencies, unmet):
+		return reviewv1.HeldReason_DEPENDENCY
 	case !state.ChecksGreen:
 		return reviewv1.HeldReason_CHECKS
 	case state.ChangesRequested:
 		return reviewv1.HeldReason_BLOCKING_REVIEW
-	case state.OpenThreads > 0:
+	case state.OpenThreadsByOthers > 0:
 		return reviewv1.HeldReason_OPEN_THREADS
+	case state.Mergeable == github.MergeableUnknown:
+		return reviewv1.HeldReason_MERGEABILITY_UNKNOWN
+	case state.Mergeable == github.MergeableBehind:
+		return reviewv1.HeldReason_BEHIND
+	case state.Mergeable == github.MergeableConflicts:
+		return reviewv1.HeldReason_CONFLICTS
+	case state.Mergeable == github.MergeableBlocked:
+		return reviewv1.HeldReason_BRANCH_PROTECTION
 	default:
 		return reviewv1.HeldReason_NOT_HELD
 	}
@@ -1088,7 +1515,10 @@ func ReviewEvent(verdict reviewv1.Verdict) github.ReviewEvent {
 Left out:
 - `Discover`, and the four path and label matchers `IsLockfile`, `IsSensitivePath`, `IsSensitiveLabel` and `IsIOSPath`. Each matcher is a table of regular expressions copied from `review-route.ts` and `gh.star`.
 - `Activities.RecordDelivery`. It writes the pull request as a p7 external object (source `github`, kind `pull_request`, with this repo's schema) and appends one timeline entry keyed by the delivery.
-- `github.ReviewRelevantEvents` and `github.SupersedingEvents`, two lists of timeline event kinds. The first is every kind that can change what `Decide` returns. The second is head changed, closed and merged.
+- `github.ReviewRelevantEvents` and `github.SupersedingEvents`, two lists of timeline event kinds. The first is every kind that can change what `Decide` returns, including the deployment status of the merge commit. The second is head changed, closed and merged.
+- `github.Supersedes(event, head)`, which reports whether an event closes or merges the pull request, or names a head other than the given one.
+- `github.MergeFingerprint(state)`, a hash of the fields a merge depends on: head, mergeable state, checks, approvals and blocking reviews.
+- `github.GetReviewState`. It reads the pull request, its reviews, threads, checks, mergeable state, declared dependencies and deployment status. `MergeableUnknown` is common just after a push, so the workflow waits and reads again.
 - `PublishEvidence` and its `EvidenceRequest`. It is an activity that uploads the named artifacts to the image host and returns the review body with their links in place. It replaces `jcx image upload`. If Temporal runs it twice the files are uploaded twice, and the review uses the links from the run that finished.
 - `LineComments`, which copies the reviewer's line comments into the GitHub package's type.
 - The `github`, `prompts` and `devices` packages.
@@ -1118,9 +1548,16 @@ func main() {
 		log.Fatalf("create worker: %v", err)
 	}
 
+	owners := []p7.Recipient{p7.Group("gfx-maintainers")}
 	config := prreview.Config{
 		TaskQueue:        "gfx",
 		AgentLogin:       "elee-agent[bot]",
+		OwnAuthors:       []string{"elee-author[bot]"},
+		Owners:           owners,
+		ReviewOverdue:    []p7.EscalationStep{{After: time.Hour, Notify: owners}},
+		MergeOverdue:     []p7.EscalationStep{{After: 24 * time.Hour, Notify: owners}},
+		DeployOverdue:    []p7.EscalationStep{{After: 2 * time.Hour, Notify: owners}},
+		QuestionOverdue:  []p7.EscalationStep{{After: 4 * time.Hour, Notify: owners}},
 		HighRiskReviewer: p7.Model{Name: "openai-oauth:gpt-6.1-sol", Effort: "high"},
 		LowRiskReviewer:  p7.Model{Name: "openai-oauth:gpt-6.1-terra", Effort: "high"},
 		CaptureAgent:     p7.Model{Name: "claude-sonnet-5-5", Effort: "medium"},
@@ -1140,13 +1577,26 @@ func main() {
 				ReadOnly:    true,
 			},
 		},
-		SessionIdleLimit: 2 * time.Hour,
+		SessionIdleLimit: 30 * time.Minute,
+		CaptureHold:      3 * time.Hour,
 		IntakeInterval:   15 * time.Minute,
 		Recheck:          10 * time.Minute,
 		PushSettle:       2 * time.Minute,
 		Repos: []prreview.Repo{
-			{Name: "oku-trade/retail", Image: "review-retail@sha256:...", Evidence: reviewv1.Evidence_ANDROID, MergeOthers: true},
-			{Name: "oku-trade/trade", Image: "review-trade@sha256:...", Evidence: reviewv1.Evidence_BROWSER},
+			{
+				Name:         "oku-trade/retail",
+				Image:        "review-retail@sha256:...",
+				Evidence:     reviewv1.Evidence_ANDROID,
+				MergeOthers:  true,
+				FollowDeploy: true,
+			},
+			{
+				Name:              "oku-trade/trade",
+				Image:             "review-trade@sha256:...",
+				Evidence:          reviewv1.Evidence_BROWSER,
+				MergeOthers:       true,
+				RequiredApprovers: []string{"elee1766"},
+			},
 			{Name: "oku-trade/account", Image: "review-account@sha256:...", MergeOthers: true},
 			// The other five repos with reviews enabled are left out here.
 		},
@@ -1264,9 +1714,9 @@ Left out: the `devices` package. `Leases.Reserve` waits for a free device of the
 
 Calls used here that `plan.md` section 7 does not have yet, or has in a different shape:
 
-1. **`p7.NextEvent(ctx, object, kinds, after)` returning a `workflow.Future`.** The plan has `p7.WaitEvent`, which blocks with a timeout. A blocking call cannot sit in a `workflow.Selector` beside a timer, and cannot run beside a review round to cancel it. Both uses are what make this workflow wake on several things at once.
-2. **`p7.GetObject` and a timeline `Sequence`.** A wait must name the position it starts from. Without it, a change that lands between reading GitHub and starting the wait is missed. Filing a ticket with an object reference must create the object record, so `GetObject` works before the first webhook.
-3. **Prompt cancellation.** Cancelling the context of `p7.Prompt`, `p7.OpenSession` or `p7.Child` must stop the turn, session or child promptly and return. A round that cannot be interrupted keeps reviewing a head nobody wants reviewed.
+1. **`p7.Watch(ctx, records...)` returning a `workflow.Future` of events.** The plan now has future-returning waits over a set of records at known revisions (section 7, "Waiting on several conditions"). This example gives it a shape: `p7.Since{Record, Revision, Kinds}` in, `[]p7.Event` out, each event with its record, revision, kind, actor and payload.
+2. **`p7.GetObject` returning the record's `Revision`.** A wait must name the revision it starts from. Without it, a change that lands between reading GitHub and starting the wait is missed. Filing a ticket with an object reference must create the object record, so `GetObject` works before the first webhook.
+3. **Prompt cancellation.** In the plan since 2026-11-12: every long call stops when its context is cancelled. A round that cannot be interrupted keeps reviewing a head nobody wants reviewed.
 4. **`p7.UpdateFields(ctx, ticket, fields)`.** The owning workflow writes its own ticket's fields, fenced by its ownership. Here it saves the finished rounds.
 5. **`p7.ContinueAsNew(ctx, ticket)`.** A ticket workflow that lives for days needs to shorten its history and move to a new build. The next run starts on the current build, keeps the ticket's ownership, and reads the ticket again.
 6. **`p7.Child` returning the child's future, with `p7.ChildOptions`.** The plan says the future is retained and the Parent Close Policy is explicit. Here `p7.Child` blocks until the child ticket is persisted and the child is started, then returns the future.
@@ -1275,12 +1725,17 @@ Calls used here that `plan.md` section 7 does not have yet, or has in a differen
 9. **`p7.NewTicket.Objects`,** the link from a ticket to a provider-neutral external object.
 10. **A stable workflow type name from `p7.Register`,** derived from the ticket kind and not from the Go method name.
 
+11. **`p7.Ask` with a key, recipients and an escalation, `p7.Notify`, and `p7.SetEscalation`.** Plan section 7, "Questions, notices and escalation", added 2026-11-12.
+12. **`Limits` and `Priority` on a session.** Plan section 7, "Shared limits and priority", added 2026-11-12.
+13. **`session.Hold`.** Plan section 8, added 2026-11-12. Idle time does not count while the owning workflow holds the session for work it started.
+14. **The actor on every event.** A workflow that shares a pull request with another workflow, or with people, needs to know who caused a change. See `example-pr-author.md`.
+
 Not a gap, but it affects this workflow: a person or an admin session can resteer a reviewer mid-turn (plan section 8, "Steering a running session"). After an interrupt, `p7.Prompt` returns the typed `Turn` of the steered turn, so `reviewHead` needs no code for it. After a stop it returns an error, which ends the workflow here. A workflow that should survive a stop would treat that error like a superseded round.
 
 Calls in the plan that this port does not use:
 
 - `p7.OnEvent` and `p7.Every`. Webhook intake is this repo's receiver plus `SignalWithStart`, and the rescans are workflow timers.
-- `p7.WaitEvent`, replaced by `p7.NextEvent`.
+- `p7.WaitEvent`, the blocking form. Every wait here sits in a selector, so it uses `p7.Watch`.
 - `p7.WaitChildren`, `p7.Parent`, `p7.Count`, and agents filing child tickets. The reviewer returns typed capture requests and the workflow starts the children.
 
 ## Open in this port
@@ -1289,11 +1744,14 @@ Calls in the plan that this port does not use:
 - **The reviewer cannot say the pull request is stale.** The `STALE` verdict is gone. The workflow sees a moved head itself, and with request-only rounds a recorded stale round would have left the request unanswered for good.
 - **The delta is advice, not a limit.** Nothing stops a later round from reading only the changed files and approving. The prompt says the verdict covers the whole head. Whether reviews after a rewrite are good enough needs real runs.
 - **Evidence is not carried over.** A later round asks for captures again if it needs them. Captures from an earlier head are not offered to it.
-- **No cap on reviews in progress.** jobcity starts at most 10 open runs. Here each followed pull request has a workflow, most of them waiting, and the number of reviewer sessions at once is bounded only by executor capacity. A cap across workflows needs a shared counter, which protocol7 does not provide.
+- **A reviewer that gives no verdict fails the ticket.** After `MaxCaptureTurns` the reviewer is told to decide. If it still answers `WAITING`, the workflow fails and the ticket shows up as failed work. Asking a person would be kinder.
+- **A dependency only holds the merge.** The review still runs. Dependencies are read from "Depends on" lines in the description, which is a convention this repo would have to adopt.
+- **Deploy state comes from GitHub deployment statuses.** A repository that deploys some other way needs its own read, and its own events on the timeline.
+- **The GitHub behaviour this pass relies on was not tested here.** That a review is accepted for an old commit, that a merge with a stale head is refused, and the mergeable states, come from review feedback and from memory of the API.
 - **A cancelled round is thrown away.** The reviewer's work on the old head is lost, and its cost is spent. `PushSettle` limits how often that happens during a burst of pushes.
-- **The round limit ends the ticket.** After `MaxReviewRounds` the workflow finishes as `ROUND_LIMIT`. Because the `Once` key allows no second ticket, the pull request is not followed again. Asking a person through `p7.Ask` would be better.
 - **A reopened pull request is not followed again,** for the same `Once` reason. It needs a reopen command or an episode number in the key.
 - **A stale read from GitHub.** If GitHub returns an old head just after a push, a round can start on it. `PostReview` and `Merge` refuse a head that is not current, so nothing wrong is published, but the round is wasted.
+- **Webhook intake differs from the plan.** This example has its own receiver, `cmd/gfx-webhooks`. The plan now ships `webhookd`, which publishes deliveries to a JetStream stream that consumers pull from (section 10). The intake here should become a stream consumer. Not changed in this pass.
 - A capture session on a host backend makes no enforced-egress claim (plan section 5).
 - iOS captures need a login to the Namespace devbox. Nothing here supplies one.
 - None of this has run. The Temporal calls are real API. Every `p7`, `github` and `devices` call is proposed.
