@@ -32,7 +32,7 @@ sequenceDiagram
   Note over G: The base branch gets a push
   M->>G: Read. Head 1 conflicts with the base
   Note over M: A notice is recorded. No comment, the author is our agent
-  A->>G: Read. Conflicts. One fix round, push head 2
+  A->>G: Woken by the same push. Read. Conflicts. One fix round, push head 2
   A->>G: Request review of head 2
   R->>G: Review head 2, given its review of head 1. Approve
   M->>G: Read. Ready. Merge, naming head 2
@@ -69,7 +69,7 @@ Intake files one ticket per pull request and workflow. A `Once` key refuses a se
 |---|---|---|
 | `pr_review` | Our review was requested: a review request to the reviewer login, a comment that mentions it from someone with write access, or the review label. The pull request is not a draft and its author has write access | `review:<repo>#<pr>` |
 | `pr_author` | The author of the pull request is our author login | `author:<repo>#<pr>` |
-| `pr_merge` | The merge label is on the pull request, and whoever put it there has write access | `merge:<repo>#<pr>` |
+| `pr_merge` | The merge label is on the pull request, and whoever put it there has write access. The author identity has it, since it pushes | `merge:<repo>#<pr>` |
 
 The repository must also be configured for that workflow. After filing, the workflow sees every later change itself. A new head, a new request or a removed label files nothing.
 
@@ -104,7 +104,8 @@ Three GitHub Apps, so that a write shows who made it and PDP can limit each one.
 - The merger is on no ruleset's bypass list, so GitHub's own rules apply to its merges. No session is given the merger or the reviewer. A coding session gets the author's push grant for its own branch (plan section 9).
 - The App permissions each identity needs were not worked out, except that GitHub documents "Contents" write for a merge.
 - Every identity reads the pull requests it works on. Intake reads with the reviewer identity.
-- As drafted, all three workflows register on one worker. PDP sees one caller, which policy grants three bindings, and the `github` package picks the binding by the function called. The separation is then this repo's code. Running each workflow's GitHub activities in its own worker deployment gives each binding its own caller. That is open (plan section 9).
+- As drafted, all three workflows register on one worker. PDP then sees one caller. Each App is one PDP binding, the `github` package sends the placeholder of the binding a function needs, and policy grants that caller all three. The separation between the identities is then this repo's code. Running each workflow's GitHub activities in its own worker deployment gives each binding its own caller. That is open (plan section 9).
+- `cmd/gfx-intake` is a second caller. It only reads GitHub.
 
 ## The `github` package
 
@@ -158,6 +159,15 @@ type Check struct {
 	Required bool
 }
 
+// MergeMethod is how a pull request is merged.
+type MergeMethod int
+
+const (
+	Squash MergeMethod = iota
+	Rebase
+	MergeCommit
+)
+
 // Summary is what intake reads about one open pull request.
 type Summary struct {
 	Number int32
@@ -192,7 +202,7 @@ type Requests struct {
 
 | `Mergeable` | GitHub |
 |---|---|
-| `MergeableClean` | `mergeStateStatus` is `CLEAN`, `HAS_HOOKS` or `UNSTABLE`. `UNSTABLE` means mergeable with a check that did not pass, so that check is not a required one |
+| `MergeableClean` | `mergeStateStatus` is `CLEAN`, `HAS_HOOKS` or `UNSTABLE`. The schema describes `UNSTABLE` as mergeable with a non-passing commit status. It is read here as: the check that did not pass is not a required one. Not tested |
 | `MergeableBehind` | `BEHIND` |
 | `MergeableConflicts` | `DIRTY`, or `mergeable` is `CONFLICTING` |
 | `MergeableBlocked` | `BLOCKED` |
@@ -209,13 +219,15 @@ GitHub treats the writes differently, so each activity says what it checks itsel
 | `PostReview` | Reviewer | Accepts a review for any commit of the pull request. No idempotency key | Reads the head and refuses if it moved. Finds its own earlier review by a marker. See `example-pr-review.md` |
 | `ReactToComment`, `ReactToPullRequest` | Reviewer | Not checked | A failure is logged and ignored |
 | `ReplyToThread` | Author | No idempotency key | Finds its own earlier reply by a marker. Resolves the thread when the reply says so |
-| `RequestReview` | Author | The mutation takes `union`, which keeps the existing requests | Sets `union` |
+| `RequestReview` | Author | The mutation takes `union`, which adds to the requested reviewers and does not replace them. It takes bot IDs as well as user IDs, and our reviewer is an App | Sets `union` |
 | `UpdateBranch` | Author | Takes the expected head | Passes the head. Returns `ErrHeadMoved` on a refusal |
 | `AddLabel` | Author | Not checked | Nothing more |
 | `Merge` | Merger | Takes the expected head | Passes the head. Returns success if the pull request is already merged at that head, `ErrHeadMoved` or `ErrNotMergeable` on a refusal |
 | `Comment` | Merger | No idempotency key | Finds its own earlier comment by a marker |
 
 A coding session pushes with git, under the author's push grant. That is the only write to GitHub a session makes.
+
+`github.CommentNotifier` is the notifier this repo registers. It delivers a notice addressed to a GitHub login by calling `Comment` with a mention of that login. It posts nothing for a login in its `Skip` list.
 
 ### Timeline events
 
@@ -224,21 +236,21 @@ Intake writes these kinds to the timeline of a pull request. A workflow's wait n
 | Kind | From GitHub's webhook | `ReviewRelevantEvents` | `AuthorRelevantEvents` | `MergeRelevantEvents` |
 |---|---|---|---|---|
 | `head_changed` | `pull_request` synchronize | Yes | Yes | Yes |
-| `closed`, `merged`, `reopened` | `pull_request` closed, reopened | Yes | Yes | Yes |
+| `opened`, `closed`, `merged`, `reopened` | `pull_request` opened, closed, reopened | Yes | Yes | Yes |
 | `draft_changed` | `pull_request` converted to draft, ready for review | Yes | Yes | Yes |
 | `review_requested` | `pull_request` review requested, review request removed. `issue_comment` that mentions the reviewer | Yes | Yes | Yes |
-| `labels_changed` | `pull_request` labeled, unlabeled | Yes | Yes | Yes |
+| `labels_changed` | `pull_request` labeled, unlabeled | Yes | No | Yes |
 | `review_submitted`, `review_dismissed` | `pull_request_review` | No | Yes | Yes |
 | `thread_changed` | `pull_request_review_comment`, `pull_request_review_thread` | No | Yes | Yes |
 | `checks_changed` | `check_suite`, `check_run`, `status` | No | Yes | Yes |
-| `base_changed` | `pull_request` edited, with a changed base | No | No | Yes |
+| `base_changed` | `pull_request` edited, with a changed base | No | Yes | Yes |
 | `deploy_changed` | `deployment_status`, for the pull request's merge commit | No | No | Yes |
 
 `github.SupersedingEvents` is `head_changed`, `closed` and `merged`. A round that is running is cancelled on one of them.
 
-A `push` webhook writes `pushed` to the timeline of the branch. The merge workflow watches the base branch of its pull request, because a push there can put the pull request behind or in conflict, and GitHub's `pull_request` webhook has no action for that.
+A `push` webhook writes `pushed` to the timeline of the branch. The merge workflow and the author workflow watch the base branch of their pull request, because a push there can put the pull request behind or in conflict, and GitHub's `pull_request` webhook has no action for that.
 
-Every webhook named here is in GitHub's published REST description. A check result and a deployment status name a commit and not a pull request, so intake looks up the open pull requests that have it as their head or merge commit.
+Every webhook named here is in GitHub's published REST description. By that description, a `check_run` and a `check_suite` delivery list the open pull requests whose head matches, except for a branch in a fork. A `status` and a `deployment_status` delivery name a commit only, so intake looks up the pull requests that have it as their head or merge commit.
 
 ## Intake
 
@@ -340,6 +352,7 @@ func Tickets(config Config, repo Repo, pull github.Summary) []p7.NewTicket {
 			Repo:      repo.Name,
 			Pr:        pull.Number,
 			Branch:    pull.Branch,
+			Base:      pull.Base,
 			Issue:     pull.Issue,
 			Image:     repo.Author.Image,
 			Reviewers: repo.Author.Reviewers,
@@ -349,20 +362,20 @@ func Tickets(config Config, repo Repo, pull github.Summary) []p7.NewTicket {
 			fields.MergeLabel = repo.Merge.Label
 		}
 		tickets = append(tickets, p7.NewTicket{
-			Kind:    "pr_author",
-			Once:    fmt.Sprintf("author:%s#%d", repo.Name, pull.Number),
-			Title:   "Follow: " + pull.Title,
-			Objects: []p7.ObjectRef{pullRequestRef},
+			Kind:  "pr_author",
+			Once:  fmt.Sprintf("author:%s#%d", repo.Name, pull.Number),
+			Title: "Follow: " + pull.Title,
+			// The base branch is linked too, so its record exists before the first wait.
+			Objects: []p7.ObjectRef{pullRequestRef, github.Branch(repo.Name, pull.Base)},
 			Fields:  fields,
 		})
 	}
 
 	if repo.Merge != nil && pull.MergeRequested {
 		tickets = append(tickets, p7.NewTicket{
-			Kind:  "pr_merge",
-			Once:  fmt.Sprintf("merge:%s#%d", repo.Name, pull.Number),
-			Title: "Merge: " + pull.Title,
-			// The base branch is linked too, so its record exists before the first wait.
+			Kind:    "pr_merge",
+			Once:    fmt.Sprintf("merge:%s#%d", repo.Name, pull.Number),
+			Title:   "Merge: " + pull.Title,
 			Objects: []p7.ObjectRef{pullRequestRef, github.Branch(repo.Name, pull.Base)},
 			Fields:  &mergev1.PRMerge{Repo: repo.Name, Pr: pull.Number, Base: pull.Base},
 		})
@@ -532,6 +545,8 @@ func WaitForChange(ctx workflow.Context, recheck time.Duration, watched ...p7.Si
 ```
 
 Each workflow reads the record's revision with `p7.GetObject` before it reads GitHub, and waits for changes after that revision. A change that lands between the read and the wait still wakes it.
+
+Each loop starts by checking whether a newer build is the target, or history is long, and continues as new if so. A workflow that wakes after a deploy therefore decides on the new build.
 
 ## The binaries
 

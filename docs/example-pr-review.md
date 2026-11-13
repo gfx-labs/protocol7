@@ -57,7 +57,7 @@ Three rules keep the workflow correct when other people act on the pull request:
 | The pull request becomes a draft | Wait until it is ready again |
 | A webhook is lost | The recheck timer wakes the workflow and it reads GitHub anyway |
 | Webhooks arrive twice or out of order | Nothing. They only wake the workflow |
-| The worker restarts or a new build is deployed during a wait | Temporal resumes the wait. At its next wake the workflow continues as new on the current build |
+| The worker restarts or a new build is deployed during a wait | Temporal resumes the wait. At its next wake the workflow continues as new on the current build, before it decides anything |
 | ticketd cannot serve the event watch | The wait falls back to the recheck timer |
 
 ## Where each part goes
@@ -367,6 +367,14 @@ func (w *Workflows) Review(
 	supersededRounds := 0
 
 	for {
+		// Move to a new build, or shorten a long history, before deciding
+		// anything. Between passes no round is running and the rounds are on
+		// the ticket.
+		info := workflow.GetInfo(ctx)
+		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
+			return nil, p7.ContinueAsNew(ctx, ticket)
+		}
+
 		// Read the record's revision before reading GitHub. The waits below ask
 		// for changes after this revision, so a change that lands between the
 		// read and the wait still wakes the workflow.
@@ -436,13 +444,6 @@ func (w *Workflows) Review(
 		case ActionWait:
 		}
 
-		// Nothing to do now. A wait is the safe place to move to a new build
-		// or shorten a long history: no round is running and the rounds are on
-		// the ticket.
-		info := workflow.GetInfo(ctx)
-		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
-			return nil, p7.ContinueAsNew(ctx, ticket)
-		}
 		if err := prflow.WaitForChange(ctx, w.config.Recheck, watched); err != nil {
 			return nil, err
 		}

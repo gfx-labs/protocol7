@@ -30,7 +30,7 @@ Once the pull request is approved and nothing is left to fix, this workflow wait
 
 ## What it does about a merge blocker
 
-The merge workflow tells the author when a pull request cannot merge until the author acts (`example-pr-merge.md`, "Who must act on a blocker"). For one of our own pull requests no comment is posted. This workflow reads the same state from GitHub and acts on it.
+The merge workflow tells the author when a pull request cannot merge until the author acts (`example-pr-merge.md`, "Who must act on a blocker"). For one of our own pull requests no comment is posted. This workflow reads the same state from GitHub and acts on it. It watches the base branch as the merge workflow does, so the push that puts the pull request behind or in conflict wakes it too.
 
 | Merge blocker | What this workflow does |
 |---|---|
@@ -64,16 +64,17 @@ message PRAuthor {
   string repo = 1;
   int32 pr = 2;
   string branch = 3;
-  string issue = 4;                     // Linear key, may be empty
-  string image = 5;
-  repeated string reviewers = 6;        // who is asked to review
-  string merge_label = 7;               // the label that asks for a merge. Empty: do not ask
-  bool merge_label_added = 8;           // this workflow has put the merge label on once
-  int32 fix_rounds = 9;                 // fix rounds that finished
-  int32 extra_rounds = 10;              // rounds a person allowed beyond MaxFixRounds
-  map<string, int32> attempts = 11;     // problem key to times a fix was tried
-  repeated string requested_heads = 12; // heads review was requested for
-  repeated string cleared = 13;         // problem keys a person said to try again
+  string base = 4;                      // the base branch, watched for pushes
+  string issue = 5;                     // Linear key, may be empty
+  string image = 6;
+  repeated string reviewers = 7;        // who is asked to review
+  string merge_label = 8;               // the label that asks for a merge. Empty: do not ask
+  bool merge_label_added = 9;           // this workflow has put the merge label on once
+  int32 fix_rounds = 10;                // fix rounds that finished
+  int32 extra_rounds = 11;              // rounds a person allowed beyond MaxFixRounds
+  map<string, int32> attempts = 12;     // problem key to times a fix was tried
+  repeated string requested_heads = 13; // heads review was requested for
+  repeated string cleared = 14;         // problem keys a person said to try again
 }
 
 // What the coding session submits at the end of a fix round.
@@ -102,6 +103,7 @@ type AuthorState struct {
 	Merged bool
 	Draft  bool
 	Head   string
+	Base   string
 	// UnansweredThreads are unresolved threads whose last comment is not ours.
 	UnansweredThreads []Thread
 	// ChangesRequestedBy lists reviewers whose change request stands.
@@ -203,17 +205,41 @@ func (w *Workflows) Follow(
 	pullRequestRef := github.PullRequest(pull.Repo, pull.Pr)
 
 	for {
-		// Read the record's revision before reading GitHub, so a change that
-		// lands between the read and the wait still wakes the workflow.
+		// Move to a new build, or shorten a long history, before deciding
+		// anything. Between passes no fix round is running and all state is on
+		// the ticket.
+		info := workflow.GetInfo(ctx)
+		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
+			return nil, p7.ContinueAsNew(ctx, ticket)
+		}
+
+		// Read both revisions before reading GitHub, so a change that lands
+		// between the reads and the wait still wakes the workflow.
 		object, err := p7.GetObject(ctx, pullRequestRef)
 		if err != nil {
 			return nil, fmt.Errorf("read pull request object: %w", err)
+		}
+		baseRef := github.Branch(pull.Repo, pull.Base)
+		base, err := p7.GetObject(ctx, baseRef)
+		if err != nil {
+			return nil, fmt.Errorf("read base branch object: %w", err)
 		}
 		state, err := github.GetAuthorState(ctx, pull.Repo, pull.Pr)
 		if err != nil {
 			return nil, fmt.Errorf("read pull request: %w", err)
 		}
-		watched := p7.Since{Record: pullRequestRef, Revision: object.Revision, Kinds: github.AuthorRelevantEvents}
+		if state.Open && state.Base != pull.Base {
+			// The pull request was retargeted. Watch the new base from the next pass.
+			pull.Base = state.Base
+			if err := p7.UpdateFields(ctx, ticket, pull); err != nil {
+				return nil, fmt.Errorf("record base branch: %w", err)
+			}
+			continue
+		}
+		// A push to the base branch can put this pull request behind or in
+		// conflict, and GitHub sends no pull request event for that.
+		pullRequestChanges := p7.Since{Record: pullRequestRef, Revision: object.Revision, Kinds: github.AuthorRelevantEvents}
+		watched := []p7.Since{pullRequestChanges, {Record: baseRef, Revision: base.Revision}}
 
 		action := Decide(state, pull)
 		workflow.SetCurrentDetails(ctx, action.Reason)
@@ -246,7 +272,7 @@ func (w *Workflows) Follow(
 			if err := p7.UpdateFields(ctx, ticket, pull); err != nil {
 				return nil, fmt.Errorf("record fix attempt: %w", err)
 			}
-			interrupted, err := w.fixRound(ctx, ticket.ID, pull, state, action.Problems, watched)
+			interrupted, err := w.fixRound(ctx, ticket.ID, pull, state, action.Problems, pullRequestChanges)
 			if err != nil {
 				return nil, err
 			}
@@ -288,11 +314,7 @@ func (w *Workflows) Follow(
 		case ActionWait:
 		}
 
-		info := workflow.GetInfo(ctx)
-		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
-			return nil, p7.ContinueAsNew(ctx, ticket)
-		}
-		if err := prflow.WaitForChange(ctx, w.config.Recheck, watched); err != nil {
+		if err := prflow.WaitForChange(ctx, w.config.Recheck, watched...); err != nil {
 			return nil, err
 		}
 	}
@@ -321,14 +343,14 @@ func (w *Workflows) fixRound(
 	pull *authorv1.PRAuthor,
 	state github.AuthorState,
 	problems []Problem,
-	watched p7.Since,
+	pullRequestChanges p7.Since,
 ) (interrupted bool, err error) {
 	roundCtx, cancelRound := workflow.WithCancel(ctx)
 	defer cancelRound()
 
 	// Cancel the round when anyone but this workflow's own login moves the
 	// head. The session's own push arrives here too, and is ignored.
-	since := watched
+	since := pullRequestChanges
 	since.Kinds = github.SupersedingEvents
 	workflow.Go(roundCtx, func(watchCtx workflow.Context) {
 		for {

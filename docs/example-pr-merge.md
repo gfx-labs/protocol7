@@ -62,7 +62,7 @@ GitHub's auto-merge and merge queue are the alternatives. Auto-merge waits for t
 | Checks running, mergeability not computed, a hold label, a draft | Nobody yet | Waits |
 | GitHub blocks the merge and no criterion explains why | Unknown | Waits. The escalation clock tells the owners |
 
-A notice goes through `p7.Notify` with the pull request as its subject, so it is in the attention list. The notifier registered in `example-pr-flows.md` delivers it to a person as a comment that mentions them. It posts nothing for the login of one of our own agents: that pull request has an author workflow, which reads the same conflicts and failed checks from GitHub and fixes them. Either way the author then requests review of the new head, and this workflow waits for it.
+A notice goes through `p7.Notify` with the pull request as its subject, so it is in the attention list. The notifier registered in `example-pr-flows.md` delivers it to a person as a comment that mentions them. It posts nothing for the login of one of our own agents: that pull request has an author workflow, which is woken by the same push or check result, reads the same conflicts and failed checks from GitHub and fixes them. Either way the author then requests review of the new head, and this workflow waits for it.
 
 ## Types
 
@@ -530,6 +530,15 @@ func (w *Workflows) Merge(
 	pullRequestRef := github.PullRequest(merge.Repo, merge.Pr)
 
 	for {
+		// Move to a new build, or shorten a long history, before deciding
+		// anything. The criteria are part of the build, so a pull request is
+		// never merged under criteria that have since been replaced. Between
+		// passes nothing is running and all state is on the ticket.
+		info := workflow.GetInfo(ctx)
+		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
+			return nil, p7.ContinueAsNew(ctx, ticket)
+		}
+
 		// Read both revisions before reading GitHub, so a change that lands
 		// between the reads and the wait still wakes the workflow.
 		object, err := p7.GetObject(ctx, pullRequestRef)
@@ -631,12 +640,6 @@ func (w *Workflows) Merge(
 		case ActionWait:
 		}
 
-		// Nothing to do now. A wait is the safe place to move to a new build
-		// or shorten a long history.
-		info := workflow.GetInfo(ctx)
-		if info.GetContinueAsNewSuggested() || info.GetTargetWorkerDeploymentVersionChanged() {
-			return nil, p7.ContinueAsNew(ctx, ticket)
-		}
 		recheck := w.config.Recheck
 		if action.RecheckSoon {
 			recheck = w.config.MergeabilityRecheck
@@ -715,6 +718,6 @@ Everything `example-pr-review.md` lists that is not about sessions, and:
 - **`told` grows with every head that is blocked.** It is cleared by nothing. A long-lived pull request with many pushes makes the ticket's fields long.
 - **A dependency that is closed without merging holds the merge for good.** The escalation clock tells the owners. Dependencies are read from "Depends on" lines in the description, which is a convention this repo would have to adopt.
 - **Deploy state comes from GitHub deployment statuses.** A repository that deploys some other way needs its own read, and its own events on the timeline.
-- **A change to the criteria reaches a waiting workflow at its next wake.** A stricter criterion then holds a pull request that was about to merge, which is intended. A looser one merges it without anyone touching the pull request.
+- **A change to the criteria is a new build.** A waiting workflow moves to it at its next wake, before it decides. A stricter criterion then holds a pull request that was about to merge, which is intended. A looser one merges it at the next wake or recheck, without anyone touching the pull request.
 - **GitHub behaviour was read and not exercised.** The merge states, the review decision and the commit of each review are fields of GitHub's published GraphQL schema. GitHub's REST description lists the actions of the pull request webhook, and none of them is a push to the base branch. No merge was attempted and no notice was sent.
 - None of this has run. Every `p7`, `github`, `prflow` and `mergev1` call is proposed.
