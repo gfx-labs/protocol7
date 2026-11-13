@@ -226,7 +226,7 @@ type TurnControl struct {
 	// Detach, when closed, makes RunTurn return ErrDetached and leave the
 	// turn running. A worker closes it when it shuts down.
 	Detach <-chan struct{}
-	// Beat is called every few seconds while the turn runs.
+	// Beat is called every two seconds while the turn runs.
 	Beat func()
 }
 
@@ -313,7 +313,7 @@ func (m *Manager) RunTurn(ctx context.Context, request domain.TurnRequest, contr
 		<-followed
 	}()
 
-	beat := time.NewTicker(5 * time.Second)
+	beat := time.NewTicker(2 * time.Second)
 	defer beat.Stop()
 	cancelled := ctx.Done()
 	connectionClosed := client.Closed()

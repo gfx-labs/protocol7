@@ -127,9 +127,10 @@ func PromptTextFuture(ctx workflow.Context, session *Session, prompt TextPrompt)
 	activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           session.TaskQueue,
 		StartToCloseTimeout: timeout,
-		// A cancel request reaches a running activity with the answer to a
-		// heartbeat, and the SDK sends heartbeats at most every 0.8 of this.
-		HeartbeatTimeout: 6 * time.Second,
+		// A cancel request reaches a running activity in the answer to a
+		// heartbeat, and the SDK sends one at most every 0.8 of this. A
+		// cancelled turn therefore stops within about eight seconds.
+		HeartbeatTimeout: 10 * time.Second,
 		// A cancelled turn still ends with a result. Wait for it.
 		WaitForCancellation: true,
 		RetryPolicy:         sessionRetry,

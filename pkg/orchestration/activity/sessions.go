@@ -46,13 +46,33 @@ func (s *Sessions) Open(ctx context.Context, request domain.SessionRequest) (dom
 	return handle, nil
 }
 
-// RunTurn runs one turn to its end. A request to cancel the activity asks
-// the agent to stop the turn, and the turn's result is still returned. A
-// worker that shuts down leaves the turn running, and the next attempt
-// picks it up.
+// RunTurn runs one turn to its end.
+//
+// A request to cancel the activity, or its timeout, asks the agent to stop
+// the turn, and the turn's result is still returned. A worker that shuts
+// down, and an activity that is paused or reset, leave the turn running:
+// the next attempt picks it up.
 func (s *Sessions) RunTurn(ctx context.Context, request domain.TurnRequest) (domain.TurnResult, error) {
-	result, err := s.manager.RunTurn(ctx, request, session.TurnControl{
-		Detach: activity.GetWorkerStopChannel(ctx),
+	// The activity context ends for several reasons, and only two of them
+	// mean the turn should stop. turnCtx ends for those two alone.
+	turnCtx, stopTurn := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopTurn()
+	detach := make(chan struct{})
+	go func() {
+		select {
+		case <-activity.GetWorkerStopChannel(ctx):
+			close(detach)
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) || temporal.IsCanceledError(context.Cause(ctx)) {
+				stopTurn()
+			} else {
+				close(detach)
+			}
+		case <-turnCtx.Done():
+		}
+	}()
+	result, err := s.manager.RunTurn(turnCtx, request, session.TurnControl{
+		Detach: detach,
 		Beat:   func() { activity.RecordHeartbeat(ctx) },
 	})
 	return result, classify(err)
