@@ -84,8 +84,7 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | `p7-worker` with Temporal's address named in `NO_PROXY`, and not named | It connects directly. Without the name, the gRPC client sends the connection to the proxy and the worker exits |
 | The model credential removed while a chat is open (protocol7 `8e18d5a`, selfdev `4c6dd98`, PDP `cfd86c5` on a Unix socket) | The turn fails in about two seconds and names `credential_unavailable`. The chat stays open and answers again once the credential is back |
 | A turn that finds its harness stopped and cannot start it again, in the same setup | The turn fails in under a second with the harness's last lines, and the chat stays open. Before `96b257b` it was retried ten times over 304 seconds |
-
-No Claude request has been answered through PDP in this arrangement, because no login for it exists yet.
+| A sonnet chat and an opus chat through PDP with a Claude subscription login (protocol7 `8e18d5a`, selfdev `ccac7aa`, PDP `3ba915a` under SPIRE) | PDP refreshed the login on the first request. Each chat cloned, edited and committed, and a tool call reached the Go module proxy. towa's log shows every response came from the chat's model on that login, and the worker held no credential |
 
 ## Tests
 
