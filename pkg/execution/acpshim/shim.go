@@ -149,6 +149,42 @@ func ExitReason(dir string) string {
 	}
 }
 
+const (
+	lastOutputLines = 5
+	lastOutputBytes = 1500
+)
+
+// LogSize is the size of the log of the shim in dir.
+func LogSize(dir string) int64 {
+	info, err := os.Stat(filepath.Join(dir, acphost.LogFile))
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// LastOutput is the end of what the harness of session wrote to standard
+// error after byte offset from of the log in dir: a few lines of bounded
+// size. The shim logs to the same file, and its own lines name the session.
+func LastOutput(dir, session string, from int64) string {
+	content, err := os.ReadFile(filepath.Join(dir, acphost.LogFile))
+	if err != nil || from < 0 || from > int64(len(content)) {
+		return ""
+	}
+	var lines []string
+	for line := range strings.SplitSeq(string(content[from:]), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.Contains(line+" ", " session="+session+" ") {
+			lines = append(lines, line)
+		}
+	}
+	text := strings.Join(lines[max(0, len(lines)-lastOutputLines):], "\n")
+	if len(text) > lastOutputBytes {
+		text = strings.ToValidUTF8(text[len(text)-lastOutputBytes:], "")
+	}
+	return text
+}
+
 // MaybeChild must be the first call in the shim command's main. When the
 // process is the detached shim, it runs the shim and never returns.
 func MaybeChild() { acphost.MaybeChild() }

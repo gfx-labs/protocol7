@@ -39,6 +39,10 @@ var ErrDetached = errors.New("detached from a running turn")
 // ErrClosed is returned for a session that was closed.
 var ErrClosed = errors.New("the session is closed")
 
+// ErrHarnessStopped is returned when the harness exited before the session
+// was ready for a prompt. The error carries the end of what it printed.
+var ErrHarnessStopped = errors.New("the agent harness stopped while it started")
+
 // Harness says how the agent harness is started. It speaks ACP on its
 // standard input and output.
 type Harness struct {
@@ -155,6 +159,7 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 	if err != nil {
 		return nil, "", err
 	}
+	logged := acpshim.LogSize(dir)
 	if !acpshim.Alive(dir) {
 		lease := rec.Request.IdleLimit
 		if lease <= 0 {
@@ -184,6 +189,7 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 		if err != nil {
 			client.Close()
 			client = nil
+			err = m.harnessStopped(rec.ID, logged, err)
 		}
 	}()
 	initialized, err := client.Initialize(ctx, acp.Implementation{Name: "protocol7", Version: Version})
@@ -219,6 +225,27 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 	rec.ShimPid = client.ShimPid()
 	err = m.save(*rec)
 	return client, seed, err
+}
+
+// harnessStopped turns a connection that closed while the session was made
+// ready into ErrHarnessStopped, if the shim is gone. A shim that still runs
+// closed the connection for a newer client.
+func (m *Manager) harnessStopped(session string, logged int64, err error) error {
+	if !errors.Is(err, acpshim.ErrShimGone) {
+		return err
+	}
+	dir := m.shimDir(session)
+	// The connection closes a moment before the shim has exited.
+	for deadline := time.Now().Add(2 * time.Second); acpshim.Alive(dir); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			return err
+		}
+	}
+	stopped := fmt.Errorf("%w: %s", ErrHarnessStopped, acpshim.ExitReason(dir))
+	if output := acpshim.LastOutput(dir, session, logged); output != "" {
+		stopped = fmt.Errorf("%w. Its last output:\n%s", stopped, output)
+	}
+	return stopped
 }
 
 // TurnControl lets the caller of RunTurn watch a turn and leave it.

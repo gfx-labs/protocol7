@@ -28,6 +28,10 @@ const agentLogEnv = "P7_TEST_AGENT_LOG"
 
 func TestMain(m *testing.M) {
 	acpshim.MaybeChild()
+	if os.Getenv(agentLogEnv) == "exit" {
+		os.Stderr.WriteString("scripted agent: no login\n")
+		os.Exit(3)
+	}
 	if log := os.Getenv(agentLogEnv); log != "" {
 		agent := &scriptedAgent{log: log}
 		agent.connection = acp.NewAgentSideConnection(agent, os.Stdout, os.Stdin, slog.New(slog.DiscardHandler))
@@ -217,6 +221,29 @@ func (f *fixture) leaveRunning(turn string) {
 	}()
 	if _, err := f.turn(f.t.Context(), turn, "slow", session.TurnControl{Detach: detach}); !errors.Is(err, session.ErrDetached) {
 		f.t.Fatalf("a turn whose caller left: got error %v, want ErrDetached", err)
+	}
+}
+
+func TestAHarnessThatExitsWhileItStartsIsReportedWithItsOutput(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.MkdirTemp("", "p7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	manager, err := session.NewManager(session.Config{
+		Root: root, ShimBinary: binary,
+		Harness: session.Harness{Command: binary, Env: []string{agentLogEnv + "=exit"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.Open(t.Context(), domain.SessionRequest{ID: "s1"})
+	if !errors.Is(err, session.ErrHarnessStopped) || !strings.HasSuffix(err.Error(), "exit status 3). Its last output:\nscripted agent: no login") {
+		t.Errorf("got error %v, want ErrHarnessStopped with the exit status and the harness's output", err)
 	}
 }
 

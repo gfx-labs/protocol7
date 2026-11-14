@@ -30,7 +30,16 @@ type SessionSpec struct {
 	IdleLimit time.Duration
 	// OpenTimeout bounds opening, which clones the inputs. Zero is 15 minutes.
 	OpenTimeout time.Duration
+	// OpenRetry is the retry policy of opening. Nil is ten attempts over
+	// about five minutes.
+	OpenRetry *temporal.RetryPolicy
 }
+
+// ErrorHarnessStopped is the type of the application error that opening or
+// a turn fails with when the harness exited while the session was made
+// ready, for example because it has no login. Its message ends with the
+// harness's last output.
+const ErrorHarnessStopped = activity.ErrorHarnessStopped
 
 // Session is a handle to an open session. It is plain data: a workflow can
 // keep it in its state and pass it across Continue-As-New.
@@ -74,10 +83,14 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	if timeout <= 0 {
 		timeout = 15 * time.Minute
 	}
+	retry := spec.OpenRetry
+	if retry == nil {
+		retry = sessionRetry
+	}
 	activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           taskQueue,
 		StartToCloseTimeout: timeout,
-		RetryPolicy:         sessionRetry,
+		RetryPolicy:         retry,
 	})
 	var handle domain.SessionHandle
 	if err := workflow.ExecuteActivity(activityCtx, domain.ActivityOpenSession, request).Get(ctx, &handle); err != nil {

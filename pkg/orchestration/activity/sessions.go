@@ -20,6 +20,11 @@ const (
 	ErrorSessionNotFound = "SessionNotFound"
 )
 
+// ErrorHarnessStopped is the error type of a harness that exited while its
+// session was made ready. It is retryable: the workflow's retry policy
+// decides how often.
+const ErrorHarnessStopped = "HarnessStopped"
+
 // Sessions are the session activities of one machine.
 type Sessions struct {
 	manager *session.Manager
@@ -91,6 +96,8 @@ func classify(err error) error {
 		return temporal.NewNonRetryableApplicationError(err.Error(), ErrorSessionClosed, err)
 	case errors.Is(err, os.ErrNotExist):
 		return temporal.NewNonRetryableApplicationError(err.Error(), ErrorSessionNotFound, err)
+	case errors.Is(err, session.ErrHarnessStopped):
+		return temporal.NewApplicationErrorWithCause(err.Error(), ErrorHarnessStopped, err)
 	default:
 		return err
 	}
