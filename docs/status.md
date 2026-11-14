@@ -15,7 +15,7 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/execution/session` | Sessions on this machine: a directory per session with its workspace, shim directory and record. Places git clone inputs. Runs a turn that survives its caller. A harness that exits while its session starts is reported with its exit status and its last five lines of output |
 | `pkg/transport/stream` | Session frames on NATS JetStream, one subject per session, and an embedded NATS server for local use |
 | `pkg/orchestration/activity`, `pkg/orchestration/coreworker` | The activities `p7.OpenSession`, `p7.RunTurn` and `p7.CloseSession`, and the worker that serves them on `local-<host>` |
-| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` lets the workflow set how often opening is retried, and a harness that stopped fails with the application error type `HarnessStopped` |
+| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
 | `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
 | `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
 | `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands, towa and git. It holds no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. No pod runs this image directly: protocol7-selfdev copies `p7-worker`, `p7acpshim` and towa out of it, at one pinned commit, into its own image |
@@ -82,6 +82,8 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | A tool call that reaches the internet | `curl` to the Go module proxy answered 200 through PDP |
 | A chat on a Claude model with no login in PDP | Failed after 304 seconds and ten attempts with "the shim closed the connection". Run again at protocol7 `7a6fe30` and selfdev `f0d0f65`: failed after 7 seconds and three attempts, and the page shows the harness's last lines, which name `credential_unavailable` |
 | `p7-worker` with Temporal's address named in `NO_PROXY`, and not named | It connects directly. Without the name, the gRPC client sends the connection to the proxy and the worker exits |
+| The model credential removed while a chat is open (protocol7 `8e18d5a`, selfdev `4c6dd98`, PDP `cfd86c5` on a Unix socket) | The turn fails in about two seconds and names `credential_unavailable`. The chat stays open and answers again once the credential is back |
+| A turn that finds its harness stopped and cannot start it again, in the same setup | The turn fails in under a second with the harness's last lines, and the chat stays open. Before `96b257b` it was retried ten times over 304 seconds |
 
 No Claude request has been answered through PDP in this arrangement, because no login for it exists yet.
 
@@ -122,7 +124,7 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 - Frames stay in the stream for 30 days and nothing archives them. The journal on the session's machine is the full record.
 - A Stop that arrives before the turn's activity started drops that message without sending it.
 - A harness that prints a secret to standard error would show it on the chat's page when it stops while starting. Nothing redacts those lines. towa with proxy-held accounts holds only placeholders.
-- A harness that stops when a later turn restarts it is still retried ten times over about five minutes. Only opening takes the workflow's policy.
+- A turn is retried ten times over about five minutes by default. The selfdev chat sets its own policy, which stops at once on a harness that cannot start. Another consumer has to do the same.
 - Stop can take up to about nine seconds to end a turn, because the cancel waits for the activity's next heartbeat.
 
 ## Not run
