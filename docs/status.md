@@ -18,7 +18,7 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx |
 | `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
 | `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
-| `containers/p7`, `scripts/build-image` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands, towa and git. It holds no toolchain for an agent |
+| `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands, towa and git. It holds no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. The first run passed, and the registry serves the image to the cluster's read-only key. Nothing runs this image yet: the selfdev pods run selfdev's own image |
 
 The chat workflow, the web UI and the deployment on talos-metal are in `gfx-labs/protocol7-selfdev`.
 
