@@ -74,7 +74,7 @@ Run again after the commands were moved to fx (protocol7 `e21e2d1`, selfdev `4a0
 
 The two Stop times, 1.3 and 8.9 seconds, both fit the limit the code states: a cancel reaches the activity in the answer to a heartbeat, and the SDK sends one at most every 8 seconds. That cause was not isolated by a separate measurement.
 
-Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1a9b41`, towa 0.2.0, PDP `f22f6d3`). `p7 dev` and `selfdev run` had the proxy variables and no model key. PDP ran beside a real SPIRE server and agent on the same machine, with the policy of the deployment:
+Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1a9b41`, towa, PDP `f22f6d3`). `p7 dev` and `selfdev run` had the proxy variables and no model key. PDP ran beside a real SPIRE server and agent on the same machine, with the policy of the deployment:
 
 | Case | Result |
 |---|---|
