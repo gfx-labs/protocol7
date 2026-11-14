@@ -160,7 +160,8 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 		return nil, "", err
 	}
 	logged := acpshim.LogSize(dir)
-	if !acpshim.Alive(dir) {
+	started := !acpshim.Alive(dir)
+	if started {
 		lease := rec.Request.IdleLimit
 		if lease <= 0 {
 			lease = DefaultIdleLimit
@@ -183,13 +184,23 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 
 	client, err = acpshim.Connect(ctx, dir)
 	if err != nil {
+		// A harness that exits at once can take its shim down before the
+		// connection is made.
+		if started {
+			err = m.harnessStopped(rec.ID, logged, err)
+		}
 		return nil, "", err
 	}
 	defer func() {
 		if err != nil {
 			client.Close()
 			client = nil
-			err = m.harnessStopped(rec.ID, logged, err)
+			// An answer from the harness means it runs. Any other failure
+			// may be the harness going away: a closed connection or a
+			// failed write, depending on timing.
+			if _, answered := errors.AsType[*acp.RequestError](err); !answered && ctx.Err() == nil {
+				err = m.harnessStopped(rec.ID, logged, err)
+			}
 		}
 	}()
 	initialized, err := client.Initialize(ctx, acp.Implementation{Name: "protocol7", Version: Version})
@@ -227,15 +238,12 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 	return client, seed, err
 }
 
-// harnessStopped turns a connection that closed while the session was made
-// ready into ErrHarnessStopped, if the shim is gone. A shim that still runs
-// closed the connection for a newer client.
+// harnessStopped turns a connection that failed or closed while the session
+// was made ready into ErrHarnessStopped, if the shim is gone. A shim that
+// still runs closed the connection for a newer client.
 func (m *Manager) harnessStopped(session string, logged int64, err error) error {
-	if !errors.Is(err, acpshim.ErrShimGone) {
-		return err
-	}
 	dir := m.shimDir(session)
-	// The connection closes a moment before the shim has exited.
+	// The connection fails a moment before the shim has exited.
 	for deadline := time.Now().Add(2 * time.Second); acpshim.Alive(dir); time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			return err
