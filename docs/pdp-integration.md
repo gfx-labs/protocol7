@@ -2,6 +2,14 @@
 
 Written 2026-11-12. This is a design. Each section says what was run and what was only read.
 
+**Since then (2026-11-13).** The first deployment exists in `gfx-labs/protocol7-selfdev` under `kubernetes/`, written and not applied. It differs from this design in three ways:
+
+- **The forwarder is in PDP, not in the runner.** `pdp forward` (PDP branch `p7-deploy`) is the loopback relay of section 4, and runs as a native sidecar from PDP's own image. The mTLS leg and rotation were run against a real SPIRE on one machine, with certificates of 90 seconds.
+- **One identity, not one per run.** There is one worker pod, and every chat's agent runs in it. Section 3's SPIFFE ID with a profile, repository and run ID needs a pod per run, which does not exist yet.
+- **Claude and OpenRouter only.** No Codex account, and git uses a GitHub App token from a file, with no PDP binding.
+
+The policy that runs is `protocol7-selfdev/kubernetes/pdp/`, and that repository's `kubernetes/README.md` lists what was run. The files in `docs/pdp-integration/` remain the design for per-run scope.
+
 Sources:
 
 - `gfx-labs/pdp` at `origin/main` `e6edc6b`. That commit is the one PDP change this design needed: `oauth_refresh` for a login with no client secret. It was merged and pushed on 2026-11-12. `aeaca30` is the commit before it.
@@ -198,7 +206,14 @@ harness, git, tools --HTTPS_PROXY=http://127.0.0.1:<port>--> runner forwarder --
 - Every process in the pod that can reach the loopback port acts as the run. That is the intended granularity.
 - The pod also needs PDP's interception CA in its trust store. The harness reads `SSL_CERT_FILE`.
 
-The shape was run locally with a plain forwarder in place of the mTLS one: `HTTPS_PROXY` pointed at a loopback port that copied bytes to PDP's Unix socket. The harness and curl both worked through it, including `CONNECT` and interception. The mTLS leg, the runner code and SVID rotation on a long-lived connection are untested.
+The shape was run locally with a plain forwarder in place of the mTLS one: `HTTPS_PROXY` pointed at a loopback port that copied bytes to PDP's Unix socket. The harness and curl both worked through it, including `CONNECT` and interception. The mTLS leg, the runner code and SVID rotation on a long-lived connection were untested when this was written.
+
+Run since, with `pdp forward` in place of runner code (PDP `docs/acceptance.md` has the detail):
+
+- **The mTLS leg works** with a real SPIRE server and agent. Another SPIFFE ID is refused.
+- **Rotation needed two PDP changes.** PDP verifies the caller's certificate on every request, so a connection that outlived its certificate answered 401 and stayed open. PDP now closes a connection after a 401, and stops reusing a connection in the last quarter of its certificate's lifetime. With both, 31 of 31 requests answered 200 across rotations.
+- **A response that is streaming when its certificate ends arrives whole,** because nothing checks the certificate while a response is relayed. Keep PDP's `stream_timeout` under a quarter of the certificate's lifetime, or the connection's next request is refused.
+- **gRPC needs `NO_PROXY`.** The Go gRPC client honours `HTTPS_PROXY`, so the worker's connection to Temporal must be exempt by name.
 
 ## Findings from the local runs
 
@@ -214,4 +229,4 @@ The shape was run locally with a plain forwarder in place of the mTLS one: `HTTP
 1. One real refresh per provider with a login that can be lost, then read the state file for `recovery_required`. Done for both.
 2. One real towa start and turn per provider through PDP on a Unix socket: the model list, streaming, a turn that outlives the access token, and the fallback from one Claude account to the next. Codex: a streamed turn is done. Claude: the model list and a session start are done, and the model call got as far as the account's rate limit. A streamed Claude answer, expiry during a turn and fallback remain. They need a Claude account that is not rate limited.
 3. git fetch through PDP with the GitHub App binding. The `github-read` binding in `pdp.yaml` is a static token standing in for it.
-4. SPIRE, the `ClusterSPIFFEID` and the runner forwarder on `talos-metal`.
+4. SPIRE, the `ClusterSPIFFEID` and the forwarder on `talos-metal`. Written as manifests in protocol7-selfdev. Not applied.
