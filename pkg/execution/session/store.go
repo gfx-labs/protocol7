@@ -53,6 +53,15 @@ func (m *Manager) shimDir(id string) string { return filepath.Join(m.sessionDir(
 
 func (m *Manager) workspace(id string) string { return filepath.Join(m.sessionDir(id), workspaceDir) }
 
+// Workspace is the workspace of a session of the manager whose Root is root.
+// A process beside the core worker reads a session's files from here.
+func Workspace(root, id string) (string, error) {
+	if err := checkID(id); err != nil {
+		return "", err
+	}
+	return (&Manager{config: Config{Root: root}}).workspace(id), nil
+}
+
 // load reads the record of a session. A session that was never opened is an
 // error wrapping os.ErrNotExist.
 func (m *Manager) load(id string) (record, error) {
