@@ -1,0 +1,40 @@
+name: notify-selfdev
+
+# protocol7-selfdev runs protocol7 at a pinned commit and builds its image
+# from this repository's source. When the source on master changes, this tells
+# it the commit, and its workflow builds, pins and deploys. Nobody waits for
+# an image of this repository.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - cmd/**
+      - pkg/**
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+jobs:
+  notify:
+    if: github.ref == 'refs/heads/master'
+    runs-on: talos-metal-gfx
+    permissions: {}
+    steps:
+      # A token for the one repository that is told, and for nothing else.
+      # repository_dispatch needs write access to its contents.
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: 5248568
+          private-key: ${{ secrets.ELEE_AGENT_PRIVATE_KEY }}
+          owner: gfx-labs
+          repositories: protocol7-selfdev
+          permission-contents: write
+
+      - run: >
+          gh api repos/gfx-labs/protocol7-selfdev/dispatches
+          -f event_type=protocol7-master
+          -f "client_payload[sha]=$GITHUB_SHA"
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}

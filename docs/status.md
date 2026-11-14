@@ -18,7 +18,8 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
 | `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
 | `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
-| `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands, towa and git. It holds no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. No pod runs this image directly: protocol7-selfdev copies `p7-worker`, `p7acpshim` and towa out of it, at one pinned commit, into its own image |
+| `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands and git. It holds no harness and no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. No pod runs this image: protocol7-selfdev builds the commands from this source at a pinned commit, in its own image |
+| `.github/pending/notify-selfdev.yml`, to be moved to `.github/workflows/` by a person | On each commit to master that changes the Go source, tells protocol7-selfdev the commit, so that it builds, pins and deploys without a person in between. It needs the Actions secret `ELEE_AGENT_PRIVATE_KEY`, and the `elee-agent` app installed on protocol7-selfdev with write access to its contents. Neither was set up or run |
 
 The chat workflow, the web UI and the deployment on talos-metal are in `gfx-labs/protocol7-selfdev`. That deployment is written and not applied. In it the core worker holds no model credential and has no route to the internet: PDP holds a Claude subscription login and an OpenRouter key, and a forwarder in the worker's pod presents the pod's SPIFFE identity to PDP. `protocol7-selfdev/kubernetes/README.md` describes it and lists what was run.
 
@@ -46,7 +47,7 @@ go run ./cmd/selfdev run
 # then open http://127.0.0.1:8787
 ```
 
-`p7 dev` needs the `temporal` CLI and the harness (`towa` by default) on `PATH`. It finds `p7acpshim` beside its own executable.
+`p7 dev` needs the `temporal` CLI and the harness (`towa` by default) on `PATH`. Neither is in this repository's image. It finds `p7acpshim` beside its own executable.
 
 ## What was run
 
@@ -74,7 +75,7 @@ Run again after the commands were moved to fx (protocol7 `e21e2d1`, selfdev `4a0
 
 The two Stop times, 1.3 and 8.9 seconds, both fit the limit the code states: a cancel reaches the activity in the answer to a heartbeat, and the SDK sends one at most every 8 seconds. That cause was not isolated by a separate measurement.
 
-Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1a9b41`, towa 0.2.0, PDP `f22f6d3`). `p7 dev` and `selfdev run` had the proxy variables and no model key. PDP ran beside a real SPIRE server and agent on the same machine, with the policy of the deployment:
+Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1a9b41`, towa, PDP `f22f6d3`). `p7 dev` and `selfdev run` had the proxy variables and no model key. PDP ran beside a real SPIRE server and agent on the same machine, with the policy of the deployment:
 
 | Case | Result |
 |---|---|
