@@ -3,6 +3,7 @@ package p7
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -110,6 +111,10 @@ type TextPrompt struct {
 	TurnID string
 	// Timeout bounds the turn. Zero is 2 hours.
 	Timeout time.Duration
+	// Retry is the retry policy of the turn's activity. Nil is ten attempts
+	// over about five minutes. A session that is closed or does not exist
+	// is never retried.
+	Retry *temporal.RetryPolicy
 }
 
 // PromptTextFuture starts a turn and returns a future of its Turn. Combine
@@ -137,6 +142,12 @@ func PromptTextFuture(ctx workflow.Context, session *Session, prompt TextPrompt)
 	if timeout <= 0 {
 		timeout = 2 * time.Hour
 	}
+	retry := sessionRetry
+	if prompt.Retry != nil {
+		copied := *prompt.Retry
+		copied.NonRetryableErrorTypes = append(slices.Clone(copied.NonRetryableErrorTypes), sessionRetry.NonRetryableErrorTypes...)
+		retry = &copied
+	}
 	activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		TaskQueue:           session.TaskQueue,
 		StartToCloseTimeout: timeout,
@@ -146,7 +157,7 @@ func PromptTextFuture(ctx workflow.Context, session *Session, prompt TextPrompt)
 		HeartbeatTimeout: 10 * time.Second,
 		// A cancelled turn still ends with a result. Wait for it.
 		WaitForCancellation: true,
-		RetryPolicy:         sessionRetry,
+		RetryPolicy:         retry,
 	})
 	return workflow.ExecuteActivity(activityCtx, domain.ActivityRunTurn, request)
 }
