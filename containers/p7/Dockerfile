@@ -19,8 +19,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
     CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/...
 
 FROM golang:1.27.3-trixie AS tools
-ARG TOWA_VERSION=0.1.2
-ARG TOWA_SHA256=1c2a239c12b43ac9190094a1d42f18b699bbcbfe7483100f0b2149245a058940
+ARG TOWA_VERSION=0.2.0
+ARG TOWA_SHA256=b48571753c67813bdc82fada5ba34036db0435d5c135672e3628ff30c20bc33e
 RUN set -eu; mkdir /out; cd /tmp; \
     curl -fsSL -o towa.tgz "https://github.com/gfx-labs/towa/releases/download/v${TOWA_VERSION}/towa_${TOWA_VERSION}_linux_amd64.tar.gz"; \
     echo "${TOWA_SHA256}  towa.tgz" | sha256sum -c -; \
