@@ -3,6 +3,9 @@
 #
 #   scripts/build-image          build into the local image store
 #   scripts/build-image --push   build and push to the registry
+#
+# .github/workflows/image.yml runs the second form on the self-hosted runners
+# for each commit on master that changes the image. Nothing else pushes.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -12,7 +15,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-image="ghcr.io/gfx-labs/protocol7:$(git rev-parse --short HEAD)"
+image="ghcr.io/gfx-labs/protocol7:$(git rev-parse --short=12 HEAD)"
 output=--load
 if [ "${1:-}" = --push ]; then
   output=--push

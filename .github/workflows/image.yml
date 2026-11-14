@@ -1,0 +1,39 @@
+name: image
+
+# Builds ghcr.io/gfx-labs/protocol7:<commit> and pushes it with this
+# workflow's own token. No other credential can write the package.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - cmd/**
+      - pkg/**
+      - go.mod
+      - go.sum
+      - containers/p7/**
+      - scripts/build-image
+      - .dockerignore
+  workflow_dispatch:
+
+jobs:
+  image:
+    if: github.ref == 'refs/heads/master'
+    runs-on: talos-metal-gfx
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: scripts/build-image --push

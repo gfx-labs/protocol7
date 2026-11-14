@@ -5,3 +5,4 @@
 !go.sum
 !cmd
 !pkg
+!containers/p7/install-towa
