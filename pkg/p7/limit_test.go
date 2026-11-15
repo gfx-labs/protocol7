@@ -34,22 +34,11 @@ func holdWorkflow(ctx workflow.Context, host, limit string, priority int) error 
 // A session over the limit waits and opens when another closes, and the
 // waiter of the highest priority goes first.
 func TestASessionOverTheLimitWaitsForAPlace(t *testing.T) {
-	temporalClient, address := startStack(t)
+	temporalClient := startStackWith(t, agentEnv, p7.WorkerConfig{
+		Limits: p7.LimitConfig{Capacity: map[string]int{"model:*": 2}, Reconcile: time.Second},
+	}, func(w *p7.Worker) { w.RegisterWorkflow("hold", holdWorkflow) })
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
-
-	consumer, err := p7.NewWorker(p7.WorkerConfig{
-		TaskQueue: "consumer", TemporalAddress: address,
-		Limits: p7.LimitConfig{Capacity: map[string]int{"model:*": 2}, Reconcile: time.Second},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumer.RegisterWorkflow("hold", holdWorkflow)
-	if err := consumer.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(consumer.Stop)
 
 	const limit = "model:test"
 	start := func(name string, priority int) client.WorkflowRun {
