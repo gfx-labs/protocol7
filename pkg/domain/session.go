@@ -16,7 +16,15 @@ const (
 	// the session's pod, on its own queue.
 	ActivityStartSessionPod  = "p7.StartSessionPod"
 	ActivityDeleteSessionPod = "p7.DeleteSessionPod"
+	// ActivitySessionState runs on a session's own queue and says whether the
+	// session is closed. The kubernetes backend's reconciliation asks it.
+	ActivitySessionState = "p7.SessionState"
 )
+
+// WorkflowProbeSessionPod is the workflow of the kubernetes backend's queue
+// that runs ActivitySessionState on a session's queue for the reconciliation,
+// which is not a workflow itself and so cannot run an activity.
+const WorkflowProbeSessionPod = "p7.ProbeSessionPod"
 
 // BackendHost runs a session as a process on a named machine.
 const BackendHost = "host"
@@ -115,6 +123,10 @@ type PodRequest struct {
 	// Owner is the ID of the workflow that opened the session. It is kept on
 	// the pod, so that a pod nobody owns can be found.
 	Owner string `json:"owner,omitempty"`
+	// OpenTimeout is how long the pod may take to become ready. It is kept
+	// on the pod, and a pod that is still not ready after it is deleted.
+	// Zero is the backend's default.
+	OpenTimeout time.Duration `json:"open_timeout,omitempty"`
 }
 
 // PodHandle is the result of ActivityStartSessionPod.
@@ -170,6 +182,14 @@ type TurnResult struct {
 // TextLimit bounds TurnResult.Text so a result stays far below Temporal's
 // payload limit. The whole conversation is in the session's journal.
 const TextLimit = 32 << 10
+
+// SessionState is the result of ActivitySessionState.
+type SessionState struct {
+	Session string `json:"session"`
+	// Exists is false for a session that was never opened on this machine.
+	Exists bool `json:"exists"`
+	Closed bool `json:"closed"`
+}
 
 // CloseRequest is the input of ActivityCloseSession.
 type CloseRequest struct {
