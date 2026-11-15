@@ -350,15 +350,21 @@ func extract(r io.Reader, dest string) error {
 				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which may leave the workspace")
 			}
 			// Where the link points is inside the workspace, as linkEscapes
-			// checked, and so is the path that the link makes from it.
-			if base := filepath.Clean(dest); !strings.HasPrefix(filepath.Join(filepath.Dir(target), header.Linkname), base+string(filepath.Separator)) &&
-				filepath.Join(filepath.Dir(target), header.Linkname) != base {
+			// checked. The path the link makes from its directory is checked
+			// again, and the link is made from it, written relative to the
+			// directory.
+			resolved := filepath.Join(filepath.Dir(target), header.Linkname)
+			if base := filepath.Clean(dest); resolved != base && !strings.HasPrefix(resolved, base+string(filepath.Separator)) {
+				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which leaves the workspace")
+			}
+			relativeTarget, err := filepath.Rel(filepath.Dir(target), resolved)
+			if err != nil {
 				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which leaves the workspace")
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
 			}
-			if err := os.Symlink(header.Linkname, target); err != nil {
+			if err := os.Symlink(relativeTarget, target); err != nil {
 				return err
 			}
 			links[name] = true
