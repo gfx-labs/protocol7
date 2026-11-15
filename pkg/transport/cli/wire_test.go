@@ -17,7 +17,12 @@ func TestEveryCommandHasWhatItsComponentsAskFor(t *testing.T) {
 		"worker without a stream": &workerCommand{StateDir: "/state"},
 		"dev":                     &devCommand{DataDir: "/data", NATSPort: 4222},
 		"session":                 &sessionCommand{Worker: workerCommand{NATSURL: "nats://127.0.0.1:4222", StateDir: "/state"}, SessionID: "s1", Queue: "p7-session-s1"},
-		"pods":                    &podsCommand{Namespace: "p7", Template: "/template.json", Container: "session"},
+		"session with snapshots": &sessionCommand{
+			Worker:    workerCommand{StateDir: "/state", Snapshots: snapshotFlags{Endpoint: "http://s3:8333", Bucket: "b", PathStyle: true, Exclude: []string{"node_modules", ""}}},
+			SessionID: "s1", Queue: "p7-session-s1",
+		},
+		"pods with snapshots": &podsCommand{Namespace: "p7", Template: "/template.json", Container: "session", Snapshots: snapshotFlags{Bucket: "b"}},
+		"pods":                &podsCommand{Namespace: "p7", Template: "/template.json", Container: "session"},
 	}
 	for name, command := range commands {
 		options, err := command.options()
