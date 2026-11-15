@@ -19,6 +19,7 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/gfx-labs/protocol7/pkg/execution/session"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/coreworker"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
 	"github.com/gfx-labs/protocol7/pkg/p7/p7fx"
@@ -29,10 +30,33 @@ type harnessFlags struct {
 	Command    string   `name:"harness" default:"towa" env:"P7_HARNESS" help:"Agent harness command. It speaks ACP on standard input and output."`
 	Args       []string `name:"harness-arg" env:"P7_HARNESS_ARGS" help:"Argument for the harness (repeatable)."`
 	ModelsFlag string   `name:"harness-models-flag" default:"--models" env:"P7_HARNESS_MODELS_FLAG" help:"Harness flag that takes a session's model list. Empty passes no list."`
+	StoreFlag  string   `name:"harness-store-flag" default:"--store.root" env:"P7_HARNESS_STORE_FLAG" help:"Harness flag that takes the directory of its conversations. With snapshots, it is given a directory in the session's, so that a snapshot holds the conversation. Empty passes none."`
 }
 
 func (f harnessFlags) harness() session.Harness {
-	return session.Harness{Command: f.Command, Args: f.Args, ModelsFlag: f.ModelsFlag}
+	return session.Harness{Command: f.Command, Args: f.Args, ModelsFlag: f.ModelsFlag, StoreFlag: f.StoreFlag}
+}
+
+// snapshotFlags say where sessions' snapshots are kept, in S3-compatible
+// storage. Credentials are not flags: they come from the AWS environment and
+// credential chain. Without a bucket there are no snapshots.
+type snapshotFlags struct {
+	Endpoint  string   `name:"snapshot-endpoint" env:"P7_SNAPSHOT_ENDPOINT" help:"URL of the S3-compatible store, such as http://seaweedfs-s3.seaweedfs:8333. Empty is Amazon S3."`
+	Region    string   `name:"snapshot-region" env:"P7_SNAPSHOT_REGION" help:"Region of the bucket."`
+	Bucket    string   `name:"snapshot-bucket" env:"P7_SNAPSHOT_BUCKET" help:"Bucket for snapshots of session directories. Empty keeps no snapshots."`
+	Prefix    string   `name:"snapshot-prefix" env:"P7_SNAPSHOT_PREFIX" help:"Prefix of every snapshot key: <prefix>/<session>/workspace.tar.zst."`
+	PathStyle bool     `name:"snapshot-path-style" env:"P7_SNAPSHOT_PATH_STYLE" help:"Put the bucket in the request path, not the host name."`
+	Exclude   []string `name:"snapshot-exclude" env:"P7_SNAPSHOT_EXCLUDE" default:"node_modules,go-build" help:"Names or paths that a snapshot leaves out (repeatable). A name with no slash matches at any depth, a path is from the session's directory. Go's path.Match syntax."`
+}
+
+func (f snapshotFlags) config() snapshot.Config {
+	var exclude []string
+	for _, pattern := range f.Exclude {
+		if pattern != "" {
+			exclude = append(exclude, pattern)
+		}
+	}
+	return snapshot.Config{Endpoint: f.Endpoint, Region: f.Region, Bucket: f.Bucket, Prefix: f.Prefix, PathStyle: f.PathStyle, Exclude: exclude}
 }
 
 // hostName is the name of this machine: named if it is set, else the
@@ -63,16 +87,25 @@ func defaultStateDir() (string, error) {
 // waits up to ten seconds for running activities to detach from their turns.
 const stopTimeout = 45 * time.Second
 
+// snapshotStopTimeout is it for a core worker that writes snapshots when it
+// stops. The pod's terminationGracePeriodSeconds, or the init system, ends
+// it sooner if it must.
+const snapshotStopTimeout = 12 * time.Minute
+
 // workerCommand is the core worker of this machine.
 type workerCommand struct {
-	TemporalAddress   string       `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
-	TemporalNamespace string       `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
-	NATSURL           string       `name:"nats-url" default:"nats://127.0.0.1:4222" env:"P7_NATS_URL" help:"NATS server that session frames are published to. Empty publishes none."`
-	Host              string       `name:"host" env:"P7_HOST" help:"Name of this machine. The worker polls local-<host>. Default: the hostname."`
-	StateDir          string       `name:"state-dir" env:"P7_STATE_DIR" help:"Directory that holds this machine's sessions. Default: p7 in the XDG state directory."`
-	Shim              string       `name:"shim" env:"P7_SHIM" help:"Path of p7acpshim. Default: beside this executable, then PATH."`
-	Harness           harnessFlags `embed:""`
+	TemporalAddress   string        `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
+	TemporalNamespace string        `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
+	NATSURL           string        `name:"nats-url" default:"nats://127.0.0.1:4222" env:"P7_NATS_URL" help:"NATS server that session frames are published to. Empty publishes none."`
+	Host              string        `name:"host" env:"P7_HOST" help:"Name of this machine. The worker polls local-<host>. Default: the hostname."`
+	StateDir          string        `name:"state-dir" env:"P7_STATE_DIR" help:"Directory that holds this machine's sessions. Default: p7 in the XDG state directory."`
+	Shim              string        `name:"shim" env:"P7_SHIM" help:"Path of p7acpshim. Default: beside this executable, then PATH."`
+	Harness           harnessFlags  `embed:""`
+	Snapshots         snapshotFlags `embed:""`
 
+	// session names the session of a session's pod, whose snapshot is
+	// restored before the worker polls.
+	session string
 	// taskQueue replaces local-<host> for a session's pod.
 	taskQueue string
 }
@@ -89,11 +122,19 @@ func (c *workerCommand) options() (fx.Option, error) {
 			return nil, err
 		}
 	}
+	snapshots := c.Snapshots.config()
+	if err := snapshots.Validate(); err != nil {
+		return nil, err
+	}
+	timeout := stopTimeout
+	if snapshots.Enabled() {
+		timeout = snapshotStopTimeout
+	}
 	options := []fx.Option{
-		fx.StopTimeout(stopTimeout),
+		fx.StopTimeout(timeout),
 		fx.Supply(
 			p7fx.TemporalConfig{Address: c.TemporalAddress, Namespace: c.TemporalNamespace},
-			coreworker.Config{Host: host, TaskQueue: c.taskQueue},
+			coreworker.Config{Host: host, TaskQueue: c.taskQueue, Session: c.session, Snapshots: snapshots},
 		),
 		p7fx.TemporalClient,
 		coreModule(hostSessions{StateDir: stateDir, Shim: c.Shim, Harness: c.Harness.harness()}),
@@ -129,6 +170,7 @@ type sessionCommand struct {
 
 func (c *sessionCommand) options() (fx.Option, error) {
 	c.Worker.taskQueue = c.Queue
+	c.Worker.session = c.SessionID
 	if c.Worker.Host == "" {
 		c.Worker.Host = "session-" + c.SessionID
 	}
@@ -153,6 +195,9 @@ type podsCommand struct {
 	Container         string        `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7 session."`
 	ReconcileInterval time.Duration `name:"reconcile-interval" default:"5m" env:"P7_RECONCILE_INTERVAL" help:"How often to delete session pods that nothing owns: those whose session is closed, whose owner workflow is not running, or that are not ready after their open timeout. Also done at start."`
 	OpenTimeout       time.Duration `name:"open-timeout" default:"15m" env:"P7_OPEN_TIMEOUT" help:"How long a pod may take to become ready when its request names no open timeout."`
+	// Snapshots, when set, makes deleting a session's pod delete the
+	// session's snapshot. Use the same as the session pods.
+	Snapshots snapshotFlags `embed:""`
 }
 
 func (c *podsCommand) options() (fx.Option, error) {
@@ -163,6 +208,7 @@ func (c *podsCommand) options() (fx.Option, error) {
 			kubernetes.Config{
 				Namespace: c.Namespace, TemplateFile: c.Template, SessionContainer: c.Container,
 				ReconcileInterval: c.ReconcileInterval, OpenTimeout: c.OpenTimeout,
+				Snapshots: c.Snapshots.config(),
 			},
 		),
 		p7fx.TemporalClient,

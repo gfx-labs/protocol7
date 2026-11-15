@@ -23,6 +23,8 @@ import (
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/execution/session"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot/snapshottest"
 	orchestration "github.com/gfx-labs/protocol7/pkg/orchestration/activity"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
 )
@@ -66,6 +68,14 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, prefix+"/"):
+		pod, ok := f.pods[strings.TrimPrefix(r.URL.Path, prefix+"/")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"not found"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(pod)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, prefix+"/"):
 		name := strings.TrimPrefix(r.URL.Path, prefix+"/")
 		pod, ok := f.pods[name]
@@ -162,9 +172,27 @@ func TestReconcileDeletesSessionPodsThatNothingOwns(t *testing.T) {
 	apiServer := httptest.NewServer(api)
 	t.Cleanup(apiServer.Close)
 	logs := &logLines{}
+	// Snapshots of some sessions, in a fake store.
+	s3 := snapshottest.Start(t)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	snapshots := snapshot.Config{Endpoint: s3.URL, Bucket: snapshottest.Bucket, PathStyle: true}
+	store, err := snapshot.New(snapshots, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"keeps", "failed", "closed", "stuck"} {
+		tree := filepath.Join(t.TempDir(), id)
+		if err := os.MkdirAll(tree, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Save(ctx, id, tree); err != nil {
+			t.Fatal(err)
+		}
+	}
 	pods, err := kubernetes.New(kubernetes.Config{
 		Namespace: "p7", TemplateFile: template, SessionContainer: "session", APIServer: apiServer.URL, TokenFile: token,
-		ReconcileInterval: time.Hour, OpenTimeout: 15 * time.Minute,
+		ReconcileInterval: time.Hour, OpenTimeout: 15 * time.Minute, Snapshots: snapshots,
 	}, slog.New(slog.NewTextHandler(logs, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -299,6 +327,15 @@ func TestReconcileDeletesSessionPodsThatNothingOwns(t *testing.T) {
 	}
 	if len(api.deleted) != 6 {
 		t.Errorf("deleted %v, want six pods", api.deleted)
+	}
+	// The snapshots of sessions that are abandoned or closed went with
+	// their pods. One of a pod that was only slow to start stays, with that
+	// of a pod that stays.
+	for id, wantKept := range map[string]bool{"keeps": true, "failed": false, "closed": false, "stuck": true} {
+		found, err := store.Restore(ctx, id, filepath.Join(t.TempDir(), "x"), nil)
+		if err != nil || found != wantKept {
+			t.Errorf("the snapshot of %s: found %v, %v, want %v", id, found, err, wantKept)
+		}
 	}
 }
 

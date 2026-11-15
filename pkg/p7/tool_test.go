@@ -39,6 +39,13 @@ func TestMain(m *testing.M) {
 		_ = base.connection.Serve(context.Background())
 		os.Exit(0)
 	}
+	if os.Getenv(memoryAgentEnv) != "" {
+		base := &toolAgent{}
+		agent := &memoryAgent{toolAgent: base, store: storeRoot(os.Args)}
+		base.connection = acp.NewAgentSideConnection(agent, os.Stdout, os.Stdin, slog.New(slog.DiscardHandler))
+		_ = base.connection.Serve(context.Background())
+		os.Exit(0)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "start" {
 		os.Exit(acpshim.Main(os.Args[1:], os.Stdout, os.Stderr))
 	}

@@ -153,6 +153,10 @@ func (p *podObject) notReadySince() (time.Time, bool) {
 	return p.Metadata.CreationTimestamp, true
 }
 
+// snapshotDeleteWait bounds the wait for a pod to end before its session's
+// snapshot is deleted by reconciliation.
+const snapshotDeleteWait = 15 * time.Minute
+
 // list returns the pods this backend created.
 func (p *Pods) list(ctx context.Context) ([]podObject, error) {
 	var pods []podObject
@@ -182,6 +186,8 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		return err
 	}
 	var failed []error
+	// Sessions whose snapshot goes once their pod has ended.
+	var abandoned []string
 	for index := range pods {
 		pod := &pods[index]
 		session := pod.Metadata.Labels[LabelSession]
@@ -201,6 +207,21 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 			continue
 		}
 		r.logger.Info("session pod deleted by reconciliation", "session", session, "pod", pod.Metadata.Name, "reason", reason)
+		// A session whose owner is gone or that is closed will not be
+		// used again. One whose pod was only slow to start may still be
+		// retried by its owner, so its snapshot stays.
+		if reason != ReasonNotReady {
+			abandoned = append(abandoned, session)
+		}
+	}
+	for _, session := range abandoned {
+		// The pods end at the same time, so the waits overlap.
+		waitCtx, cancel := context.WithTimeout(ctx, snapshotDeleteWait)
+		err := r.pods.deleteSnapshotWhenGone(waitCtx, session)
+		cancel()
+		if err != nil {
+			failed = append(failed, fmt.Errorf("delete the snapshot of session %s: %w", session, err))
+		}
 	}
 	return errors.Join(failed...)
 }

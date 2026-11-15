@@ -1,6 +1,6 @@
 // Package kubernetes is the kubernetes backend: one pod per session. Its
 // worker polls the queue p7-kubernetes and only creates and deletes pods. The
-// session's activities then run in the session's pod, where `p7-worker
+// session's activities then run in the session's pod, where `p7
 // session` runs the host session manager for that one session on its own
 // queue.
 //
@@ -30,6 +30,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 )
 
 // Labels and annotations every session pod carries.
@@ -68,6 +69,10 @@ type Config struct {
 	// in-cluster paths.
 	TokenFile string
 	CAFile    string
+	// Snapshots is where the sessions' snapshots are kept, if they are.
+	// Deleting a session's pod then also deletes its snapshot, which the
+	// pod's worker only writes while the session is open.
+	Snapshots snapshot.Config
 	// ReconcileInterval is how often the worker looks for pods that nothing
 	// owns. Zero is five minutes.
 	ReconcileInterval time.Duration
@@ -82,9 +87,10 @@ const (
 
 // Pods creates and deletes session pods.
 type Pods struct {
-	config Config
-	http   *http.Client
-	logger *slog.Logger
+	config    Config
+	http      *http.Client
+	logger    *slog.Logger
+	snapshots *snapshot.Store
 }
 
 // New returns the backend. It reads the CA file now and the token on each
@@ -124,7 +130,17 @@ func New(config Config, logger *slog.Logger) (*Pods, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Pods{config: config, http: &http.Client{Transport: transport, Timeout: 30 * time.Second}, logger: logger}, nil
+	pods := &Pods{config: config, http: &http.Client{Transport: transport, Timeout: 30 * time.Second}, logger: logger}
+	if err := config.Snapshots.Validate(); err != nil {
+		return nil, fmt.Errorf("kubernetes backend: %w", err)
+	}
+	if config.Snapshots.Enabled() {
+		var err error
+		if pods.snapshots, err = snapshot.New(config.Snapshots, logger); err != nil {
+			return nil, fmt.Errorf("kubernetes backend: %w", err)
+		}
+	}
+	return pods, nil
 }
 
 // PodName is the name of a session's pod.
@@ -166,12 +182,19 @@ func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.Pod
 }
 
 // Delete deletes a session's pod. A pod that is gone is not an error.
+//
+// With snapshots it waits until the pod is gone, which is after its worker
+// has stopped, and then deletes the session's snapshot. A worker that is
+// stopping writes snapshots of its open sessions, so the snapshot of a
+// session that was not closed first would otherwise come back. It
+// heartbeats while it waits, and the workflow allows it 20 minutes.
 func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
 	err := p.deletePod(ctx, PodName(request.Session), "")
-	if err == nil {
-		p.logger.Info("session pod deleted", "session", request.Session, "pod", PodName(request.Session))
+	if err != nil {
+		return err
 	}
-	return err
+	p.logger.Info("session pod deleted", "session", request.Session, "pod", PodName(request.Session))
+	return p.deleteSnapshotWhenGone(ctx, request.Session)
 }
 
 // deletePod deletes a pod. With a uid it deletes that pod only, not one
@@ -187,6 +210,35 @@ func (p *Pods) deletePod(ctx context.Context, name, uid string) error {
 	}
 	return err
 }
+
+// deleteSnapshotWhenGone waits until the session's pod is gone, and deletes
+// the session's snapshot. It does nothing without snapshots.
+func (p *Pods) deleteSnapshotWhenGone(ctx context.Context, session string) error {
+	if p.snapshots == nil {
+		return nil
+	}
+	path := p.podsPath() + "/" + PodName(session)
+	var err error
+	for err == nil {
+		// The pod is still there until a read finds nothing.
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for the pod %s to end: %w", PodName(session), ctx.Err())
+		case <-time.After(podPoll):
+		}
+		if activity.IsActivity(ctx) {
+			activity.RecordHeartbeat(ctx)
+		}
+		err = p.do(ctx, http.MethodGet, path, nil, nil)
+	}
+	if !isStatus(err, http.StatusNotFound) {
+		return err
+	}
+	return p.snapshots.Delete(ctx, session)
+}
+
+// podPoll is how often Delete looks for a pod that is ending.
+const podPoll = time.Second
 
 func (p *Pods) podsPath() string { return "/api/v1/namespaces/" + p.config.Namespace + "/pods" }
 

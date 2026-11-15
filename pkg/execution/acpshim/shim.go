@@ -244,3 +244,10 @@ func usage(stderr io.Writer) {
   status  print whether a shim runs for DIR
 `, Binary)
 }
+
+// RuntimeFiles are the files in a shim directory that belong to a running
+// shim and mean nothing after it: its socket, its process ID and lock, and
+// the record of how it exited. A copy of the directory leaves them out.
+func RuntimeFiles() []string {
+	return []string{acphost.ACPSocket, proc.SupervisorPidFile, proc.LockFile, acphost.ExitFile}
+}

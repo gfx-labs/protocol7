@@ -6,7 +6,10 @@
 // watches a session. docs/status.md lists what is built.
 package p7
 
-import "github.com/gfx-labs/protocol7/pkg/domain"
+import (
+	"github.com/gfx-labs/protocol7/pkg/domain"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
+)
 
 // BackendHost runs a session as a process on a named machine.
 const BackendHost = domain.BackendHost
@@ -15,6 +18,14 @@ const BackendHost = domain.BackendHost
 // containers and workload identity. A worker update leaves the pods of
 // running sessions alone.
 const BackendKubernetes = domain.BackendKubernetes
+
+// SnapshotStore says where a core worker keeps snapshots of its sessions'
+// directories, in S3-compatible storage: Endpoint, Region, Bucket, Prefix,
+// PathStyle and the list Exclude of what a snapshot leaves out. Credentials
+// come from the standard AWS environment and credential chain. The zero
+// value keeps no snapshots. It is set as coreworker.Config.Snapshots and
+// with the --snapshot-* flags of p7 worker, p7 session and p7 pods.
+type SnapshotStore = snapshot.Config
 
 // Placement says where a session runs.
 type Placement = domain.Placement
