@@ -9,6 +9,7 @@ import (
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
+	"go.temporal.io/server/common/api"
 	"go.temporal.io/server/common/authorization"
 )
 
@@ -22,9 +23,13 @@ type Config struct {
 }
 
 type Grant struct {
-	SystemAdmin bool                `json:"system_admin,omitempty"`
-	Namespaces  map[string][]string `json:"namespaces,omitempty"`
+	SystemAdmin   bool                `json:"system_admin,omitempty"`
+	Namespaces    map[string][]string `json:"namespaces,omitempty"`
+	NamespaceAPIs map[string][]string `json:"namespace_apis,omitempty"`
 }
+
+// namespaceAPIs contains fully qualified, namespace-scoped workflow RPC names.
+type namespaceAPIs map[string]map[string]bool
 
 type Mapper struct {
 	trustDomain spiffeid.TrustDomain
@@ -104,6 +109,21 @@ func grantClaims(grant Grant) (*authorization.Claims, error) {
 			}
 		}
 	}
+	permissions := make(namespaceAPIs, len(grant.NamespaceAPIs))
+	for namespace, methods := range grant.NamespaceAPIs {
+		if namespace == "" || namespace == "*" || len(methods) == 0 {
+			return nil, fmt.Errorf("API grants must name a namespace and methods")
+		}
+		permissions[namespace] = make(map[string]bool, len(methods))
+		for _, method := range methods {
+			qualified := api.WorkflowServicePrefix + method
+			if api.GetMethodMetadata(qualified).Scope != api.ScopeNamespace {
+				return nil, fmt.Errorf("API %q is not a namespace-scoped workflow method", method)
+			}
+			permissions[namespace][qualified] = true
+		}
+	}
+	claims.Extensions = permissions
 	return claims, nil
 }
 
@@ -141,5 +161,14 @@ func (m *Mapper) GetClaims(info *authorization.AuthInfo) (*authorization.Claims,
 	for namespace, role := range grant.Namespaces {
 		claims.Namespaces[namespace] = role
 	}
+	permissions := grant.Extensions.(namespaceAPIs)
+	cloned := make(namespaceAPIs, len(permissions))
+	for namespace, methods := range permissions {
+		cloned[namespace] = make(map[string]bool, len(methods))
+		for method, allowed := range methods {
+			cloned[namespace][method] = allowed
+		}
+	}
+	claims.Extensions = cloned
 	return &claims, nil
 }

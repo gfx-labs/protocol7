@@ -38,6 +38,9 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 		"identities":{
 			"spiffe://test.example/ns/core/sa/temporal":{"system_admin":true},
 			"spiffe://test.example/ns/core/sa/worker":{"namespaces":{"default":["worker"]}},
+			"spiffe://test.example/ns/core/sa/compatible-worker":{"namespaces":{"default":["worker"]},"namespace_apis":{"default":["UpdateWorkflowExecution","PollWorkflowExecutionUpdate","SignalWithStartWorkflowExecution"]}},
+			"spiffe://test.example/ns/project-a/sa/worker":{"namespaces":{"project-a":["worker"]},"namespace_apis":{"project-a":["UpdateWorkflowExecution","PollWorkflowExecutionUpdate","SignalWithStartWorkflowExecution"]}},
+			"spiffe://test.example/ns/core/sa/pods":{"namespaces":{"default":["worker"]},"namespace_apis":{"default":["StartWorkflowExecution","DescribeWorkflowExecution"]}},
 			"spiffe://test.example/ns/navi/sa/navi":{"namespaces":{"default":["writer"],"project-a":["writer"]}}
 		},
 		"prefixes":{
@@ -89,6 +92,24 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 		{"worker heartbeats", "core/sa/worker", "default", "RecordActivityTaskHeartbeat", true},
 		{"worker history", "core/sa/worker", "default", "GetWorkflowExecutionHistory", true},
 		{"worker other namespace", "core/sa/worker", "project-a", "PollActivityTaskQueue", false},
+		{"owner tool and permission updates", "core/sa/compatible-worker", "default", "UpdateWorkflowExecution", true},
+		{"owner update completion", "core/sa/compatible-worker", "default", "PollWorkflowExecutionUpdate", true},
+		{"review filing", "core/sa/compatible-worker", "default", "SignalWithStartWorkflowExecution", true},
+		{"compatible worker cannot direct start", "core/sa/compatible-worker", "default", "StartWorkflowExecution", false},
+		{"compatible worker cannot direct signal", "core/sa/compatible-worker", "default", "SignalWorkflowExecution", false},
+		{"compatible worker cannot terminate", "core/sa/compatible-worker", "default", "TerminateWorkflowExecution", false},
+		{"compatible worker cannot reset", "core/sa/compatible-worker", "default", "ResetWorkflowExecution", false},
+		{"compatible worker cannot delete", "core/sa/compatible-worker", "default", "DeleteWorkflowExecution", false},
+		{"compatible worker cannot create namespace", "core/sa/compatible-worker", "default", "RegisterNamespace", false},
+		{"compatible worker cannot schedule", "core/sa/compatible-worker", "default", "CreateSchedule", false},
+		{"compatible worker cannot multi operation", "core/sa/compatible-worker", "default", "ExecuteMultiOperation", false},
+		{"core updates cannot escape", "core/sa/compatible-worker", "project-a", "UpdateWorkflowExecution", false},
+		{"project update", "project-a/sa/worker", "project-a", "UpdateWorkflowExecution", true},
+		{"project update cannot escape", "project-a/sa/worker", "default", "UpdateWorkflowExecution", false},
+		{"project signal with start cannot escape", "project-a/sa/worker", "default", "SignalWithStartWorkflowExecution", false},
+		{"pod reconciler probe start", "core/sa/pods", "default", "StartWorkflowExecution", true},
+		{"pod reconciler owner describe", "core/sa/pods", "default", "DescribeWorkflowExecution", true},
+		{"pod reconciler cannot update owner", "core/sa/pods", "default", "UpdateWorkflowExecution", false},
 	}
 	for _, method := range []string{"StartWorkflowExecution", "SignalWorkflowExecution", "SignalWithStartWorkflowExecution", "TerminateWorkflowExecution", "ResetWorkflowExecution", "RequestCancelWorkflowExecution", "UpdateWorkflowExecution", "ExecuteMultiOperation", "CreateSchedule", "RegisterNamespace", "ListWorkflowExecutions"} {
 		tests = append(tests, struct {
@@ -119,6 +140,8 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 	}{
 		{"core/sa/worker", "default", false},
 		{"core/sa/worker", "", false},
+		{"core/sa/compatible-worker", "default", false},
+		{"project-a/sa/worker", "default", false},
 		{"core/sa/selfdev", "default", true},
 		{"core/sa/selfdev", "project-a", false},
 	} {
@@ -138,6 +161,46 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 			}
 			if (result.Decision == authorization.DecisionAllow) != test.allow {
 				t.Fatalf("embedded signal decision %v, allow=%v", result.Decision, test.allow)
+			}
+		})
+	}
+	for _, test := range []struct {
+		identity, target string
+		allow            bool
+	}{
+		{"core/sa/compatible-worker", "default", false},
+		{"core/sa/selfdev", "default", true},
+		{"core/sa/pods", "default", true},
+		{"core/sa/pods", "project-a", false},
+	} {
+		t.Run("embedded child "+test.identity+" to "+test.target, func(t *testing.T) {
+			svid := makeSVID(t, ca, key, "spiffe://test.example/ns/"+test.identity)
+			claims, err := exchange(t, frontend, temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID), mapper)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := &workflowservice.RespondWorkflowTaskCompletedRequest{Namespace: "default", Commands: []*commandpb.Command{{
+				CommandType: enumspb.COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION,
+				Attributes:  &commandpb.Command_StartChildWorkflowExecutionCommandAttributes{StartChildWorkflowExecutionCommandAttributes: &commandpb.StartChildWorkflowExecutionCommandAttributes{Namespace: test.target}},
+			}}}
+			result, err := authorizer.Authorize(context.Background(), claims, &authorization.CallTarget{Namespace: "default", APIName: api.WorkflowServicePrefix + "RespondWorkflowTaskCompleted", Request: request})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (result.Decision == authorization.DecisionAllow) != test.allow {
+				t.Fatalf("embedded child decision %v, allow=%v", result.Decision, test.allow)
+			}
+		})
+	}
+	for _, test := range []struct{ namespace, method string }{{"default", "ListNamespaces"}, {"default", "NotAnRPC"}, {"*", "StartWorkflowExecution"}} {
+		t.Run("reject unsafe API policy "+test.namespace+" "+test.method, func(t *testing.T) {
+			input := fmt.Sprintf(`{"trust_domain":"test.example","identities":{"%s":{"namespace_apis":{"%s":["%s"]}}}}`, serverIdentity, test.namespace, test.method)
+			cfg, err := temporalauth.LoadConfig(strings.NewReader(input))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := temporalauth.NewMapper(cfg); err == nil {
+				t.Fatal("accepted wildcard, unknown or cluster API grant")
 			}
 		})
 	}

@@ -11,7 +11,7 @@ import (
 	"go.temporal.io/server/common/authorization"
 )
 
-// Authorizer adds a task-only worker role to Temporal's default authorizer.
+// Authorizer adds task-only worker roles and namespace-scoped API grants.
 // Writer, reader and admin permissions retain the server's normal semantics.
 type Authorizer struct {
 	defaults authorization.Authorizer
@@ -49,7 +49,10 @@ func (a *Authorizer) Authorize(ctx context.Context, claims *authorization.Claims
 			}
 		}
 	}
-	if target.Namespace != "" && claims.Namespaces[target.Namespace]&authorization.RoleWorker != 0 && workerMethod(target.APIName) {
+	permissions, _ := claims.Extensions.(namespaceAPIs)
+	allowedAPI := target.Namespace != "" && permissions[target.Namespace][target.APIName]
+	allowedTask := target.Namespace != "" && claims.Namespaces[target.Namespace]&authorization.RoleWorker != 0 && workerMethod(target.APIName)
+	if allowedAPI || allowedTask {
 		return authorization.Result{Decision: authorization.DecisionAllow, Principal: &commonpb.Principal{Type: claims.AuthType, Name: claims.Subject}}, nil
 	}
 	return a.defaults.Authorize(ctx, claims, target)
