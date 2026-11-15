@@ -57,6 +57,7 @@ type sessionManagerParams struct {
 	fx.In
 
 	Sessions  hostSessions
+	Temporal  client.Client
 	Publisher session.Publisher `optional:"true"`
 	Logger    *slog.Logger
 }
@@ -69,7 +70,7 @@ func newSessionManager(params sessionManagerParams) (*session.Manager, error) {
 	params.Logger.Info("sessions of this machine", "state_dir", params.Sessions.StateDir, "shim", shim)
 	return session.NewManager(session.Config{
 		Root: params.Sessions.StateDir, ShimBinary: shim, Harness: params.Sessions.Harness,
-		Publisher: params.Publisher, Logger: params.Logger,
+		Publisher: params.Publisher, Tools: coreworker.ToolCalls{Temporal: params.Temporal}, Logger: params.Logger,
 	})
 }
 

@@ -34,6 +34,9 @@ type SessionSpec struct {
 	// OpenRetry is the retry policy of opening. Nil is ten attempts over
 	// about five minutes.
 	OpenRetry *temporal.RetryPolicy
+	// Tools are offered to the agent. Their calls reach this workflow, which
+	// must answer them with HandleTools.
+	Tools []Tool
 }
 
 // ErrorHarnessStopped is the type of the application error that opening or
@@ -68,6 +71,10 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	}
 	request := domain.SessionRequest{
 		Models: spec.Models, WorkingDirectory: spec.WorkingDirectory, IdleLimit: spec.IdleLimit,
+	}
+	if len(spec.Tools) > 0 {
+		request.Tools = toolSpecs(spec.Tools)
+		request.Owner = workflow.GetInfo(ctx).WorkflowExecution.ID
 	}
 	for _, input := range spec.Inputs {
 		if input.Source == nil {

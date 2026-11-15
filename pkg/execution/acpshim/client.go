@@ -27,10 +27,13 @@ type Client struct {
 	acp        *acp.ClientSideConnection
 	welcome    acphost.Welcome
 	served     chan struct{}
+	tools      Tools
 }
 
-// Connect dials the shim of dir.
-func Connect(ctx context.Context, dir string) (*Client, error) {
+// Connect dials the shim of dir. With tools set, a session opened or loaded
+// on the connection offers them to the agent, and the connection answers
+// the agent's calls of them. Nil offers none.
+func Connect(ctx context.Context, dir string, tools Tools) (*Client, error) {
 	connection, reader, welcome, err := acphost.Connect(ctx, dir, acphost.WithMethodPrefix(methodPrefix))
 	if err != nil {
 		if reason := ExitReason(dir); reason != "" {
@@ -38,8 +41,8 @@ func Connect(ctx context.Context, dir string) (*Client, error) {
 		}
 		return nil, fmt.Errorf("connect to shim in %s: %w", dir, err)
 	}
-	client := &Client{connection: connection, welcome: welcome, served: make(chan struct{})}
-	client.acp = acp.NewClientSideConnection(agentRequests{}, connection, reader, nil)
+	client := &Client{connection: connection, welcome: welcome, served: make(chan struct{}), tools: tools}
+	client.acp = acp.NewClientSideConnection(agentRequests{tools: tools, shimPid: welcome.Pid}, connection, reader, nil)
 	// The shim reports these to whoever is connected. Nothing here needs them.
 	for _, name := range []string{"turn_end", "export_stats", "cgroup_stats"} {
 		method := acphost.MethodName(methodPrefix, name)
@@ -97,7 +100,7 @@ func (c *Client) Initialize(ctx context.Context, clientInfo acp.Implementation) 
 
 // NewSession opens a new conversation in the harness and returns its ID.
 func (c *Client) NewSession(ctx context.Context, workingDirectory string) (string, error) {
-	response, err := c.acp.NewSession(ctx, acp.NewSessionRequest{Cwd: workingDirectory, McpServers: []acp.McpServer{}})
+	response, err := c.acp.NewSession(ctx, acp.NewSessionRequest{Cwd: workingDirectory, McpServers: c.mcpServers()})
 	if err != nil {
 		return "", c.explain("session/new", err)
 	}
@@ -111,7 +114,7 @@ func (c *Client) NewSession(ctx context.Context, workingDirectory string) (strin
 // not have it open. The harness replays the conversation as it loads.
 func (c *Client) LoadSession(ctx context.Context, sessionID, workingDirectory string) error {
 	_, err := c.acp.LoadSession(ctx, acp.LoadSessionRequest{
-		SessionId: acp.SessionId(sessionID), Cwd: workingDirectory, McpServers: []acp.McpServer{},
+		SessionId: acp.SessionId(sessionID), Cwd: workingDirectory, McpServers: c.mcpServers(),
 	})
 	if err != nil {
 		return c.explain("session/load", err)
@@ -149,8 +152,11 @@ func (c *Client) explain(method string, err error) error {
 
 // agentRequests answers what the agent asks of its client. The client offers
 // no file, terminal or elicitation capability: the agent does that work
-// itself, in its own environment.
-type agentRequests struct{}
+// itself, in its own environment. It answers MCP requests for the tools.
+type agentRequests struct {
+	tools   Tools
+	shimPid int
+}
 
 func (agentRequests) SessionUpdate(context.Context, acp.SessionNotification) error { return nil }
 

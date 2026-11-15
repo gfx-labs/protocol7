@@ -66,7 +66,10 @@ type Config struct {
 	Harness    Harness
 	// Publisher receives the journal's frames. Nil publishes nothing.
 	Publisher Publisher
-	Logger    *slog.Logger
+	// Tools runs the calls of sessions opened with tools. Nil offers no
+	// tools to any session.
+	Tools  ToolCaller
+	Logger *slog.Logger
 }
 
 // Manager runs sessions on this machine.
@@ -182,7 +185,7 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 		}
 	}
 
-	client, err = acpshim.Connect(ctx, dir)
+	client, err = acpshim.Connect(ctx, dir, m.tools(*rec))
 	if err != nil {
 		// A harness that exits at once can take its shim down before the
 		// connection is made.
@@ -306,7 +309,7 @@ func (m *Manager) RunTurn(ctx context.Context, request domain.TurnRequest, contr
 		if !acpshim.Alive(dir) {
 			return interrupted(p), nil
 		}
-		if client, err = acpshim.Connect(ctx, dir); err != nil {
+		if client, err = acpshim.Connect(ctx, dir, m.tools(rec)); err != nil {
 			return none, err
 		}
 		defer client.Close()

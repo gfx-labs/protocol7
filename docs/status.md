@@ -15,7 +15,7 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/execution/session` | Sessions on this machine: a directory per session with its workspace, shim directory and record. Places git clone inputs. Runs a turn that survives its caller. A harness that exits while its session starts is reported with its exit status and its last five lines of output |
 | `pkg/transport/stream` | Session frames on NATS JetStream, one subject per session, and an embedded NATS server for local use |
 | `pkg/orchestration/activity`, `pkg/orchestration/coreworker` | The activities `p7.OpenSession`, `p7.RunTurn` and `p7.CloseSession`, and the worker that serves them on `local-<host>` |
-| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
+| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, `SessionSpec.Tools` with `HandleTools`, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
 | `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
 | `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
 | `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands and git. It holds no harness and no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. No pod runs this image: protocol7-selfdev builds the commands from this source at a pinned commit, in its own image |
@@ -34,6 +34,16 @@ fx resolves the components when the process starts, so a missing one is not a co
 - The turn ID travels in the `_meta` of `session/prompt`, which the journal keeps. A repeated `p7.RunTurn` with the same ID reads the journal first. It returns the recorded result, or attaches to the running turn, and never prompts twice.
 - A worker that shuts down leaves the turn running in the shim. A cancel request or the activity timeout sends `session/cancel` and still returns the turn's result.
 - A shim that stopped during a turn makes that turn end as `interrupted`. The next turn starts a new shim, which loads the conversation.
+
+## Tools
+
+A workflow offers tools to a session's agent with `SessionSpec.Tools` and answers their calls with `p7.HandleTools`. Each `p7.Tool` has a name, a description, a JSON Schema for its arguments and a `Run` function that runs in the workflow.
+
+- The core worker offers the tools to the harness as one MCP server of type `acp` in `session/new` and `session/load`. The agent sends MCP requests as `mcp/message` on the same ACP connection, so there is no second process or endpoint. towa supports this from 0.4.0.
+- `tools/list` is answered from the session's request. `tools/call` becomes the Temporal update `p7.ToolCall` to the workflow that opened the session, sent with no run ID so that it reaches the current run after Continue-As-New.
+- The update ID is the session, the shim's process ID and the MCP request ID. A call that the shim sends again to a later connection gets the first call's result and does not run twice.
+- The update's validator refuses a session the workflow did not open and a tool it did not offer, before the call enters history. A `Run` error is returned to the agent as a result with `isError`, which is how MCP reports a tool that failed.
+- What a call may do is decided in the consumer's workflow. It runs activities for any work outside the workflow.
 
 ## Run it
 
@@ -96,6 +106,7 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | `pkg/execution/journal` | The decoder on the journal of a real towa session that was cancelled, loaded again and interrupted (`testdata/towa-recovery.ndjson`) |
 | `pkg/execution/session` | The manager with the real shim and a scripted ACP agent, both run from the test binary: a repeated turn, a turn picked up and cancelled, a shim stopped mid-turn, a harness that exits while it starts, and context hidden from viewers |
 | `pkg/transport/stream` | Publish, deduplication and an ordered read against the embedded NATS server |
+| `pkg/p7` | A workflow's tool called by a scripted agent over `mcp/message`, through the real shim, the core worker and a Temporal development server, and a tool it did not offer refused. Skipped when the `temporal` CLI is not on `PATH` |
 | `pkg/transport/cli`, `protocol7-selfdev/pkg/cli` | Every command's fx graph has what its components ask for. Nothing is built or started |
 | `protocol7-selfdev/pkg/chat` | The chat workflow in Temporal's test environment: message order, stop, close, cancel, and a chat that cannot open |
 
@@ -113,6 +124,7 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 | A run pod's SPIFFE ID carries its profile, repository and run ID | The deployment has one worker pod with one identity, which every chat shares |
 | Permission requests are decided by policy | Every permission request is allowed |
 | Limits, typed prompts, approvals, notices, steering | None of them |
+| `p7.Tool` registers a user activity, called through ticketd with `p7 call` | A tool is a function in the workflow that opened the session, called over the ACP connection as a Temporal update. A tool registered on another worker is reached by the workflow running an activity on that worker's queue |
 
 ## Known limits
 

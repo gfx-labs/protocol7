@@ -73,6 +73,11 @@ type SessionRequest struct {
 	// IdleLimit is how long the session's processes are kept with nobody
 	// connected. The conversation outlives them.
 	IdleLimit time.Duration `json:"idle_limit,omitempty"`
+	// Tools are offered to the agent as one MCP server over the ACP
+	// connection. A call is sent as the update UpdateToolCall to Owner.
+	Tools []ToolSpec `json:"tools,omitempty"`
+	// Owner is the ID of the workflow that opened the session.
+	Owner string `json:"owner,omitempty"`
 }
 
 // SessionHandle is the result of ActivityOpenSession.
