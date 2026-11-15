@@ -1,6 +1,6 @@
 # Status
 
-What is built, what was run, and where the code departs from `plan.md`. Last updated 2026-11-13.
+What is built, what was run, and where the code departs from `plan.md`. Last updated 2026-11-15.
 
 `plan.md` describes the design. This file describes the code. Where they disagree, the code is what exists and the plan is what is intended.
 
@@ -17,6 +17,7 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/orchestration/activity`, `pkg/orchestration/coreworker` | The activities `p7.OpenSession`, `p7.RunTurn` and `p7.CloseSession`, and the worker that serves them on `local-<host>` |
 | `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, `SessionSpec.Tools` with `HandleTools`, `PromptTyped` with `WithReports`, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
 | `pkg/p7` limits | `SessionSpec.Limit` and `Priority`, `WorkerConfig.Limits` (`p7.LimitConfig`), `p7.QueryLimit`. See "Session limit" below |
+| `pkg/execution/snapshot`, `p7.SnapshotStore` | Snapshots of a session's directory in S3-compatible storage. See "Session snapshots" below |
 | `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
 | `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
 | `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands and git. It holds no harness and no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. No pod runs this image: protocol7-selfdev builds the commands from this source at a pinned commit, in its own image |
@@ -56,6 +57,21 @@ A workflow offers tools to a session's agent with `SessionSpec.Tools` and answer
 - A turn that ended normally with no valid report gets one repair turn, with the same session and the turn ID `<id>-repair`. It says what was wrong and repeats the schema. After that the call fails with `*p7.ReportError`, with `Kind` `missing` or `invalid`. A turn that failed, was cancelled or was interrupted is not repaired and fails with `turn_ended`.
 - The report is the tool call. Text in the agent's message is never parsed.
 - It was run with a scripted agent, the real shim, the core worker and a Temporal development server (`pkg/p7/report_test.go`). It was not run with a real harness, so whether a model calls the tool reliably from the prompt is not known.
+
+## Session snapshots
+
+A session's directory can be kept in S3-compatible object storage, so that a session whose machine or pod is lost goes on somewhere else. It is in p7, for the host and the kubernetes backend alike. With no `--snapshot-bucket` there are no snapshots and nothing changes.
+
+- Configuration: `p7.SnapshotStore` (`snapshot.Config`) with `Endpoint`, `Region`, `Bucket`, `Prefix`, `PathStyle` and `Exclude`. It is `coreworker.Config.Snapshots`, and the flags `--snapshot-endpoint`, `--snapshot-region`, `--snapshot-bucket`, `--snapshot-prefix`, `--snapshot-path-style` and `--snapshot-exclude` (each also `P7_SNAPSHOT_*`) of `p7-worker worker`, `p7-worker session` and `p7 worker`. `p7-worker pods` takes the same flags, for deleting snapshots. `p7 dev` has none. Credentials are not configuration: the standard AWS environment, shared credentials file (with `AWS_PROFILE`, SSO and credential processes) and web identity, and on Amazon's own endpoint the instance or container role, read again every five minutes so that a rewritten credential file is followed. With none found the client sends anonymous requests.
+- What is kept: the whole session directory, `<state dir>/sessions/<id>`: the workspace (`work/`), the shim directory with the journal, and `session.json`. Left out: the shim's socket, pid file, lock and exit record, whatever matches `Exclude` (default `node_modules` and `go-build`; a name with no slash matches at any depth, a path is from the session directory, `path.Match` syntax), and anything that is not a regular file, a directory or a symbolic link that stays inside the tree. An excluded directory is skipped with its content.
+- The harness's conversation: with snapshots on, the manager gives the harness `--store.root=<session dir>/harness` (`--harness-store-flag`, empty to pass none), so that towa's conversation is in the snapshot. A harness with no such flag keeps its conversation elsewhere. Its snapshot then restores files and journal, `session/load` is refused, and the next turn starts a new conversation seeded with a summary of the journal. A session that started before snapshots were turned on has its conversation in towa's own store and falls back the same way.
+- Key and format: `<prefix>/<session id>/workspace.tar.zst`. Go's `archive/tar` in PAX format (modes, symbolic links, nanosecond modification times; no owners), compressed with `klauspost/compress/zstd` at its default level. It is streamed through a pipe into a multipart upload with 16 MiB parts, with no temporary file.
+- When it is written: after `OpenSession` and after each turn that returns, and by `coreworker.Worker.Stop` (SIGTERM) for every session on the machine that is not closed. The tree is walked first and fingerprinted (names, modes, sizes, file modification times, link targets). Nothing is uploaded if the fingerprint is the one in the user metadata of the existing object (or the last one this process wrote). The upload goes to `workspace.tar.zst.tmp`, which is copied over the real key and removed, so a crash or failure mid-upload keeps the previous snapshot. An object over 5 GiB is copied with `ComposeObject`. A snapshot that fails is logged and does not fail the turn. The next one tries again. A file that changes while it is being written is cut or zero-padded at the size the walk saw, and the next walk sees the change.
+- When it is read: `coreworker.Config.Session`, which `p7-worker session` sets from `--session`, makes `Start` restore that session before the worker polls, and fail if it cannot. Any manager also restores a session when `Open`, `RunTurn` finds no `session.json` for it and a snapshot exists, which covers the host worker on a machine whose disk was lost. A session whose directory is on the machine is not restored. The archive is extracted into `.restore-*` beside the session directory, and the stream is read to its end with the zstd checksum before the directory is renamed into place, so a cut or damaged snapshot leaves what was there. Entries with `..`, absolute names, a symbolic link that may leave the tree (absolute, climbing above the root, or with `..` after another element), an entry below a link, and any type but file, directory and symbolic link are refused with `snapshot.ErrUnsafeArchive`. The `shim_pid` of the record is cleared, so the next turn starts a shim and the harness loads the conversation. The journal continues from its last sequence number.
+- Deleting: `Manager.Close` deletes the snapshot after marking the session closed, and a closed session is never snapshotted. `p7-worker pods`, with the snapshot flags, deletes the pod, polls until the API says it is gone and then deletes the snapshot, so that a pod's worker stopping cannot write it again.
+- Library: `github.com/minio/minio-go/v7`. It adds about 4 MB to `p7-worker` (40.1 MB to 44.3 MB). A probe program with the S3 service, config and upload manager of `aws-sdk-go-v2` linked to 16.4 MB, against 1.9 MB for an empty program, which was not tried in p7-worker itself. `johannesboyne/gofakes3` is a test dependency, in `pkg/execution/snapshot/snapshottest`.
+- Needs in the deployment, not done here: the bucket; credentials; the flags in the session pod template and for `p7-worker pods`; a `terminationGracePeriodSeconds` that covers the snapshot at stop (the command's stop timeout is 12 minutes when snapshots are on); and a lifecycle rule for incomplete multipart uploads. Nothing restarts a lost session pod yet.
+- Work since the last snapshot, at most the turn in progress, is lost on a hard node failure. The workflow's retry runs the turn again.
 
 ## Session limit
 
@@ -122,6 +138,8 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | A turn that finds its harness stopped and cannot start it again, in the same setup | The turn fails in under a second with the harness's last lines, and the chat stays open. Before `96b257b` it was retried ten times over 304 seconds |
 | A sonnet chat and an opus chat through PDP with a Claude subscription login (protocol7 `8e18d5a`, selfdev `ccac7aa`, PDP `3ba915a` under SPIRE) | PDP refreshed the login on the first request. Each chat cloned, edited and committed, and a tool call reached the Go module proxy. towa's log shows every response came from the chat's model on that login, and the worker held no credential |
 
+Snapshots, on 2026-11-15 with Temporal CLI 1.10.1 (server 1.32.2) and gofakes3 1.2.0 as the store: `go vet ./...` and `go test ./...` with the CLI on `PATH`, and the tests in "Tests" below passed. The Temporal tests of `pkg/p7` took 18 seconds in all. The binary sizes above are from `go build ./cmd/p7-worker` before and after.
+
 ## Tests
 
 `go test ./...` in both repositories. They need no network and no harness.
@@ -133,6 +151,9 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | `pkg/transport/stream` | Publish, deduplication and an ordered read against the embedded NATS server |
 | `pkg/p7` | A workflow's tool called by a scripted agent over `mcp/message`, through the real shim, the core worker and a Temporal development server, and a tool it did not offer refused. Typed prompts: a report, a wrapped report, a call refused and fixed in the turn, a repair turn, and a `ReportError` after the repair turn. Skipped when the `temporal` CLI is not on `PATH` |
 | `pkg/p7` limits | With the same stack: with a limit of two, four sessions on one name run two at a time, and the higher priority waiter opens before an earlier lower one. A workflow that ends holding a place is freed by reconciliation, a cancelled waiter leaves the queue, and an unconfigured name fails. Also the wildcard rule and priority with aging. Skipped without the `temporal` CLI |
+| `pkg/execution/snapshot` | The archive and the store against an in-process S3 (gofakes3): a round trip keeping modes, links, long names and times; excludes, a socket and a link that points out left out; an unchanged tree not uploaded again, also by a new store; a failed copy keeping the previous snapshot; a damaged object leaving the directory alone; entries that leave the workspace refused; a 40 MB snapshot in several parts; deleting |
+| `pkg/p7` snapshots | With a Temporal development server and the same fake S3: a session writes files and has a conversation in two turns, its worker is stopped and its disk removed, a worker with a new empty state directory starts, and the next turn sees the files and the conversation (the scripted agent keeps its conversation in `--store.root` and refuses `session/load` without it). Run twice: the new worker is started for the session, and it restores the session on its first activity. Also that the journal has every turn once in order, that an excluded directory is gone, and that closing deletes the snapshot. Skipped without the `temporal` CLI |
+| `pkg/orchestration/kubernetes` snapshots | Deleting a pod waits until the API reports it gone, then deletes the session's snapshot |
 | `pkg/transport/cli`, `protocol7-selfdev/pkg/cli` | Every command's fx graph has what its components ask for. Nothing is built or started |
 | `protocol7-selfdev/pkg/chat` | The chat workflow in Temporal's test environment: message order, stop, close, cancel, and a chat that cannot open |
 
@@ -145,7 +166,7 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 | Domain types are protobuf | Go structs with JSON tags, in `pkg/domain` |
 | Clients read live output through ticketd | `p7.Client` reads NATS itself. ticketd does not exist |
 | A new chat is a ticket of a chat kind | A chat is a Temporal workflow that the selfdev web server starts. There are no tickets |
-| Host, container and Kubernetes backends | Host and Kubernetes. On `kubernetes`, `p7-worker pods` (queue `p7-kubernetes`) creates one pod per session from a JSON pod template and deletes it on close. `p7-worker session` in that pod runs the host session manager on the queue `p7-session-<id>`, where the session's turns run. A session pod keeps the image it was created with. Run against a Temporal dev server with a stand-in for the pod API (`pkg/p7/kubernetes_test.go`), not in a cluster. No container backend. The workspace is on the pod's own disk (gfx-labs/protocol7#6), and pods nobody owns are not cleaned up (gfx-labs/protocol7#5) |
+| Host, container and Kubernetes backends | Host and Kubernetes. On `kubernetes`, `p7-worker pods` (queue `p7-kubernetes`) creates one pod per session from a JSON pod template and deletes it on close. `p7-worker session` in that pod runs the host session manager on the queue `p7-session-<id>`, where the session's turns run. A session pod keeps the image it was created with. Run against a Temporal dev server with a stand-in for the pod API (`pkg/p7/kubernetes_test.go`), not in a cluster. No container backend. The workspace is on the pod's own disk and, with snapshots on, also in object storage (see "Session snapshots"). Pods nobody owns are not cleaned up (gfx-labs/protocol7#5) |
 | Model and git credentials come through PDP | On a workstation, sessions use the machine's own logins, which section 5 allows for trusted host execution. The talos-metal deployment puts the model credentials in PDP. Its git credential is a GitHub App token that a second container writes to a file, not a PDP binding |
 | A run pod's SPIFFE ID carries its profile, repository and run ID | The talos-metal deployment has one worker pod with one identity, which every chat shares. Session pods carry the label `p7.gfx-labs.io/session`, which a ClusterSPIFFEID can render into a per-session ID, and the deployment does not use them yet |
 | Permission requests are decided by policy | Every permission request is allowed |
@@ -155,6 +176,8 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 | `p7.Tool` registers a user activity, called through ticketd with `p7 call` | A tool is a function in the workflow that opened the session, called over the ACP connection as a Temporal update. A tool registered on another worker is reached by the workflow running an activity on that worker's queue |
 
 ## Known limits
+
+- Snapshots: a session is snapshotted only when a turn or an open returns, and when the worker stops. A turn that runs for hours is lost with its node. The snapshot of a session whose pod was deleted while its worker could not be told to close may come back for as long as that pod runs. Credentials that cannot be read make every snapshot fail with a warning, and the sessions go on without them. The 5 GiB multipart copy, a real S3 or SeaweedFS, and the real towa's conversation in `--store.root` were not run.
 
 - A chat's agent runs unsandboxed as the user who runs the worker, with that user's git and ssh credentials. The chat's instructions tell it to push only when asked. Nothing enforces that.
 - No chat has pushed a branch or opened a pull request yet. That path is not run.
@@ -168,6 +191,11 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 - Stop can take up to about nine seconds to end a turn, because the cancel waits for the activity's next heartbeat.
 
 ## Not run
+
+- Snapshots against SeaweedFS, MinIO or Amazon S3, and with a PDP-backed credential file. The tests use gofakes3 only.
+- Snapshots with the real towa. The flag `--store.root` was checked to be accepted (`towa config`, v0.4.0), but no turn was run, because there is no model credential here, so whether towa loads a conversation from the restored directory is not known.
+- A copy of a snapshot over 5 GiB (`ComposeObject`).
+- A kill with SIGKILL during an upload, and a snapshot of a tree that changes while it is written, against a real store.
 
 - Worker Versioning. `p7.WorkerConfig` takes a deployment and build ID, and that code was only compiled.
 - A session whose shim exits on its idle limit. Stopping the shim by hand between turns was run, and the next turn loaded the conversation.
