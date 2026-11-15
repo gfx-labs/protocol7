@@ -234,69 +234,9 @@ A tag is a movable name. Where provenance matters, require a signed tag from an 
 
 A knowledge collection is a named, access-scoped reference to a path in an existing git repository. It is not a document store or editor inside protocol7. It can be mounted as an input, and authorized tools can list, read and search it at a pinned revision. Mounting and querying are separate choices, and neither adds content to a prompt automatically. protocol7 does not host a git forge. Collections live on the existing forge and are fetched through PDP git access.
 
-### Artifacts
+### Artifacts a consumer shares
 
-Proposed 2026-11-15 (user). Not built.
-
-An artifact is a file or a zip that a person or an agent saves so that later work can read it without putting it in git: mockups, reference code, screenshots, reports, logs. It is the same artifact storage as in section 2 and the Artifact input source above.
-
-**Storage.** Artifacts live in one bucket of their own, `p7-artifacts`, and nothing else is written to it. That keeps its backups separate from those of other data. Bytes are stored under their digest, `sha256/<hex>`, so the same content is kept once. A name index maps `<project>/<name>` to a digest and keeps every earlier digest of a name, so a name can move while old references stay readable. On `talos-metal` the bucket is on the cluster's SeaweedFS S3 service, which already runs. Locally it is a directory.
-
-**Reference.** An artifact is referred to as `p7://sha256:<hex>`, optionally with `#<name>` for display. A reference is what goes into workflow history, ticket fields, chat messages, issues and pull request bodies. The bytes never enter history.
-
-**Retention.** 90 days unless pinned, as above. A name keeps its newest digest pinned. A pin can also be set by hand.
-
-**Library.** `pkg/p7` provides:
-
-```go
-// ArtifactConfig says where artifacts are stored. The worker that runs the
-// artifact activities holds it, and no session sees it.
-type ArtifactConfig struct {
-	// Endpoint, Bucket and Region of the S3 service. An empty Endpoint
-	// stores artifacts in Dir instead.
-	Endpoint string
-	Bucket   string
-	Region   string
-	// CredentialsFile holds the access key, read on every call.
-	CredentialsFile string
-	Dir             string
-}
-
-// ArtifactRef names stored bytes by their digest.
-type ArtifactRef struct {
-	Digest string `json:"digest"` // "sha256:<hex>"
-	Name   string `json:"name,omitempty"`
-	Size   int64  `json:"size"`
-}
-
-// ArtifactTools are the tools a workflow offers its session to save and
-// read artifacts, scoped to project. Their calls run activities on the
-// worker that registered RegisterArtifacts.
-func ArtifactTools(project string) []Tool
-
-// RegisterArtifacts registers the artifact activities on a worker.
-func (w *Worker) RegisterArtifacts(config ArtifactConfig) error
-
-// SaveArtifact and ReadArtifact are the same operations for workflow code.
-func SaveArtifact(ctx workflow.Context, project, name, workspacePath string, session *Session) (ArtifactRef, error)
-func ReadArtifact(ctx workflow.Context, ref ArtifactRef, session *Session, workspacePath string) error
-```
-
-The tools are:
-
-| Tool | Arguments | Does |
-|---|---|---|
-| `artifact_save` | `path` in the workspace, `name` | Uploads the file or directory (zipped), records the name, returns the reference |
-| `artifact_get` | `ref` or `name`, `path` | Places the artifact in the workspace, unpacking a zip into a directory |
-| `artifact_list` | name prefix | Lists names in the project with digest, size, age and pin |
-
-A tool call runs in the workflow as every `p7.Tool` does, and starts an activity on the core worker of the session's machine. That activity reads or writes the session's workspace and streams the bytes to the bucket, so the bytes pass through neither Temporal nor the model. The session's agent holds no storage credential. A workflow that does not offer the tools gives its agent no access to artifacts. Paths are checked like inputs: no traversal, no destination outside the workspace, no symlink out of it, and a size limit.
-
-**People.** The selfdev web server saves and serves artifacts for a person, behind the tailnet, and its page lists them. `p7 artifact put <file> --project <p> --name <n>` and `p7 artifact get` do the same from a shell with the storage configuration. A GitHub issue links to the web UI or carries the reference, so files that should stay private do not go to GitHub.
-
-**Inputs.** `p7.Input{Source: p7.Artifact{Ref: ref}, Destination: "/inputs/ui"}` places an artifact read-only when a session opens, which closes the open item "a consumer activity reads an artifact a session saved, by name" for sessions. Activities read one by reference with the same code.
-
-Open: who may set a pin or delete a name, and whether artifacts are listed across projects.
+Decided 2026-11-15 (user). Files that people and agents share across chats and jobs without git, such as mockups or reference code, are a consumer feature and not part of protocol7's library or CLI. A consumer builds them on what `pkg/p7` already has: `p7.Tool` for the agent's save and read calls, which run in the consumer's workflow and its activities, and `p7.HostWorkspace` for a process beside the core worker that reads or writes the session's workspace. protocol7-selfdev does this with a bucket of its own (gfx-labs/protocol7-selfdev#4).
 
 ### Reusable execution environments
 
