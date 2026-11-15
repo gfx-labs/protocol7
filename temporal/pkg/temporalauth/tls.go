@@ -94,10 +94,16 @@ func (p *TLSProvider) GetInternodeServerConfig() (*tls.Config, error) {
 	return p.serverConfig(true), nil
 }
 
-func (p *TLSProvider) GetFrontendClientConfig() (*tls.Config, error) {
-	cfg := tlsconfig.MTLSClientConfig(p.svid, p.bundles, tlsconfig.AuthorizeID(p.identity))
+// ClientTLSConfig is shared by gRPC callers and the raw TLS frontend proxy.
+func ClientTLSConfig(svid x509svid.Source, bundles x509bundle.Source, serverID spiffeid.ID) *tls.Config {
+	cfg := tlsconfig.MTLSClientConfig(svid, bundles, tlsconfig.AuthorizeID(serverID))
 	cfg.MinVersion = tls.VersionTLS13
-	return cfg, nil
+	cfg.NextProtos = []string{"h2"}
+	return cfg
+}
+
+func (p *TLSProvider) GetFrontendClientConfig() (*tls.Config, error) {
+	return ClientTLSConfig(p.svid, p.bundles, p.identity), nil
 }
 
 func (p *TLSProvider) GetInternodeClientConfig() (*tls.Config, error) {

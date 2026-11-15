@@ -99,7 +99,7 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			svid := makeSVID(t, ca, key, "spiffe://test.example/ns/"+test.identity)
-			cfg := tlsconfig.MTLSClientConfig(svid, bundle, tlsconfig.AuthorizeID(serverSVID.ID))
+			cfg := temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID)
 			claims, err := exchange(t, frontend, cfg, mapper)
 			if err != nil {
 				t.Fatal(err)
@@ -124,7 +124,7 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 	} {
 		t.Run("embedded signal "+test.identity+" to "+test.target, func(t *testing.T) {
 			svid := makeSVID(t, ca, key, "spiffe://test.example/ns/"+test.identity)
-			claims, err := exchange(t, frontend, tlsconfig.MTLSClientConfig(svid, bundle, tlsconfig.AuthorizeID(serverSVID.ID)), mapper)
+			claims, err := exchange(t, frontend, temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID), mapper)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -144,7 +144,7 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 	for _, identity := range []string{"spiffe://test.example/ns/unknown/sa/user", "spiffe://other.example/ns/core/sa/selfdev", "spiffe://test.example/ns/core-lookalike/sa/selfdev"} {
 		t.Run("reject "+identity, func(t *testing.T) {
 			svid := makeSVID(t, ca, key, identity)
-			cfg := tlsconfig.MTLSClientConfig(svid, bundle, tlsconfig.AuthorizeID(serverSVID.ID))
+			cfg := temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID)
 			if _, err := exchange(t, frontend, cfg, mapper); err == nil {
 				t.Fatal("unexpected authorized identity")
 			}
@@ -159,7 +159,7 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 	t.Run("untrusted client certificate", func(t *testing.T) {
 		otherCA, otherKey := makeCA(t)
 		svid := makeSVID(t, otherCA, otherKey, "spiffe://test.example/ns/core/sa/selfdev")
-		cfg := tlsconfig.MTLSClientConfig(svid, bundle, tlsconfig.AuthorizeID(serverSVID.ID))
+		cfg := temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID)
 		if _, err := exchange(t, frontend, cfg, mapper); err == nil {
 			t.Fatal("accepted untrusted client")
 		}
@@ -170,7 +170,7 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 			t.Fatal(err)
 		}
 		svid := makeSVID(t, ca, key, "spiffe://test.example/ns/project-a/sa/service")
-		cfg := tlsconfig.MTLSClientConfig(svid, bundle, tlsconfig.AuthorizeID(serverSVID.ID))
+		cfg := temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID)
 		if _, err := exchange(t, internal, cfg, mapper); err == nil {
 			t.Fatal("project reached internal frontend")
 		}
@@ -183,7 +183,7 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 		}
 	})
 	t.Run("reject wrong server identity", func(t *testing.T) {
-		cfg := tlsconfig.MTLSClientConfig(serverSVID, bundle, tlsconfig.AuthorizeID(spiffeid.RequireFromString("spiffe://test.example/ns/other/sa/temporal")))
+		cfg := temporalauth.ClientTLSConfig(serverSVID, bundle, spiffeid.RequireFromString("spiffe://test.example/ns/other/sa/temporal"))
 		if _, err := exchange(t, frontend, cfg, mapper); err == nil {
 			t.Fatal("accepted wrong server identity")
 		}
@@ -221,6 +221,10 @@ func exchange(t *testing.T, serverConfig, clientConfig *tls.Config, mapper *temp
 		connection := tls.Server(raw, serverConfig)
 		if err := connection.Handshake(); err != nil {
 			result <- outcome{err: err}
+			return
+		}
+		if connection.ConnectionState().NegotiatedProtocol != "h2" {
+			result <- outcome{err: fmt.Errorf("gRPC connection did not negotiate HTTP/2")}
 			return
 		}
 		claims, err := mapper.GetClaims(&authorization.AuthInfo{TLSConnection: &credentials.TLSInfo{State: connection.ConnectionState()}})
