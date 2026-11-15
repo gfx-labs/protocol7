@@ -19,7 +19,7 @@ on:
 jobs:
   image:
     if: github.ref == 'refs/heads/master'
-    runs-on: talos-metal-gfx
+    runs-on: talos-metal-gfx-public
     permissions:
       contents: read
       packages: write
