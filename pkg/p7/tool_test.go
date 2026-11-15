@@ -184,11 +184,11 @@ func toolWorkflow(ctx workflow.Context, host, prompt string) (string, error) {
 	return turn.Text, nil
 }
 
-// A tool the workflow offers is listed to the agent over the ACP connection
-// and called through a Temporal update to the workflow. A tool the workflow
-// did not offer is refused, and the agent reads the refusal as the tool's
-// error.
-func TestASessionCallsItsWorkflowsTools(t *testing.T) {
+// startStack runs a Temporal development server and a core worker for host
+// "test", whose harness is the tool agent. It skips the test when the
+// temporal CLI is not on PATH.
+func startStack(t *testing.T) (client.Client, string) {
+	t.Helper()
 	temporalCLI, err := exec.LookPath("temporal")
 	if err != nil {
 		t.Skip("the temporal CLI is not on PATH")
@@ -229,8 +229,18 @@ func TestASessionCallsItsWorkflowsTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(core.Stop)
+	return temporalClient, server.FrontendHostPort()
+}
 
-	consumer, err := p7.NewWorker(p7.WorkerConfig{TaskQueue: "consumer", TemporalAddress: server.FrontendHostPort()})
+// A tool the workflow offers is listed to the agent over the ACP connection
+// and called through a Temporal update to the workflow. A tool the workflow
+// did not offer is refused, and the agent reads the refusal as the tool's
+// error.
+func TestASessionCallsItsWorkflowsTools(t *testing.T) {
+	temporalClient, address := startStack(t)
+	ctx := t.Context()
+
+	consumer, err := p7.NewWorker(p7.WorkerConfig{TaskQueue: "consumer", TemporalAddress: address})
 	if err != nil {
 		t.Fatal(err)
 	}
