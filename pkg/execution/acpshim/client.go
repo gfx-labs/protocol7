@@ -32,7 +32,8 @@ type Client struct {
 
 // Connect dials the shim of dir. With tools set, a session opened or loaded
 // on the connection offers them to the agent, and the connection answers
-// the agent's calls of them. Nil offers none.
+// the agent's calls of them. Nil offers none. If tools also implements
+// Permissions, it decides the agent's permission requests.
 func Connect(ctx context.Context, dir string, tools Tools) (*Client, error) {
 	connection, reader, welcome, err := acphost.Connect(ctx, dir, acphost.WithMethodPrefix(methodPrefix))
 	if err != nil {
@@ -42,7 +43,8 @@ func Connect(ctx context.Context, dir string, tools Tools) (*Client, error) {
 		return nil, fmt.Errorf("connect to shim in %s: %w", dir, err)
 	}
 	client := &Client{connection: connection, welcome: welcome, served: make(chan struct{}), tools: tools}
-	client.acp = acp.NewClientSideConnection(agentRequests{tools: tools, shimPid: welcome.Pid}, connection, reader, nil)
+	permissions, _ := tools.(Permissions)
+	client.acp = acp.NewClientSideConnection(agentRequests{tools: tools, permissions: permissions, shimPid: welcome.Pid}, connection, reader, nil)
 	// The shim reports these to whoever is connected. Nothing here needs them.
 	for _, name := range []string{"turn_end", "export_stats", "cgroup_stats"} {
 		method := acphost.MethodName(methodPrefix, name)
@@ -154,24 +156,12 @@ func (c *Client) explain(method string, err error) error {
 // no file, terminal or elicitation capability: the agent does that work
 // itself, in its own environment. It answers MCP requests for the tools.
 type agentRequests struct {
-	tools   Tools
-	shimPid int
+	tools       Tools
+	permissions Permissions
+	shimPid     int
 }
 
 func (agentRequests) SessionUpdate(context.Context, acp.SessionNotification) error { return nil }
-
-// RequestPermission allows the call. What a session may do is set by its
-// environment and grants, not by a prompt to a person who is not there.
-func (agentRequests) RequestPermission(_ context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
-	for _, kind := range []acp.PermissionOptionKind{acp.PermissionOptionKindAllowOnce, acp.PermissionOptionKindAllowAlways} {
-		for _, option := range request.Options {
-			if option.Kind == kind {
-				return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(option.OptionId)}, nil
-			}
-		}
-	}
-	return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeCancelled()}, nil
-}
 
 func (agentRequests) CompleteElicitation(context.Context, acp.CompleteElicitationNotification) error {
 	return nil

@@ -37,6 +37,11 @@ type SessionSpec struct {
 	// Tools are offered to the agent. Their calls reach this workflow, which
 	// must answer them with HandleTools.
 	Tools []Tool
+	// Permissions decides the agent's permission requests. Nil allows every
+	// request. Requests reach this workflow, which must answer them with
+	// HandlePermissions and this same function. An error from it, and a
+	// request that cannot reach the workflow, deny the request.
+	Permissions func(ctx workflow.Context, request PermissionRequest) (PermissionDecision, error)
 }
 
 // ErrorHarnessStopped is the type of the application error that opening or
@@ -74,6 +79,11 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	}
 	if len(spec.Tools) > 0 {
 		request.Tools = toolSpecs(spec.Tools)
+	}
+	if spec.Permissions != nil {
+		request.Permissions = true
+	}
+	if len(spec.Tools) > 0 || spec.Permissions != nil {
 		request.Owner = workflow.GetInfo(ctx).WorkflowExecution.ID
 	}
 	for _, input := range spec.Inputs {

@@ -78,6 +78,9 @@ type SessionRequest struct {
 	Tools []ToolSpec `json:"tools,omitempty"`
 	// Owner is the ID of the workflow that opened the session.
 	Owner string `json:"owner,omitempty"`
+	// Permissions makes the owner decide the agent's permission requests,
+	// each sent as the update UpdatePermission to Owner. False allows them all.
+	Permissions bool `json:"permissions,omitempty"`
 }
 
 // SessionHandle is the result of ActivityOpenSession.
