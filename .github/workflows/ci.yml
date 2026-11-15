@@ -1,0 +1,46 @@
+name: ci
+
+# Build, vet and test every pull request and every commit on master. The
+# selfdev reviewer waits for this before it merges.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+jobs:
+  go:
+    runs-on: talos-metal-gfx-public
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      # The end-to-end tests in pkg/p7 start a Temporal dev server through the
+      # temporal CLI and skip without it.
+      - name: temporal CLI
+        env:
+          TEMPORAL_VERSION: 1.9.1
+        run: |
+          curl -fsSL -o temporal.tgz "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_VERSION}/temporal_cli_${TEMPORAL_VERSION}_linux_amd64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf temporal.tgz -C "$RUNNER_TEMP/bin" temporal
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: go build ./...
+      - run: go vet ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: tests
+        run: |
+          go test -json -race ./... > test.json || rc=$?
+          jq -j 'select(.Action == "output") | .Output' test.json
+          exit "${rc:-0}"
