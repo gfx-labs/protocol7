@@ -16,6 +16,7 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/transport/stream` | Session frames on NATS JetStream, one subject per session, and an embedded NATS server for local use |
 | `pkg/orchestration/activity`, `pkg/orchestration/coreworker` | The activities `p7.OpenSession`, `p7.RunTurn` and `p7.CloseSession`, and the worker that serves them on `local-<host>` |
 | `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, `SessionSpec.Tools` with `HandleTools`, `SessionSpec.Permissions` with `HandlePermissions`, `PromptTyped` with `WithReports`, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
+| `pkg/p7` limits | `SessionSpec.Limit` and `Priority`, `WorkerConfig.Limits` (`p7.LimitConfig`), `p7.QueryLimit`. See "Session limit" below |
 | `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
 | `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
 | `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands and git. It holds no harness and no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. No pod runs this image: protocol7-selfdev builds the commands from this source at a pinned commit, in its own image |
@@ -66,6 +67,19 @@ A workflow decides the permission requests of its session's agent with `SessionS
 - A turn that ended normally with no valid report gets one repair turn, with the same session and the turn ID `<id>-repair`. It says what was wrong and repeats the schema. After that the call fails with `*p7.ReportError`, with `Kind` `missing` or `invalid`. A turn that failed, was cancelled or was interrupted is not repaired and fails with `turn_ended`.
 - The report is the tool call. Text in the agent's message is never parsed.
 - It was run with a scripted agent, the real shim, the core worker and a Temporal development server (`pkg/p7/report_test.go`). It was not run with a real harness, so whether a model calls the tool reliably from the prompt is not known.
+
+## Session limit
+
+A session that names a limit waits for a place in it, and `Session.Close` gives the place back.
+
+- The state of a limit is one Temporal workflow per name, `p7.limit/<name>`, served by every `p7.Worker`. The first request starts it with a signal. It continues as new after 500 messages or when the server suggests it. No database is involved.
+- The messages are signals. A workflow asks with `p7.limit.request`, the limit answers with `p7.limit.granted/<lease>` to the asking workflow, and the holder releases with `p7.limit.release`. A cancelled `OpenSession` releases its place, and so does an open that fails.
+- A higher `Priority` goes first, and equals go in the order they asked. `LimitConfig.Aging` adds one point per interval waited, so that a waiter is not starved. It is off by default.
+- The capacity of each name is in `WorkerConfig.Limits.Capacity`, as an exact name or a pattern with `*` (`repo:*`). A name with no capacity fails `OpenSession` with `ErrorLimitNotConfigured` and does not wait. The asking worker's configuration is sent with each request, so a changed capacity reaches a limit that is already running. Lowering it revokes nothing.
+- A limit workflow looks every `LimitConfig.Reconcile` (a minute by default) for holders and waiters whose workflow is no longer running, and frees them.
+- Limit workflows run on `LimitConfig.TaskQueue`, or on the queue of the first worker that asks. Consumers on several queues that share a limit should name one queue and serve it.
+
+Departures from the plan: a session names one limit, not a list, so a session cannot yet take several limits together. The deployment-wide limit of 20 is not set: it is a name and a number in a consumer's configuration. Pending waits are not ticketd rows, and the attention list does not exist, so `p7.QueryLimit` is the only view of a queue. Temporal's task queue priority and fairness were not checked as a substitute.
 
 ## Run it
 
@@ -129,6 +143,7 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | `pkg/execution/session` | The manager with the real shim and a scripted ACP agent, both run from the test binary: a repeated turn, a turn picked up and cancelled, a shim stopped mid-turn, a harness that exits while it starts, and context hidden from viewers. Permission requests, with no Temporal: allowed and denied by an owner, an owner that cannot be reached, a manager with no tool caller or a caller that cannot ask, a session with no owner, and a session that did not ask for decisions |
 | `pkg/transport/stream` | Publish, deduplication and an ordered read against the embedded NATS server |
 | `pkg/p7` | A workflow's tool called by a scripted agent over `mcp/message`, through the real shim, the core worker and a Temporal development server, and a tool it did not offer refused. A workflow's permission function allowing, denying and failing on a scripted agent's request, an update its workflow refuses or has no handler for, an agent with no reject option, and a session with no function allowed. Typed prompts: a report, a wrapped report, a call refused and fixed in the turn, a repair turn, and a `ReportError` after the repair turn. Skipped when the `temporal` CLI is not on `PATH` |
+| `pkg/p7` limits | With the same stack: with a limit of two, four sessions on one name run two at a time, and the higher priority waiter opens before an earlier lower one. A workflow that ends holding a place is freed by reconciliation, a cancelled waiter leaves the queue, and an unconfigured name fails. Also the wildcard rule and priority with aging. Skipped without the `temporal` CLI |
 | `pkg/transport/cli`, `protocol7-selfdev/pkg/cli` | Every command's fx graph has what its components ask for. Nothing is built or started |
 | `protocol7-selfdev/pkg/chat` | The chat workflow in Temporal's test environment: message order, stop, close, cancel, and a chat that cannot open |
 
@@ -145,7 +160,8 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 | Model and git credentials come through PDP | On a workstation, sessions use the machine's own logins, which section 5 allows for trusted host execution. The talos-metal deployment puts the model credentials in PDP. Its git credential is a GitHub App token that a second container writes to a file, not a PDP binding |
 | A run pod's SPIFFE ID carries its profile, repository and run ID | The talos-metal deployment has one worker pod with one identity, which every chat shares. Session pods carry the label `p7.gfx-labs.io/session`, which a ClusterSPIFFEID can render into a per-session ID, and the deployment does not use them yet |
 | Permission requests are decided by policy | The workflow that opened a session decides them, with `SessionSpec.Permissions`. A session with no function has every request allowed. There is no policy language |
-| Limits, approvals, notices, steering | None of them |
+| Approvals, notices, steering | None of them |
+| Shared limits across several names per session | Only the session limit, one name per session (see "Session limit") |
 | `p7.Prompt[T]` validates a protobuf `T`; an agent gets one report-repair turn | `p7.PromptTyped[T]` takes a Go type and validates against its JSON Schema (see "Typed reports"). One repair turn, as the plan says |
 | `p7.Tool` registers a user activity, called through ticketd with `p7 call` | A tool is a function in the workflow that opened the session, called over the ACP connection as a Temporal update. A tool registered on another worker is reached by the workflow running an activity on that worker's queue |
 

@@ -37,6 +37,15 @@ type SessionSpec struct {
 	// Tools are offered to the agent. Their calls reach this workflow, which
 	// must answer them with HandleTools.
 	Tools []Tool
+	// Limit names a shared limit that the session counts against. Opening
+	// waits until the limit has room, and the place is given back by
+	// Session.Close. The worker's WorkerConfig.Limits must give the name a
+	// capacity. Empty counts against no limit.
+	Limit string
+	// Priority orders the sessions that wait for the same limit: a higher
+	// number goes first, and equals go in the order they asked. It has no
+	// effect without Limit.
+	Priority int
 	// Permissions decides the agent's permission requests. Nil allows every
 	// request. Requests reach this workflow, which must answer them with
 	// HandlePermissions and this same function. An error from it, and a
@@ -58,6 +67,8 @@ type Session struct {
 	// session.
 	TaskQueue string          `json:"task_queue"`
 	Inputs    []ResolvedInput `json:"inputs,omitempty"`
+	// Lease is the place the session holds in its limit, if it has one.
+	Lease *Lease `json:"lease,omitempty"`
 	// Reports is true when the session offers ReportTool, which PromptTyped needs.
 	Reports bool `json:"reports,omitempty"`
 	// Pod is the session's pod on the kubernetes backend, which Close
@@ -74,12 +85,31 @@ var sessionRetry = &temporal.RetryPolicy{
 }
 
 // OpenSession opens a session on the machine its placement names and returns
-// once its inputs are in place and the agent harness runs.
+// once its inputs are in place and the agent harness runs. When the spec
+// names a limit, it first waits for a place in it. Cancelling ctx stops the
+// wait.
 func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	taskQueue, err := spec.Placement.TaskQueue()
 	if err != nil {
 		return nil, fmt.Errorf("open session: %w", err)
 	}
+	if spec.Limit == "" {
+		return openSession(ctx, spec, taskQueue)
+	}
+	lease, err := acquireLease(ctx, spec.Limit, spec.Priority)
+	if err != nil {
+		return nil, fmt.Errorf("open session: %w", err)
+	}
+	session, err := openSession(ctx, spec, taskQueue)
+	if err != nil {
+		releaseLease(ctx, *lease)
+		return nil, err
+	}
+	session.Lease = lease
+	return session, nil
+}
+
+func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Session, error) {
 	request := domain.SessionRequest{
 		Models: spec.Models, WorkingDirectory: spec.WorkingDirectory, IdleLimit: spec.IdleLimit,
 	}
@@ -241,8 +271,9 @@ func PromptText(ctx workflow.Context, session *Session, prompt TextPrompt) (Turn
 	return turn, nil
 }
 
-// Close stops the session's processes. Its workspace and journal are kept.
-// Closing twice is harmless. To close when the workflow itself is being
+// Close stops the session's processes and gives back its place in its limit.
+// Its workspace and journal are kept. Closing twice is harmless. A session
+// that fails to close keeps its place. To close when the workflow itself is being
 // cancelled, pass a context from workflow.NewDisconnectedContext.
 func (s *Session) Close(ctx workflow.Context) error {
 	activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -271,6 +302,9 @@ func (s *Session) Close(ctx workflow.Context) error {
 	podCtx := workflow.WithActivityOptions(ctx, podOptions)
 	if err := workflow.ExecuteActivity(podCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: s.ID}).Get(ctx, nil); err != nil {
 		return fmt.Errorf("close session %s: delete its pod: %w", s.ID, err)
+	}
+	if s.Lease != nil {
+		releaseLease(ctx, *s.Lease)
 	}
 	return nil
 }

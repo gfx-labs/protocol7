@@ -20,6 +20,14 @@ import (
 // agentVar, and a consumer worker on the queue "consumer" with the workflows
 // register adds. It skips the test when the temporal CLI is not on PATH.
 func startStack(t *testing.T, agentVar string, register func(*p7.Worker)) client.Client {
+	t.Helper()
+	return startStackWith(t, agentVar, p7.WorkerConfig{}, register)
+}
+
+// startStackWith is startStack with the consumer worker's configuration. Its
+// task queue and Temporal address are set here.
+func startStackWith(t *testing.T, agentVar string, config p7.WorkerConfig, register func(*p7.Worker)) client.Client {
+	t.Helper()
 	temporalCLI, err := exec.LookPath("temporal")
 	if err != nil {
 		t.Skip("the temporal CLI is not on PATH")
@@ -61,7 +69,8 @@ func startStack(t *testing.T, agentVar string, register func(*p7.Worker)) client
 	}
 	t.Cleanup(core.Stop)
 
-	consumer, err := p7.NewWorker(p7.WorkerConfig{TaskQueue: "consumer", TemporalAddress: server.FrontendHostPort()})
+	config.TaskQueue, config.TemporalAddress = "consumer", server.FrontendHostPort()
+	consumer, err := p7.NewWorker(config)
 	if err != nil {
 		t.Fatal(err)
 	}

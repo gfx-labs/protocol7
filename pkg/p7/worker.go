@@ -26,6 +26,9 @@ type WorkerConfig struct {
 	Deployment string
 	BuildID    string
 	Logger     *slog.Logger
+	// Limits configures the shared limits that sessions name. The worker
+	// serves the workflow that keeps each limit's state.
+	Limits LimitConfig
 }
 
 // Worker runs a consumer's workflows and activities.
@@ -57,6 +60,9 @@ func NewWorker(config WorkerConfig) (*Worker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new worker: configure the Temporal client for %s: %w", config.TemporalAddress, err)
 	}
+	if err := config.Limits.validate(); err != nil {
+		return nil, fmt.Errorf("new worker: %w", err)
+	}
 	options := worker.Options{}
 	if config.Deployment != "" {
 		options.DeploymentOptions = worker.DeploymentOptions{
@@ -65,7 +71,12 @@ func NewWorker(config WorkerConfig) (*Worker, error) {
 			DefaultVersioningBehavior: workflow.VersioningBehaviorPinned,
 		}
 	}
-	return &Worker{config: config, temporal: temporalClient, worker: worker.New(temporalClient, config.TaskQueue, options)}, nil
+	w := &Worker{config: config, temporal: temporalClient, worker: worker.New(temporalClient, config.TaskQueue, options)}
+	limits := &limitActivities{temporal: temporalClient, config: config.Limits, queue: config.TaskQueue}
+	w.RegisterWorkflow(limitWorkflowName, limitWorkflow)
+	w.RegisterActivity(activityLimitStart, limits.Start)
+	w.RegisterActivity(activityLimitGone, limits.Gone)
+	return w, nil
 }
 
 // RegisterWorkflow registers a workflow function under a name.
