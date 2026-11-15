@@ -170,7 +170,7 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 		if pod.Name != "" {
 			// A session that could not open leaves no pod behind.
 			deleteCtx, _ := workflow.NewDisconnectedContext(ctx)
-			deleteCtx = workflow.WithActivityOptions(deleteCtx, podOptions)
+			deleteCtx = workflow.WithActivityOptions(deleteCtx, podDeleteOptions)
 			_ = workflow.ExecuteActivity(deleteCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: request.ID}).Get(deleteCtx, nil)
 		}
 		return nil, fmt.Errorf("open session %s: %w", request.ID, err)
@@ -184,6 +184,17 @@ var podOptions = workflow.ActivityOptions{
 	TaskQueue:           domain.KubernetesQueue,
 	StartToCloseTimeout: time.Minute,
 	RetryPolicy:         &temporal.RetryPolicy{InitialInterval: 2 * time.Second, BackoffCoefficient: 2, MaximumInterval: 30 * time.Second, MaximumAttempts: 10},
+}
+
+// podDeleteOptions are those of the activity that deletes a session pod.
+// With snapshots on, it waits for the pod's worker to write its last
+// snapshot and stop, which can take minutes, and it heartbeats while it
+// waits. Without them it returns at once.
+var podDeleteOptions = workflow.ActivityOptions{
+	TaskQueue:           domain.KubernetesQueue,
+	StartToCloseTimeout: 20 * time.Minute,
+	HeartbeatTimeout:    30 * time.Second,
+	RetryPolicy:         podOptions.RetryPolicy,
 }
 
 // podStartLimit bounds the wait for a new session pod's worker: scheduling,
@@ -291,7 +302,7 @@ func (s *Session) Close(ctx workflow.Context) error {
 		}
 		return nil
 	}
-	podCtx := workflow.WithActivityOptions(ctx, podOptions)
+	podCtx := workflow.WithActivityOptions(ctx, podDeleteOptions)
 	if err := workflow.ExecuteActivity(podCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: s.ID}).Get(ctx, nil); err != nil {
 		return fmt.Errorf("close session %s: delete its pod: %w", s.ID, err)
 	}

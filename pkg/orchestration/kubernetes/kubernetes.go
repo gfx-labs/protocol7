@@ -175,7 +175,8 @@ func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.Pod
 // With snapshots it waits until the pod is gone, which is after its worker
 // has stopped, and then deletes the session's snapshot. A worker that is
 // stopping writes snapshots of its open sessions, so the snapshot of a
-// session that was not closed first would otherwise come back.
+// session that was not closed first would otherwise come back. It
+// heartbeats while it waits, and the workflow allows it 20 minutes.
 func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
 	path := p.podsPath() + "/" + PodName(request.Session)
 	err := p.do(ctx, http.MethodDelete, path, nil, nil)
@@ -194,6 +195,9 @@ func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
 		case <-ctx.Done():
 			return fmt.Errorf("wait for the pod %s to end: %w", PodName(request.Session), ctx.Err())
 		case <-time.After(podPoll):
+		}
+		if activity.IsActivity(ctx) {
+			activity.RecordHeartbeat(ctx)
 		}
 		err = p.do(ctx, http.MethodGet, path, nil, nil)
 	}

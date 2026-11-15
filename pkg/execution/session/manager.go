@@ -91,6 +91,9 @@ type Manager struct {
 	snapshots *snapshot.Store
 	// restoring serializes restores from a snapshot.
 	restoring sync.Mutex
+	// snapshotLocks has one lock for each session that was snapshotted.
+	locksMu       sync.Mutex
+	snapshotLocks map[string]*sync.Mutex
 }
 
 // NewManager returns a manager, creating its root directory.
@@ -529,5 +532,6 @@ func (m *Manager) deleteSnapshot(ctx context.Context, id string) error {
 	if m.snapshots == nil {
 		return nil
 	}
+	defer m.snapshotLock(id)()
 	return m.snapshots.Delete(ctx, id)
 }

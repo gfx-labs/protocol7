@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gfx-labs/protocol7/pkg/execution/acpshim"
@@ -36,6 +37,22 @@ func (m *Manager) harnessDir(id string) (string, error) {
 	return filepath.Abs(filepath.Join(m.sessionDir(id), harnessDirName))
 }
 
+// snapshotLock serializes writing a session's snapshot with deleting it.
+func (m *Manager) snapshotLock(id string) func() {
+	m.locksMu.Lock()
+	l := m.snapshotLocks[id]
+	if l == nil {
+		l = &sync.Mutex{}
+		if m.snapshotLocks == nil {
+			m.snapshotLocks = map[string]*sync.Mutex{}
+		}
+		m.snapshotLocks[id] = l
+	}
+	m.locksMu.Unlock()
+	l.Lock()
+	return l.Unlock
+}
+
 // snapshotExclude is what a snapshot leaves out of a session's directory,
 // besides the store's own list: what only a running shim has.
 func snapshotExclude() []string {
@@ -53,6 +70,10 @@ func (m *Manager) Snapshot(ctx context.Context, id string) error {
 	if m.snapshots == nil {
 		return nil
 	}
+	// Close deletes the snapshot under the same lock, after it marks the
+	// session closed, so a snapshot that is being written is deleted when
+	// it is done, and one that starts later sees the mark.
+	defer m.snapshotLock(id)()
 	rec, err := m.load(id)
 	if isMissing(err) || (err == nil && rec.Closed) {
 		return nil

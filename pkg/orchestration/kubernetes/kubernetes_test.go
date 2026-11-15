@@ -11,6 +11,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/testsuite"
+
 	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot/snapshottest"
@@ -165,8 +169,17 @@ func TestDeletingAPodDeletesItsSnapshotOnceThePodIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := pods.Delete(ctx, domain.PodRequest{Session: "s1"}); err != nil {
+	// Run as an activity, which is how the workflow calls it: it heartbeats
+	// while it waits, so that a pod that ends slowly is not taken for a hang.
+	env := (&testsuite.WorkflowTestSuite{}).NewTestActivityEnvironment()
+	var beats atomic.Int32
+	env.SetOnActivityHeartbeatListener(func(*activity.Info, converter.EncodedValues) { beats.Add(1) })
+	env.RegisterActivity(pods.Delete)
+	if _, err := env.ExecuteActivity(pods.Delete, domain.PodRequest{Session: "s1"}); err != nil {
 		t.Fatal(err)
+	}
+	if beats.Load() < 1 {
+		t.Errorf("the delete heartbeat %d times while it waited, want at least 1", beats.Load())
 	}
 	if !deleted || reads.Load() != 3 {
 		t.Errorf("pod deleted %v and read %d times, want deleted and read until it was gone", deleted, reads.Load())
