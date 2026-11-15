@@ -52,7 +52,7 @@ A workflow decides the permission requests of its session's agent with `SessionS
 - The workflow calls `p7.HandlePermissions` with the same function at the start of every run, like `HandleTools`. A request becomes the Temporal update `p7.Permission` to the workflow that opened the session, sent with no run ID. The validator refuses a session the workflow did not open.
 - The function runs in the workflow, so it may run activities or wait for a signal to ask a person. The agent waits for the answer.
 - The shim answers the agent with its own option of the wanted kind: `allow_once` then `allow_always`, or `reject_once` then `reject_always`. When the agent offers none of that kind, the answer is `cancelled`. ACP carries no reason, so the agent is not told one.
-- Fail closed: an error from the function, a refused update, and a core worker that cannot reach the owner all deny the request.
+- Fail closed: an error from the function, a refused update, and a core worker that cannot reach the owner all deny the request, also on a manager with no tool caller and for a session with no owner.
 - ACP's request ID is not visible to the shim's handler, so the update ID is the session, the shim's process ID and a digest of the request. The same request sent again to a later connection gets the first decision. An agent that repeats an identical request in the same shim run gets the same decision.
 - A session with `Permissions` and no tools offers no MCP server, and runs on a harness that does not take MCP over ACP.
 
@@ -126,9 +126,9 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | Package | What it runs |
 |---|---|
 | `pkg/execution/journal` | The decoder on the journal of a real towa session that was cancelled, loaded again and interrupted (`testdata/towa-recovery.ndjson`) |
-| `pkg/execution/session` | The manager with the real shim and a scripted ACP agent, both run from the test binary: a repeated turn, a turn picked up and cancelled, a shim stopped mid-turn, a harness that exits while it starts, and context hidden from viewers |
+| `pkg/execution/session` | The manager with the real shim and a scripted ACP agent, both run from the test binary: a repeated turn, a turn picked up and cancelled, a shim stopped mid-turn, a harness that exits while it starts, and context hidden from viewers. Permission requests, with no Temporal: allowed and denied by an owner, an owner that cannot be reached, a manager with no tool caller or a caller that cannot ask, a session with no owner, and a session that did not ask for decisions |
 | `pkg/transport/stream` | Publish, deduplication and an ordered read against the embedded NATS server |
-| `pkg/p7` | A workflow's tool called by a scripted agent over `mcp/message`, through the real shim, the core worker and a Temporal development server, and a tool it did not offer refused. A workflow's permission function allowing, denying and failing on a scripted agent's request, and a session with no function allowed. Typed prompts: a report, a wrapped report, a call refused and fixed in the turn, a repair turn, and a `ReportError` after the repair turn. Skipped when the `temporal` CLI is not on `PATH` |
+| `pkg/p7` | A workflow's tool called by a scripted agent over `mcp/message`, through the real shim, the core worker and a Temporal development server, and a tool it did not offer refused. A workflow's permission function allowing, denying and failing on a scripted agent's request, an update its workflow refuses or has no handler for, an agent with no reject option, and a session with no function allowed. Typed prompts: a report, a wrapped report, a call refused and fixed in the turn, a repair turn, and a `ReportError` after the repair turn. Skipped when the `temporal` CLI is not on `PATH` |
 | `pkg/transport/cli`, `protocol7-selfdev/pkg/cli` | Every command's fx graph has what its components ask for. Nothing is built or started |
 | `protocol7-selfdev/pkg/chat` | The chat workflow in Temporal's test environment: message order, stop, close, cancel, and a chat that cannot open |
 

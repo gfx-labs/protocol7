@@ -25,25 +25,40 @@ type sessionTools struct {
 func (t sessionTools) List() []domain.ToolSpec { return t.specs }
 
 func (t sessionTools) Call(ctx context.Context, callID string, call domain.ToolCall) (domain.ToolResult, error) {
+	if t.caller == nil {
+		return domain.ToolResult{}, errors.New("this session has no tools")
+	}
 	call.Session = t.session
 	return t.caller.CallTool(ctx, t.owner, t.session+"-"+callID, call)
 }
 
 // tools are what a connection to rec's shim offers the agent, and who
-// decides its permission requests. A session with neither, or a manager with
-// no caller, gets nil: no tools, and every request allowed.
+// decides its permission requests. A session with neither gets nil: no
+// tools, and every request allowed.
+//
+// A session whose owner asked to decide its permission requests never gets
+// nil. When nobody can be asked, because the manager has no caller, the
+// caller cannot send permission requests or the request has no owner, every
+// request is denied: a request must not be allowed because the owner could
+// not be reached.
 func (m *Manager) tools(rec record) acpshim.Tools {
-	if m.config.Tools == nil || rec.Request.Owner == "" {
-		return nil
+	owned := m.config.Tools != nil && rec.Request.Owner != ""
+	tools := sessionTools{session: rec.ID, owner: rec.Request.Owner, specs: rec.Request.Tools}
+	if owned {
+		tools.caller = m.config.Tools
 	}
-	tools := sessionTools{caller: m.config.Tools, session: rec.ID, owner: rec.Request.Owner, specs: rec.Request.Tools}
 	if rec.Request.Permissions {
-		// The owner asked to decide. A caller that cannot reach it must not
-		// turn that into allowing everything, so its requests are denied.
-		decider, _ := m.config.Tools.(PermissionCaller)
+		var decider PermissionCaller
+		if owned {
+			decider, _ = m.config.Tools.(PermissionCaller)
+		}
+		if !owned {
+			// Without a caller or an owner no tool can be called either.
+			tools.specs = nil
+		}
 		return sessionPermissions{sessionTools: tools, decider: decider}
 	}
-	if len(rec.Request.Tools) == 0 {
+	if !owned || len(rec.Request.Tools) == 0 {
 		return nil
 	}
 	return tools
@@ -75,5 +90,6 @@ func (p sessionPermissions) Decide(ctx context.Context, callID string, request d
 // tools, which needs a harness that takes MCP servers over ACP. A session
 // that only has permissions decided does not.
 func (m *Manager) offersTools(rec record) bool {
-	return m.tools(rec) != nil && len(rec.Request.Tools) > 0
+	tools := m.tools(rec)
+	return tools != nil && len(tools.List()) > 0
 }
