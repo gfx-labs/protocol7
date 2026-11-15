@@ -46,6 +46,11 @@ type SessionSpec struct {
 	// number goes first, and equals go in the order they asked. It has no
 	// effect without Limit.
 	Priority int
+	// Permissions decides the agent's permission requests. Nil allows every
+	// request. Requests reach this workflow, which must answer them with
+	// HandlePermissions and this same function. An error from it, and a
+	// request that cannot reach the workflow, deny the request.
+	Permissions func(ctx workflow.Context, request PermissionRequest) (PermissionDecision, error)
 }
 
 // ErrorHarnessStopped is the type of the application error that opening or
@@ -117,7 +122,10 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 			return nil, fmt.Errorf("open session: the name %q is reserved for typed reports", ReportTool)
 		}
 	}
-	if len(spec.Tools) > 0 || box != nil {
+	if spec.Permissions != nil {
+		request.Permissions = true
+	}
+	if len(spec.Tools) > 0 || box != nil || spec.Permissions != nil {
 		request.Tools = toolSpecs(spec.Tools)
 		if box != nil {
 			request.Tools = append(request.Tools, reportSpec)

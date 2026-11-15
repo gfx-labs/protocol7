@@ -97,6 +97,9 @@ func (a *scriptedAgent) Prompt(ctx context.Context, request acp.PromptRequest) (
 		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
 	}
 	a.record("prompt " + text)
+	if command, ok := strings.CutPrefix(text, "ask "); ok {
+		return a.askPermission(ctx, request.SessionId, command)
+	}
 	err := a.connection.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: request.SessionId,
 		Update: acp.SessionUpdate{AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
@@ -346,4 +349,32 @@ func TestAShimStoppedDuringATurnInterruptsItAndTheNextTurnLoadsTheConversation(t
 	if asked, want := f.asked(), []string{"new", "prompt slow", "load", "prompt hello"}; !slices.Equal(asked, want) {
 		t.Errorf("the agent was asked %q, want %q", asked, want)
 	}
+}
+
+// askPermission asks the client to allow command, with the options an agent
+// offers: both an allow and a reject option, or only an allow option for a
+// command that starts with "allow-only". It answers with what was chosen.
+func (a *scriptedAgent) askPermission(ctx context.Context, id acp.SessionId, command string) (acp.PromptResponse, error) {
+	options := []acp.PermissionOption{{OptionId: "allow", Name: "Allow", Kind: acp.PermissionOptionKindAllowOnce}}
+	if !strings.HasPrefix(command, "allow-only") {
+		options = append(options, acp.PermissionOption{OptionId: "reject", Name: "Reject", Kind: acp.PermissionOptionKindRejectOnce})
+	}
+	title := command
+	response, err := a.connection.RequestPermission(ctx, acp.RequestPermissionRequest{
+		SessionId: id, Options: options, ToolCall: acp.ToolCallUpdate{ToolCallId: "call-1", Title: &title},
+	})
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+	answer := "permission cancelled"
+	if response.Outcome.Selected != nil {
+		answer = "permission " + string(response.Outcome.Selected.OptionId)
+	}
+	err = a.connection.SessionUpdate(ctx, acp.SessionNotification{
+		SessionId: id,
+		Update: acp.SessionUpdate{AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+			Content: acp.ContentBlock{Text: &acp.ContentBlockText{Type: "text", Text: answer}},
+		}},
+	})
+	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, err
 }

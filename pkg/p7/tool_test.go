@@ -92,6 +92,13 @@ func (a *toolAgent) mcp(ctx context.Context, method string, params map[string]an
 func (a *toolAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.PromptResponse, error) {
 	tool, text, _ := strings.Cut(strings.TrimSpace(request.Prompt[0].Text.Text), " ")
 	reply := "no tools were offered"
+	if tool == "permission" || tool == "permission-allow-only" {
+		reply, err := a.askPermission(ctx, request.SessionId, text, tool == "permission-allow-only")
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		return a.reply(ctx, request.SessionId, reply)
+	}
 	if a.server != "" {
 		listed, err := a.mcp(ctx, "tools/list", nil)
 		if err != nil {
@@ -103,13 +110,39 @@ func (a *toolAgent) Prompt(ctx context.Context, request acp.PromptRequest) (acp.
 		}
 		reply = "listed " + listed + " called " + called
 	}
+	return a.reply(ctx, request.SessionId, reply)
+}
+
+func (a *toolAgent) reply(ctx context.Context, id acp.SessionId, text string) (acp.PromptResponse, error) {
 	err := a.connection.SessionUpdate(ctx, acp.SessionNotification{
-		SessionId: request.SessionId,
+		SessionId: id,
 		Update: acp.SessionUpdate{AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
-			Content: acp.ContentBlock{Text: &acp.ContentBlockText{Type: "text", Text: reply}},
+			Content: acp.ContentBlock{Text: &acp.ContentBlockText{Type: "text", Text: text}},
 		}},
 	})
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, err
+}
+
+// askPermission asks its client to allow running command, as an agent does
+// before a tool call it holds back, and says what the client chose.
+func (a *toolAgent) askPermission(ctx context.Context, id acp.SessionId, command string, allowOnly bool) (string, error) {
+	kind, title := acp.ToolKindExecute, command
+	options := []acp.PermissionOption{{OptionId: "allow", Name: "Allow", Kind: acp.PermissionOptionKindAllowOnce}}
+	if !allowOnly {
+		options = append(options, acp.PermissionOption{OptionId: "reject", Name: "Reject", Kind: acp.PermissionOptionKindRejectOnce})
+	}
+	response, err := a.connection.RequestPermission(ctx, acp.RequestPermissionRequest{
+		SessionId: id,
+		ToolCall:  acp.ToolCallUpdate{ToolCallId: "call-1", Kind: &kind, Title: &title, RawInput: map[string]any{"command": command}},
+		Options:   options,
+	})
+	if err != nil {
+		return "", err
+	}
+	if response.Outcome.Selected == nil {
+		return "permission cancelled", nil
+	}
+	return "permission selected " + string(response.Outcome.Selected.OptionId), nil
 }
 
 func (a *toolAgent) Cancel(context.Context, acp.CancelNotification) error { return nil }
@@ -223,5 +256,108 @@ func TestASessionCallsItsWorkflowsTools(t *testing.T) {
 		if test.prompt == "delete hello" && !strings.Contains(reply, `no tool \"delete\"`) {
 			t.Errorf("prompt %q: the agent replied %s, want the refusal to name the tool", test.prompt, reply)
 		}
+	}
+}
+
+// Ways permissionWorkflow can be set up.
+const (
+	// permissionsDecided: the function decides, and the workflow answers.
+	permissionsDecided = "decided"
+	// permissionsNone: the session has no function.
+	permissionsNone = "none"
+	// permissionsRefused: the workflow answers, but says it opened no session.
+	permissionsRefused = "refused"
+	// permissionsUnanswered: the session has a function and the workflow
+	// never calls HandlePermissions, so the update has no handler.
+	permissionsUnanswered = "unanswered"
+)
+
+// permissionWorkflow opens a session whose permission requests are handled
+// as mode says, sends it the prompt and returns the agent's reply and, in
+// brackets, what the function decided each time it ran. The function checks
+// what the request says about the call, denies a request whose title has
+// "rm", fails on "boom" and allows the rest.
+func permissionWorkflow(ctx workflow.Context, host, mode, prompt string) (string, error) {
+	var opened, decided []string
+	decide := func(ctx workflow.Context, request p7.PermissionRequest) (p7.PermissionDecision, error) {
+		if len(opened) != 1 || request.Session != opened[0] || request.ToolCallID != "call-1" || request.Kind != "execute" ||
+			string(request.RawInput) != `{"command":"`+request.Title+`"}` || len(request.Options) < 1 {
+			decided = append(decided, fmt.Sprintf("unexpected request %+v", request))
+			return p7.Deny("unexpected request"), nil
+		}
+		switch {
+		case strings.Contains(request.Title, "boom"):
+			decided = append(decided, "error")
+			return p7.PermissionDecision{}, errors.New("cannot decide")
+		case strings.Contains(request.Title, "rm"):
+			decided = append(decided, "deny")
+			return p7.Deny("no deleting"), nil
+		}
+		decided = append(decided, "allow")
+		return p7.Allow(), nil
+	}
+	spec := p7.SessionSpec{Placement: p7.Placement{Backend: p7.BackendHost, Host: host}}
+	if mode != permissionsNone {
+		spec.Permissions = decide
+	}
+	sessions := func() []string { return opened }
+	if mode == permissionsRefused {
+		sessions = func() []string { return nil }
+	}
+	if mode == permissionsDecided || mode == permissionsRefused {
+		if err := p7.HandlePermissions(ctx, decide, sessions); err != nil {
+			return "", err
+		}
+	}
+	session, err := p7.OpenSession(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	opened = append(opened, session.ID)
+	turn, err := p7.PromptText(ctx, session, p7.TextPrompt{Text: prompt})
+	if err != nil {
+		return "", err
+	}
+	if err := session.Close(ctx); err != nil {
+		return "", err
+	}
+	return turn.Text + " [" + strings.Join(decided, ",") + "]", nil
+}
+
+// An agent's permission request is decided by the workflow that opened the
+// session, through a Temporal update: allowed, denied, or denied because the
+// function failed. A request the workflow cannot take is denied, and a
+// session opened with no function has every request allowed. Each case shows
+// that the function ran, or did not, with the request it should have got:
+// a reject chosen by the shim alone could also be the function's own refusal
+// of a wrong request.
+func TestAWorkflowDecidesItsSessionsPermissionRequests(t *testing.T) {
+	temporalClient := startStack(t, agentEnv, func(w *p7.Worker) { w.RegisterWorkflow("permissions", permissionWorkflow) })
+	for _, test := range []struct {
+		name, mode, prompt, want string
+	}{
+		{"allowed", permissionsDecided, "permission ls", "permission selected allow [allow]"},
+		{"denied", permissionsDecided, "permission rm -r data", "permission selected reject [deny]"},
+		{"decision fails", permissionsDecided, "permission boom", "permission selected reject [error]"},
+		{"denied and no reject option", permissionsDecided, "permission-allow-only rm -r data", "permission cancelled [deny]"},
+		{"no function", permissionsNone, "permission rm -r data", "permission selected allow []"},
+		{"update refused by the validator", permissionsRefused, "permission ls", "permission selected reject []"},
+		{"update with no handler", permissionsUnanswered, "permission ls", "permission selected reject []"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+			defer cancel()
+			run, err := temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: "consumer"}, "permissions", "test", test.mode, test.prompt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reply string
+			if err := run.Get(ctx, &reply); err != nil {
+				t.Fatal(err)
+			}
+			if reply != test.want {
+				t.Errorf("the agent replied %q, want %q", reply, test.want)
+			}
+		})
 	}
 }
