@@ -18,6 +18,9 @@ import (
 type Config struct {
 	// Host names this machine. The worker polls the queue local-<Host>.
 	Host string
+	// TaskQueue, if set, is polled in place of local-<Host>. A session's pod
+	// on the kubernetes backend polls the queue of its one session.
+	TaskQueue string
 }
 
 // Worker is the core worker of one machine.
@@ -30,9 +33,12 @@ type Worker struct {
 // New returns a core worker that serves sessions' activities. It does not
 // poll until Start.
 func New(config Config, temporalClient client.Client, sessions *activity.Sessions, logger *slog.Logger) (*Worker, error) {
-	taskQueue, err := domain.Placement{Backend: domain.BackendHost, Host: config.Host}.TaskQueue()
-	if err != nil {
-		return nil, err
+	taskQueue := config.TaskQueue
+	if taskQueue == "" {
+		var err error
+		if taskQueue, err = (domain.Placement{Backend: domain.BackendHost, Host: config.Host}).TaskQueue(); err != nil {
+			return nil, err
+		}
 	}
 	temporalWorker := worker.New(temporalClient, taskQueue, worker.Options{
 		// Time for a running turn's activity to detach and report it, so

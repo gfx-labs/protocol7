@@ -11,10 +11,26 @@ const (
 	ActivityOpenSession  = "p7.OpenSession"
 	ActivityRunTurn      = "p7.RunTurn"
 	ActivityCloseSession = "p7.CloseSession"
+	// ActivityStartSessionPod and ActivityDeleteSessionPod run on the
+	// kubernetes backend's queue. The session activities above then run in
+	// the session's pod, on its own queue.
+	ActivityStartSessionPod  = "p7.StartSessionPod"
+	ActivityDeleteSessionPod = "p7.DeleteSessionPod"
 )
 
 // BackendHost runs a session as a process on a named machine.
 const BackendHost = "host"
+
+// BackendKubernetes runs each session in a pod of its own, made from a pod
+// template that the deployment supplies.
+const BackendKubernetes = "kubernetes"
+
+// KubernetesQueue is the queue of the worker that creates and deletes
+// session pods.
+const KubernetesQueue = "p7-kubernetes"
+
+// SessionQueue is the queue of the worker in a session's pod.
+func SessionQueue(session string) string { return "p7-session-" + session }
 
 // Placement says where a session or step runs.
 type Placement struct {
@@ -31,6 +47,8 @@ func (p Placement) TaskQueue() (string, error) {
 			return "", errors.New("placement: the host backend needs a host name")
 		}
 		return "local-" + p.Host, nil
+	case BackendKubernetes:
+		return KubernetesQueue, nil
 	case "":
 		return "", errors.New("placement: no backend named, and there is no default backend yet")
 	default:
@@ -88,6 +106,22 @@ type SessionHandle struct {
 	ID        string          `json:"id"`
 	TaskQueue string          `json:"task_queue"`
 	Inputs    []ResolvedInput `json:"inputs,omitempty"`
+}
+
+// PodRequest is the input of ActivityStartSessionPod and
+// ActivityDeleteSessionPod.
+type PodRequest struct {
+	Session string `json:"session"`
+	// Owner is the ID of the workflow that opened the session. It is kept on
+	// the pod, so that a pod nobody owns can be found.
+	Owner string `json:"owner,omitempty"`
+}
+
+// PodHandle is the result of ActivityStartSessionPod.
+type PodHandle struct {
+	Name string `json:"name"`
+	// TaskQueue is the queue the worker in the pod polls.
+	TaskQueue string `json:"task_queue"`
 }
 
 // TurnRequest is the input of ActivityRunTurn.

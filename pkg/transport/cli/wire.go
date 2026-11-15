@@ -6,10 +6,12 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.uber.org/fx"
 
+	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/execution/acpshim"
 	"github.com/gfx-labs/protocol7/pkg/execution/session"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/activity"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/coreworker"
+	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
 	"github.com/gfx-labs/protocol7/pkg/transport/stream"
 )
 
@@ -97,3 +99,23 @@ func newFrames(lifecycle fx.Lifecycle, url natsURL) *stream.Stream {
 	lifecycle.Append(fx.StartStopHook(frames.Connect, frames.Close))
 	return frames
 }
+
+// podsModule is the kubernetes backend's worker: it creates and deletes
+// session pods on the queue p7-kubernetes. It needs a client.Client and a
+// kubernetes.Config.
+var podsModule = fx.Module("pods",
+	fx.Provide(kubernetes.New),
+	fx.Invoke(func(lifecycle fx.Lifecycle, temporalClient client.Client, pods *kubernetes.Pods, logger *slog.Logger) {
+		temporalWorker := kubernetes.NewWorker(temporalClient, pods)
+		lifecycle.Append(fx.StartStopHook(
+			func() error {
+				if err := temporalWorker.Start(); err != nil {
+					return err
+				}
+				logger.Info("kubernetes backend started", "task_queue", domain.KubernetesQueue)
+				return nil
+			},
+			temporalWorker.Stop,
+		))
+	}),
+)
