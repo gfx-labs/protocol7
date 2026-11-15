@@ -19,7 +19,6 @@ import (
 
 	"github.com/gfx-labs/protocol7/temporal/pkg/temporalauth"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
-	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 	"github.com/urfave/cli/v2"
@@ -148,9 +147,7 @@ func clientConfig(c *cli.Context, source *workloadapi.X509Source) (*tls.Config, 
 	if err != nil {
 		return nil, fmt.Errorf("--frontend-spiffe-id is required: %w", err)
 	}
-	cfg := tlsconfig.MTLSClientConfig(source, source, tlsconfig.AuthorizeID(identity))
-	cfg.MinVersion = tls.VersionTLS13
-	return cfg, nil
+	return temporalauth.ClientTLSConfig(source, source, identity), nil
 }
 
 // The proxy is loopback-only. Only its Workload API identity reaches Temporal.
