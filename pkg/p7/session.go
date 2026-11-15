@@ -49,11 +49,15 @@ const ErrorHarnessStopped = activity.ErrorHarnessStopped
 // keep it in its state and pass it across Continue-As-New.
 type Session struct {
 	ID string `json:"id"`
-	// TaskQueue is the core queue of the machine that holds the session.
+	// TaskQueue is the core queue of the machine or pod that holds the
+	// session.
 	TaskQueue string          `json:"task_queue"`
 	Inputs    []ResolvedInput `json:"inputs,omitempty"`
 	// Reports is true when the session offers ReportTool, which PromptTyped needs.
 	Reports bool `json:"reports,omitempty"`
+	// Pod is the session's pod on the kubernetes backend, which Close
+	// deletes. Empty on the host backend.
+	Pod string `json:"pod,omitempty"`
 }
 
 var sessionRetry = &temporal.RetryPolicy{
@@ -88,8 +92,8 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 		if box != nil {
 			request.Tools = append(request.Tools, reportSpec)
 		}
-		request.Owner = workflow.GetInfo(ctx).WorkflowExecution.ID
 	}
+	request.Owner = workflow.GetInfo(ctx).WorkflowExecution.ID
 	for _, input := range spec.Inputs {
 		if input.Source == nil {
 			return nil, fmt.Errorf("open session: input %q has no source", input.Destination)
@@ -114,12 +118,47 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 		StartToCloseTimeout: timeout,
 		RetryPolicy:         retry,
 	})
+	var pod domain.PodHandle
+	if spec.Placement.Backend == domain.BackendKubernetes {
+		// The pod is created first, and the session is opened by the worker
+		// inside it, on the pod's own queue. The open waits on that queue
+		// while the pod is scheduled and its image is pulled.
+		podCtx := workflow.WithActivityOptions(ctx, podOptions)
+		podRequest := domain.PodRequest{Session: request.ID, Owner: request.Owner}
+		if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, podRequest).Get(ctx, &pod); err != nil {
+			return nil, fmt.Errorf("open session %s: start its pod: %w", request.ID, err)
+		}
+		activityCtx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			TaskQueue:              pod.TaskQueue,
+			ScheduleToStartTimeout: podStartLimit,
+			StartToCloseTimeout:    timeout,
+			RetryPolicy:            retry,
+		})
+	}
 	var handle domain.SessionHandle
 	if err := workflow.ExecuteActivity(activityCtx, domain.ActivityOpenSession, request).Get(ctx, &handle); err != nil {
+		if pod.Name != "" {
+			// A session that could not open leaves no pod behind.
+			deleteCtx, _ := workflow.NewDisconnectedContext(ctx)
+			deleteCtx = workflow.WithActivityOptions(deleteCtx, podOptions)
+			_ = workflow.ExecuteActivity(deleteCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: request.ID}).Get(deleteCtx, nil)
+		}
 		return nil, fmt.Errorf("open session %s: %w", request.ID, err)
 	}
-	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil}, nil
+	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil, Pod: pod.Name}, nil
 }
+
+// podOptions are those of the activities that create and delete session
+// pods. Both are idempotent.
+var podOptions = workflow.ActivityOptions{
+	TaskQueue:           domain.KubernetesQueue,
+	StartToCloseTimeout: time.Minute,
+	RetryPolicy:         &temporal.RetryPolicy{InitialInterval: 2 * time.Second, BackoffCoefficient: 2, MaximumInterval: 30 * time.Second, MaximumAttempts: 10},
+}
+
+// podStartLimit bounds the wait for a new session pod's worker: scheduling,
+// pulling the image and starting.
+const podStartLimit = 10 * time.Minute
 
 // TextPrompt is one prompt whose answer is the agent's message text.
 type TextPrompt struct {
@@ -203,9 +242,27 @@ func (s *Session) Close(ctx workflow.Context) error {
 		StartToCloseTimeout: 2 * time.Minute,
 		RetryPolicy:         sessionRetry,
 	})
+	if s.Pod != "" {
+		// A pod that is gone has no worker to close the session in, and
+		// deleting the pod ends the session all the same.
+		activityCtx = workflow.WithActivityOptions(activityCtx, workflow.ActivityOptions{
+			TaskQueue:              s.TaskQueue,
+			ScheduleToStartTimeout: time.Minute,
+			StartToCloseTimeout:    2 * time.Minute,
+			RetryPolicy:            &temporal.RetryPolicy{MaximumAttempts: 1},
+		})
+	}
 	request := domain.CloseRequest{Session: s.ID}
-	if err := workflow.ExecuteActivity(activityCtx, domain.ActivityCloseSession, request).Get(ctx, nil); err != nil {
-		return fmt.Errorf("close session %s: %w", s.ID, err)
+	closeErr := workflow.ExecuteActivity(activityCtx, domain.ActivityCloseSession, request).Get(ctx, nil)
+	if s.Pod == "" {
+		if closeErr != nil {
+			return fmt.Errorf("close session %s: %w", s.ID, closeErr)
+		}
+		return nil
+	}
+	podCtx := workflow.WithActivityOptions(ctx, podOptions)
+	if err := workflow.ExecuteActivity(podCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: s.ID}).Get(ctx, nil); err != nil {
+		return fmt.Errorf("close session %s: delete its pod: %w", s.ID, err)
 	}
 	return nil
 }

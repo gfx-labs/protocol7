@@ -11,6 +11,11 @@ import "github.com/gfx-labs/protocol7/pkg/domain"
 // BackendHost runs a session as a process on a named machine.
 const BackendHost = domain.BackendHost
 
+// BackendKubernetes runs each session in a pod of its own, with its own
+// containers and workload identity. A worker update leaves the pods of
+// running sessions alone.
+const BackendKubernetes = domain.BackendKubernetes
+
 // Placement says where a session runs.
 type Placement = domain.Placement
 

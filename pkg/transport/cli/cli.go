@@ -20,6 +20,7 @@ import (
 
 	"github.com/gfx-labs/protocol7/pkg/execution/session"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/coreworker"
+	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
 	"github.com/gfx-labs/protocol7/pkg/p7/p7fx"
 )
 
@@ -71,6 +72,9 @@ type workerCommand struct {
 	StateDir          string       `name:"state-dir" env:"P7_STATE_DIR" help:"Directory that holds this machine's sessions. Default: p7 in the XDG state directory."`
 	Shim              string       `name:"shim" env:"P7_SHIM" help:"Path of p7acpshim. Default: beside this executable, then PATH."`
 	Harness           harnessFlags `embed:""`
+
+	// taskQueue replaces local-<host> for a session's pod.
+	taskQueue string
 }
 
 // options are the components of the command, built from its flags.
@@ -89,7 +93,7 @@ func (c *workerCommand) options() (fx.Option, error) {
 		fx.StopTimeout(stopTimeout),
 		fx.Supply(
 			p7fx.TemporalConfig{Address: c.TemporalAddress, Namespace: c.TemporalNamespace},
-			coreworker.Config{Host: host},
+			coreworker.Config{Host: host, TaskQueue: c.taskQueue},
 		),
 		p7fx.TemporalClient,
 		coreModule(hostSessions{StateDir: stateDir, Shim: c.Shim, Harness: c.Harness.harness()}),
@@ -109,8 +113,64 @@ func (c *workerCommand) Run(ctx context.Context, logger *slog.Logger) error {
 }
 
 type root struct {
-	Worker workerCommand `cmd:"" help:"Run the core worker of this machine: agent sessions on the host backend."`
-	Dev    devCommand    `cmd:"" help:"Run a Temporal development server, an embedded NATS server and the core worker in one process."`
+	Worker  workerCommand  `cmd:"" help:"Run the core worker of this machine: agent sessions on the host backend."`
+	Session sessionCommand `cmd:"" help:"Run one session in its own pod on the kubernetes backend."`
+	Pods    podsCommand    `cmd:"" help:"Create and delete session pods for the kubernetes backend."`
+	Dev     devCommand     `cmd:"" help:"Run a Temporal development server, an embedded NATS server and the core worker in one process."`
+}
+
+// sessionCommand is the worker inside a session's pod. It is the host
+// session manager, polling the queue of its one session.
+type sessionCommand struct {
+	Worker    workerCommand `embed:""`
+	SessionID string        `name:"session" required:"" env:"P7_SESSION" help:"The session this pod serves. The kubernetes backend sets it."`
+	Queue     string        `name:"task-queue" required:"" env:"P7_TASK_QUEUE" help:"The queue of the session. The kubernetes backend sets it."`
+}
+
+func (c *sessionCommand) options() (fx.Option, error) {
+	c.Worker.taskQueue = c.Queue
+	if c.Worker.Host == "" {
+		c.Worker.Host = "session-" + c.SessionID
+	}
+	return c.Worker.options()
+}
+
+func (c *sessionCommand) Run(ctx context.Context, logger *slog.Logger) error {
+	options, err := c.options()
+	if err != nil {
+		return err
+	}
+	return p7fx.Run(ctx, logger.With("session", c.SessionID), options)
+}
+
+// podsCommand creates and deletes session pods. It holds the right to
+// create pods in one namespace and nothing else.
+type podsCommand struct {
+	TemporalAddress   string `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
+	TemporalNamespace string `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
+	Namespace         string `name:"namespace" required:"" env:"P7_POD_NAMESPACE" help:"Kubernetes namespace that session pods are created in."`
+	Template          string `name:"template" required:"" env:"P7_POD_TEMPLATE" help:"File holding the session pod template, a pod manifest in JSON. Read for each new pod."`
+	Container         string `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7-worker session."`
+}
+
+func (c *podsCommand) options() (fx.Option, error) {
+	return fx.Options(
+		fx.StopTimeout(stopTimeout),
+		fx.Supply(
+			p7fx.TemporalConfig{Address: c.TemporalAddress, Namespace: c.TemporalNamespace},
+			kubernetes.Config{Namespace: c.Namespace, TemplateFile: c.Template, SessionContainer: c.Container},
+		),
+		p7fx.TemporalClient,
+		podsModule,
+	), nil
+}
+
+func (c *podsCommand) Run(ctx context.Context, logger *slog.Logger) error {
+	options, err := c.options()
+	if err != nil {
+		return err
+	}
+	return p7fx.Run(ctx, logger, options)
 }
 
 // Main runs the p7 command and returns its exit status.
