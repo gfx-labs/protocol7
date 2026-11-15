@@ -22,6 +22,8 @@ import (
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"github.com/spiffe/go-spiffe/v2/workloadapi"
 	"github.com/urfave/cli/v2"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
@@ -51,7 +53,10 @@ func main() {
 		Commands: []*cli.Command{
 			{Name: "start", Action: startServer},
 			{Name: "proxy", Flags: []cli.Flag{&cli.StringFlag{Name: "listen", Value: "127.0.0.1:7233"}}, Action: runProxy},
-			{Name: "bootstrap", Flags: []cli.Flag{&cli.StringSliceFlag{Name: "namespace", Required: true}}, Action: bootstrap},
+			{Name: "bootstrap", Flags: []cli.Flag{
+				&cli.StringSliceFlag{Name: "namespace", Required: true},
+				&cli.StringSliceFlag{Name: "search-attribute", Usage: "register Name=Type in every namespace, repeatable"},
+			}, Action: bootstrap},
 		},
 	}
 	if err := app.RunContext(ctx, os.Args); err != nil {
@@ -212,6 +217,24 @@ func runProxy(c *cli.Context) error {
 }
 
 func bootstrap(c *cli.Context) error {
+	attributes := make(map[string]enumspb.IndexedValueType)
+	for _, value := range c.StringSlice("search-attribute") {
+		name, typeName, ok := strings.Cut(value, "=")
+		if !ok || name == "" {
+			return fmt.Errorf("search attribute %q must be Name=Type", value)
+		}
+		attributeType, err := enumspb.IndexedValueTypeFromString(typeName)
+		if err != nil {
+			return err
+		}
+		if attributeType == enumspb.INDEXED_VALUE_TYPE_UNSPECIFIED {
+			return fmt.Errorf("search attribute %s needs a concrete type", name)
+		}
+		if previous, exists := attributes[name]; exists && previous != attributeType {
+			return fmt.Errorf("search attribute %s has conflicting types", name)
+		}
+		attributes[name] = attributeType
+	}
 	source, _, err := openSource(c)
 	if err != nil {
 		return err
@@ -235,6 +258,33 @@ func bootstrap(c *cli.Context) error {
 		var exists *serviceerror.NamespaceAlreadyExists
 		if err != nil && !errors.As(err, &exists) {
 			return fmt.Errorf("create Temporal namespace %s: %w", name, err)
+		}
+		if len(attributes) == 0 {
+			continue
+		}
+		operator := connection.OperatorService()
+		existing, err := operator.ListSearchAttributes(ctx, &operatorservice.ListSearchAttributesRequest{Namespace: name})
+		if err != nil {
+			return fmt.Errorf("list search attributes of %s: %w", name, err)
+		}
+		missing := make(map[string]enumspb.IndexedValueType)
+		for key, attributeType := range attributes {
+			registeredType, registered := existing.GetCustomAttributes()[key]
+			if !registered {
+				registeredType, registered = existing.GetSystemAttributes()[key]
+			}
+			if registered && registeredType != attributeType {
+				return fmt.Errorf("search attribute %s in %s is %s, requested %s", key, name, registeredType, attributeType)
+			}
+			if !registered {
+				missing[key] = attributeType
+			}
+		}
+		if len(missing) != 0 {
+			_, err := operator.AddSearchAttributes(ctx, &operatorservice.AddSearchAttributesRequest{Namespace: name, SearchAttributes: missing})
+			if err != nil {
+				return fmt.Errorf("add search attributes of %s: %w", name, err)
+			}
 		}
 	}
 	return nil
