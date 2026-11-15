@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/worker"
@@ -75,6 +76,11 @@ func (w *Worker) RegisterWorkflow(name string, function any) {
 // RegisterActivities registers every exported method of a struct as an
 // activity, or one function.
 func (w *Worker) RegisterActivities(activities any) { w.worker.RegisterActivity(activities) }
+
+// RegisterActivity registers one activity function under a name.
+func (w *Worker) RegisterActivity(name string, function any) {
+	w.worker.RegisterActivityWithOptions(function, activity.RegisterOptions{Name: name})
+}
 
 // Temporal is the worker's Temporal client, for starting and signalling
 // workflows from the same process.
