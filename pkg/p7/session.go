@@ -57,6 +57,8 @@ type Session struct {
 	// TaskQueue is the core queue of the machine that holds the session.
 	TaskQueue string          `json:"task_queue"`
 	Inputs    []ResolvedInput `json:"inputs,omitempty"`
+	// Reports is true when the session offers ReportTool, which PromptTyped needs.
+	Reports bool `json:"reports,omitempty"`
 }
 
 var sessionRetry = &temporal.RetryPolicy{
@@ -77,13 +79,23 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	request := domain.SessionRequest{
 		Models: spec.Models, WorkingDirectory: spec.WorkingDirectory, IdleLimit: spec.IdleLimit,
 	}
-	if len(spec.Tools) > 0 {
-		request.Tools = toolSpecs(spec.Tools)
+	box := reportsOf(ctx)
+	if box != nil && !box.handled {
+		return nil, errors.New("open session: the context has reports, and HandleTools was not called with it")
+	}
+	for _, tool := range spec.Tools {
+		if tool.Name == ReportTool {
+			return nil, fmt.Errorf("open session: the name %q is reserved for typed reports", ReportTool)
+		}
 	}
 	if spec.Permissions != nil {
 		request.Permissions = true
 	}
-	if len(spec.Tools) > 0 || spec.Permissions != nil {
+	if len(spec.Tools) > 0 || box != nil || spec.Permissions != nil {
+		request.Tools = toolSpecs(spec.Tools)
+		if box != nil {
+			request.Tools = append(request.Tools, reportSpec)
+		}
 		request.Owner = workflow.GetInfo(ctx).WorkflowExecution.ID
 	}
 	for _, input := range spec.Inputs {
@@ -114,7 +126,7 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	if err := workflow.ExecuteActivity(activityCtx, domain.ActivityOpenSession, request).Get(ctx, &handle); err != nil {
 		return nil, fmt.Errorf("open session %s: %w", request.ID, err)
 	}
-	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs}, nil
+	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil}, nil
 }
 
 // TextPrompt is one prompt whose answer is the agent's message text.

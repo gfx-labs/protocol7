@@ -49,12 +49,19 @@ func TextResult(text string) ToolResult {
 // Before Continue-As-New, wait for workflow.AllHandlersFinished so that no
 // call is left without an answer.
 func HandleTools(ctx workflow.Context, tools []Tool, sessions func() []string) error {
-	byName := make(map[string]Tool, len(tools))
+	byName := make(map[string]Tool, len(tools)+1)
 	for _, tool := range tools {
 		if tool.Name == "" || tool.Run == nil {
 			return fmt.Errorf("handle tools: tool %q needs a name and a Run function", tool.Name)
 		}
+		if tool.Name == ReportTool {
+			return fmt.Errorf("handle tools: the name %q is reserved for typed reports", ReportTool)
+		}
 		byName[tool.Name] = tool
+	}
+	if box := reportsOf(ctx); box != nil {
+		box.handled = true
+		byName[ReportTool] = box.tool()
 	}
 	return workflow.SetUpdateHandlerWithOptions(ctx, domain.UpdateToolCall,
 		func(ctx workflow.Context, call ToolCall) (ToolResult, error) {

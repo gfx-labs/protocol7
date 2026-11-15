@@ -6,6 +6,7 @@ require (
 	github.com/alecthomas/kong v1.17.0
 	github.com/gfx-labs/acphost v0.27.0
 	github.com/gfx-labs/go-acp v0.1.1
+	github.com/google/jsonschema-go v0.4.3
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.55.0
 	go.temporal.io/sdk v1.51.0

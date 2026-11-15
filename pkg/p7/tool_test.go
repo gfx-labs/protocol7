@@ -7,20 +7,15 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	acp "github.com/gfx-labs/go-acp"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/gfx-labs/protocol7/pkg/execution/acpshim"
-	"github.com/gfx-labs/protocol7/pkg/execution/session"
-	"github.com/gfx-labs/protocol7/pkg/orchestration/activity"
-	"github.com/gfx-labs/protocol7/pkg/orchestration/coreworker"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
 
@@ -35,6 +30,13 @@ func TestMain(m *testing.M) {
 		agent := &toolAgent{}
 		agent.connection = acp.NewAgentSideConnection(agent, os.Stdout, os.Stdin, slog.New(slog.DiscardHandler))
 		_ = agent.connection.Serve(context.Background())
+		os.Exit(0)
+	}
+	if os.Getenv(reportAgentEnv) != "" {
+		base := &toolAgent{}
+		agent := &reportAgent{toolAgent: base}
+		base.connection = acp.NewAgentSideConnection(agent, os.Stdout, os.Stdin, slog.New(slog.DiscardHandler))
+		_ = base.connection.Serve(context.Background())
 		os.Exit(0)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "start" {
@@ -220,67 +222,9 @@ func toolWorkflow(ctx workflow.Context, host, prompt string) (string, error) {
 // and called through a Temporal update to the workflow. A tool the workflow
 // did not offer is refused, and the agent reads the refusal as the tool's
 // error.
-// startStack runs a Temporal development server, the core worker with the
-// real shim, and a consumer worker on the queue "consumer" with the test
-// workflows. It skips the test when the temporal CLI is not on PATH.
-func startStack(t *testing.T) client.Client {
-	temporalCLI, err := exec.LookPath("temporal")
-	if err != nil {
-		t.Skip("the temporal CLI is not on PATH")
-	}
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := t.Context()
-	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{
-		ExistingPath: temporalCLI, LogLevel: "error", Stdout: os.Stderr, Stderr: os.Stderr,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = server.Stop() })
-	temporalClient := server.Client()
-
-	// The shim's socket path is under the root and may be at most 107 bytes.
-	root, err := os.MkdirTemp("", "p7")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	manager, err := session.NewManager(session.Config{
-		Root: root, ShimBinary: binary,
-		Harness: session.Harness{Command: binary, Env: []string{agentEnv + "=1"}},
-		Tools:   coreworker.ToolCalls{Temporal: temporalClient},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	core, err := coreworker.New(coreworker.Config{Host: "test"}, temporalClient, activity.NewSessions(manager), slog.New(slog.DiscardHandler))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := core.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(core.Stop)
-
-	consumer, err := p7.NewWorker(p7.WorkerConfig{TaskQueue: "consumer", TemporalAddress: server.FrontendHostPort()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumer.RegisterWorkflow("tools", toolWorkflow)
-	consumer.RegisterWorkflow("permissions", permissionWorkflow)
-	if err := consumer.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(consumer.Stop)
-	return temporalClient
-}
-
 func TestASessionCallsItsWorkflowsTools(t *testing.T) {
+	temporalClient := startStack(t, agentEnv, func(w *p7.Worker) { w.RegisterWorkflow("tools", toolWorkflow) })
 	ctx := t.Context()
-	temporalClient := startStack(t)
 
 	for _, test := range []struct{ prompt, want string }{
 		{
@@ -361,7 +305,7 @@ func permissionWorkflow(ctx workflow.Context, host string, allowAll bool, prompt
 // function failed. A session opened with no function has every request
 // allowed.
 func TestAWorkflowDecidesItsSessionsPermissionRequests(t *testing.T) {
-	temporalClient := startStack(t)
+	temporalClient := startStack(t, agentEnv, func(w *p7.Worker) { w.RegisterWorkflow("permissions", permissionWorkflow) })
 	for _, test := range []struct {
 		name     string
 		allowAll bool
