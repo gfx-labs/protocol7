@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	acp "github.com/gfx-labs/go-acp"
@@ -14,6 +15,7 @@ import (
 	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/execution/acpshim"
 	"github.com/gfx-labs/protocol7/pkg/execution/journal"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 )
 
 // Version is sent to the harness as the client version.
@@ -54,6 +56,14 @@ type Harness struct {
 	// commas. towa's is "--models". Empty leaves the list out, and the
 	// harness uses its own configuration.
 	ModelsFlag string
+	// StoreFlag is the flag that takes the directory where the harness keeps
+	// its conversations, as an absolute path. towa's is "--store.root". It
+	// is passed, with a directory inside the session's, only when the manager
+	// keeps snapshots, so that a snapshot holds the conversation. Empty
+	// leaves the harness's own place, and a snapshot then has no conversation:
+	// after a restore the harness cannot load it, and the next turn starts
+	// a new one from a summary of the journal.
+	StoreFlag string
 }
 
 // Config configures a Manager.
@@ -76,6 +86,11 @@ type Config struct {
 type Manager struct {
 	config Config
 	log    *slog.Logger
+
+	// snapshots, if set, keeps a copy of each session's directory.
+	snapshots *snapshot.Store
+	// restoring serializes restores from a snapshot.
+	restoring sync.Mutex
 }
 
 // NewManager returns a manager, creating its root directory.
@@ -100,6 +115,10 @@ func (m *Manager) Open(ctx context.Context, request domain.SessionRequest) (doma
 	var handle domain.SessionHandle
 	if err := checkID(request.ID); err != nil {
 		return handle, err
+	}
+	// A session that was snapshotted is not opened again: it comes back.
+	if _, err := m.Restore(ctx, request.ID); err != nil {
+		return handle, fmt.Errorf("open session %s: %w", request.ID, err)
 	}
 	rec, err := m.load(request.ID)
 	switch {
@@ -139,6 +158,7 @@ func (m *Manager) Open(ctx context.Context, request domain.SessionRequest) (doma
 	if err := p.catchUp(ctx); err != nil {
 		m.log.Warn("publish the journal after opening", "session", rec.ID, "error", err)
 	}
+	m.snapshotAfter(ctx, rec.ID, "open")
 	return domain.SessionHandle{ID: rec.ID, Inputs: rec.Inputs}, nil
 }
 
@@ -172,6 +192,13 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 		args := append([]string(nil), m.config.Harness.Args...)
 		if m.config.Harness.ModelsFlag != "" && len(rec.Request.Models) > 0 {
 			args = append(args, m.config.Harness.ModelsFlag+"="+strings.Join(rec.Request.Models, ","))
+		}
+		if m.snapshots != nil && m.config.Harness.StoreFlag != "" {
+			store, err := m.harnessDir(rec.ID)
+			if err != nil {
+				return nil, "", err
+			}
+			args = append(args, m.config.Harness.StoreFlag+"="+store)
 		}
 		spec := acpshim.Spec{
 			Session: rec.ID, Command: m.config.Harness.Command, Args: args, Env: m.config.Harness.Env,
@@ -278,7 +305,23 @@ type TurnControl struct {
 // Cancelling ctx asks the agent to stop the turn. RunTurn then still waits
 // for the turn to end and returns its result, with the stop reason the
 // agent gave.
+//
+// When the manager keeps snapshots, one is written once the turn has ended.
+// A snapshot that fails is logged and does not fail the turn.
 func (m *Manager) RunTurn(ctx context.Context, request domain.TurnRequest, control TurnControl) (domain.TurnResult, error) {
+	if request.Turn != "" {
+		if _, err := m.Restore(ctx, request.Session); err != nil {
+			return domain.TurnResult{}, fmt.Errorf("run turn in session %s: %w", request.Session, err)
+		}
+	}
+	result, err := m.runTurn(ctx, request, control)
+	if err == nil {
+		m.snapshotAfter(ctx, request.Session, "turn "+request.Turn)
+	}
+	return result, err
+}
+
+func (m *Manager) runTurn(ctx context.Context, request domain.TurnRequest, control TurnControl) (domain.TurnResult, error) {
 	var none domain.TurnResult
 	if request.Turn == "" {
 		return none, errors.New("run turn: a turn ID is required")
@@ -458,11 +501,14 @@ func promptRequest(acpSession string, request domain.TurnRequest, seed string) (
 }
 
 // Close stops the session's processes and marks it closed. Its workspace and
-// journal stay on disk. Closing a closed session does nothing.
+// journal stay on disk. Its snapshot is deleted: a closed session is not
+// restored. Closing a closed session does nothing.
 func (m *Manager) Close(ctx context.Context, request domain.CloseRequest) error {
 	rec, err := m.load(request.Session)
 	if isMissing(err) {
-		return nil
+		// The machine may have lost the session while its snapshot is still
+		// there.
+		return m.deleteSnapshot(ctx, request.Session)
 	}
 	if err != nil {
 		return err
@@ -470,9 +516,18 @@ func (m *Manager) Close(ctx context.Context, request domain.CloseRequest) error 
 	if err := acpshim.Stop(ctx, m.shimDir(rec.ID)); err != nil {
 		return fmt.Errorf("close session %s: %w", rec.ID, err)
 	}
-	if rec.Closed {
+	if !rec.Closed {
+		rec.Closed = true
+		if err := m.save(rec); err != nil {
+			return err
+		}
+	}
+	return m.deleteSnapshot(ctx, rec.ID)
+}
+
+func (m *Manager) deleteSnapshot(ctx context.Context, id string) error {
+	if m.snapshots == nil {
 		return nil
 	}
-	rec.Closed = true
-	return m.save(rec)
+	return m.snapshots.Delete(ctx, id)
 }

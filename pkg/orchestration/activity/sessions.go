@@ -33,6 +33,9 @@ type Sessions struct {
 // NewSessions returns the session activities that run on manager.
 func NewSessions(manager *session.Manager) *Sessions { return &Sessions{manager: manager} }
 
+// Manager is the session manager the activities run on.
+func (s *Sessions) Manager() *session.Manager { return s.manager }
+
 // Register adds the session activities to a worker under their fixed names.
 func (s *Sessions) Register(w worker.Worker) {
 	w.RegisterActivityWithOptions(s.Open, activity.RegisterOptions{Name: domain.ActivityOpenSession})

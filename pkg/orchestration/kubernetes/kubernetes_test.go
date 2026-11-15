@@ -8,9 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
+	"github.com/gfx-labs/protocol7/pkg/execution/snapshot/snapshottest"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
 )
 
@@ -103,5 +106,72 @@ func TestStartAndDeleteASessionPod(t *testing.T) {
 		if err := pods.Delete(ctx, request); err != nil {
 			t.Errorf("delete: %v", err)
 		}
+	}
+}
+
+// With snapshots, deleting a pod waits until the pod is gone, and then
+// deletes the session's snapshot, so that the worker of a pod that is
+// ending cannot write it again afterwards.
+func TestDeletingAPodDeletesItsSnapshotOnceThePodIsGone(t *testing.T) {
+	s3 := snapshottest.Start(t)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	snapshots := snapshot.Config{Endpoint: s3.URL, Bucket: snapshottest.Bucket, Prefix: "p7", PathStyle: true}
+	store, err := snapshot.New(snapshots, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "s1")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := store.Save(ctx, "s1", root); err != nil {
+		t.Fatal(err)
+	}
+
+	var reads atomic.Int32
+	deleted := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodDelete:
+			deleted = true
+			_, _ = w.Write([]byte(`{}`))
+		case http.MethodGet:
+			// The pod ends gracefully: it is there for two more reads.
+			if reads.Add(1) <= 2 {
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"gone"}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+	dir := t.TempDir()
+	token, template := filepath.Join(dir, "token"), filepath.Join(dir, "pod.json")
+	if err := os.WriteFile(token, []byte("tok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(template, []byte(`{"spec":{"containers":[{"name":"session"}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pods, err := kubernetes.New(kubernetes.Config{
+		Namespace: "p7", TemplateFile: template, SessionContainer: "session", APIServer: server.URL, TokenFile: token, Snapshots: snapshots,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pods.Delete(ctx, domain.PodRequest{Session: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted || reads.Load() != 3 {
+		t.Errorf("pod deleted %v and read %d times, want deleted and read until it was gone", deleted, reads.Load())
+	}
+	if found, err := store.Restore(ctx, "s1", filepath.Join(t.TempDir(), "x"), nil); err != nil || found {
+		t.Errorf("the snapshot is still there: %v, %v", found, err)
 	}
 }
