@@ -15,7 +15,7 @@ The trusted-host path that the selfdev chat needs (plan section 12, "the chat co
 | `pkg/execution/session` | Sessions on this machine: a directory per session with its workspace, shim directory and record. Places git clone inputs. Runs a turn that survives its caller. A harness that exits while its session starts is reported with its exit status and its last five lines of output |
 | `pkg/transport/stream` | Session frames on NATS JetStream, one subject per session, and an embedded NATS server for local use |
 | `pkg/orchestration/activity`, `pkg/orchestration/coreworker` | The activities `p7.OpenSession`, `p7.RunTurn` and `p7.CloseSession`, and the worker that serves them on `local-<host>` |
-| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, `SessionSpec.Tools` with `HandleTools`, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
+| `pkg/p7` | The library: `NewWorker`, `OpenSession`, `PromptText`, `PromptTextFuture`, `Session.Close`, `GitClone` inputs, `SessionSpec.Tools` with `HandleTools`, `SessionSpec.Permissions` with `HandlePermissions`, and `NewClient` with `WatchSession`. Plain constructors, with no dependency on fx. `SessionSpec.OpenRetry` and `TextPrompt.Retry` let the workflow set how often opening and a turn are retried, and a harness that stopped fails with the application error type `HarnessStopped` |
 | `pkg/p7/p7fx` | Optional fx options for a consumer's process: `TemporalClient`, `Worker`, `Client`, and `Run`, which runs an application until its context ends |
 | `pkg/transport/cli`, `cmd/p7`, `cmd/p7-worker` | `p7 worker`, and `p7 dev`, which runs a Temporal development server, an embedded NATS server and the core worker in one process. Each command is an fx application, and `wire.go` holds its modules |
 | `containers/p7`, `scripts/build-image`, `.github/workflows/image.yml` | The image `ghcr.io/gfx-labs/protocol7:<commit>`: the three commands and git. It holds no harness and no toolchain for an agent. The workflow builds it on the self-hosted runners and pushes it with its own token. No pod runs this image: protocol7-selfdev builds the commands from this source at a pinned commit, in its own image |
@@ -44,6 +44,17 @@ A workflow offers tools to a session's agent with `SessionSpec.Tools` and answer
 - The update ID is the session, the shim's process ID and the MCP request ID. A call that the shim sends again to a later connection gets the first call's result and does not run twice.
 - The update's validator refuses a session the workflow did not open and a tool it did not offer, before the call enters history. A `Run` error is returned to the agent as a result with `isError`, which is how MCP reports a tool that failed.
 - What a call may do is decided in the consumer's workflow. It runs activities for any work outside the workflow.
+
+## Permission requests
+
+A workflow decides the permission requests of its session's agent with `SessionSpec.Permissions`, a function that gets a `p7.PermissionRequest` (session, tool call ID, title, kind, raw input, the agent's options) and returns `p7.Allow()` or `p7.Deny(reason)`. With no function, every request is allowed, as before.
+
+- The workflow calls `p7.HandlePermissions` with the same function at the start of every run, like `HandleTools`. A request becomes the Temporal update `p7.Permission` to the workflow that opened the session, sent with no run ID. The validator refuses a session the workflow did not open.
+- The function runs in the workflow, so it may run activities or wait for a signal to ask a person. The agent waits for the answer.
+- The shim answers the agent with its own option of the wanted kind: `allow_once` then `allow_always`, or `reject_once` then `reject_always`. When the agent offers none of that kind, the answer is `cancelled`. ACP carries no reason, so the agent is not told one.
+- Fail closed: an error from the function, a refused update, and a core worker that cannot reach the owner all deny the request.
+- ACP's request ID is not visible to the shim's handler, so the update ID is the session, the shim's process ID and a digest of the request. The same request sent again to a later connection gets the first decision. An agent that repeats an identical request in the same shim run gets the same decision.
+- A session with `Permissions` and no tools offers no MCP server, and runs on a harness that does not take MCP over ACP.
 
 ## Run it
 
@@ -106,7 +117,7 @@ Run with every outbound connection through PDP (protocol7 `2ffecb6`, selfdev `f1
 | `pkg/execution/journal` | The decoder on the journal of a real towa session that was cancelled, loaded again and interrupted (`testdata/towa-recovery.ndjson`) |
 | `pkg/execution/session` | The manager with the real shim and a scripted ACP agent, both run from the test binary: a repeated turn, a turn picked up and cancelled, a shim stopped mid-turn, a harness that exits while it starts, and context hidden from viewers |
 | `pkg/transport/stream` | Publish, deduplication and an ordered read against the embedded NATS server |
-| `pkg/p7` | A workflow's tool called by a scripted agent over `mcp/message`, through the real shim, the core worker and a Temporal development server, and a tool it did not offer refused. Skipped when the `temporal` CLI is not on `PATH` |
+| `pkg/p7` | A workflow's tool called by a scripted agent over `mcp/message`, through the real shim, the core worker and a Temporal development server, and a tool it did not offer refused. A workflow's permission function allowing, denying and failing on a scripted agent's request, and a session with no function allowed. Skipped when the `temporal` CLI is not on `PATH` |
 | `pkg/transport/cli`, `protocol7-selfdev/pkg/cli` | Every command's fx graph has what its components ask for. Nothing is built or started |
 | `protocol7-selfdev/pkg/chat` | The chat workflow in Temporal's test environment: message order, stop, close, cancel, and a chat that cannot open |
 
@@ -122,7 +133,7 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 | Host, container and Kubernetes backends | The host backend only |
 | Model and git credentials come through PDP | On a workstation, sessions use the machine's own logins, which section 5 allows for trusted host execution. The talos-metal deployment puts the model credentials in PDP. Its git credential is a GitHub App token that a second container writes to a file, not a PDP binding |
 | A run pod's SPIFFE ID carries its profile, repository and run ID | The deployment has one worker pod with one identity, which every chat shares |
-| Permission requests are decided by policy | Every permission request is allowed |
+| Permission requests are decided by policy | The workflow that opened a session decides them, with `SessionSpec.Permissions`. A session with no function has every request allowed. There is no policy language |
 | Limits, typed prompts, approvals, notices, steering | None of them |
 | `p7.Tool` registers a user activity, called through ticketd with `p7 call` | A tool is a function in the workflow that opened the session, called over the ACP connection as a Temporal update. A tool registered on another worker is reached by the workflow running an activity on that worker's queue |
 
