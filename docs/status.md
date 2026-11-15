@@ -41,6 +41,16 @@ The retained test makes real TLS 1.3 connections with generated CA-signed SVIDs 
 
 A worker identity is not a sandbox. An unsandboxed agent sharing the worker's container can use its identity, poll tasks and forge task responses. Task-only credentials also cannot perform protocol7's tool and permission workflow updates or start a selfdev review. A deployment must provide a trusted relay for those operations, or explicitly accept a broader role before switching existing workers to task-only credentials.
 
+## Temporal SPIFFE clients
+
+Every Temporal client that protocol7 makes can connect with mutual TLS. `p7.NewTemporalClient` is the one constructor, used by `p7.NewWorker` and by `p7fx.TemporalClient`. `p7.TemporalSPIFFE` holds `Socket`, the Workload API address, and `ServerID`, the SPIFFE ID the frontend must present. `p7.WorkerConfig.TemporalSPIFFE` and `p7fx.TemporalConfig.SPIFFE` carry it. With `ServerID` empty the client connects in plaintext, as before. A socket with no server ID is refused.
+
+- With `ServerID` set, the client opens a `go-spiffe` X.509 source and waits up to a minute for its first SVID. It presents the SVID and accepts only a server certificate from the bundle that names `ServerID`, over TLS 1.3. The source keeps the SVID and bundle current. Closing the client closes the source.
+- `p7 worker`, `p7-worker`, `p7 session` and `p7 pods` take `--temporal-spiffe-socket` (`TEMPORAL_SPIFFE_SOCKET`) and `--temporal-server-spiffe-id` (`TEMPORAL_SERVER_SPIFFE_ID`). An empty socket uses `SPIFFE_ENDPOINT_SOCKET`. The server ID is the value of `TEMPORAL_FRONTEND_SPIFFE_ID` in `p7-temporal`. `p7 dev` starts its own plaintext development server and has no such flags.
+- `github.com/spiffe/go-spiffe/v2` 2.7.0, the version `temporal/` uses, adds 1.3 MB to `p7-worker` (44.4 MB to 45.7 MB) and 0.9 MB to `p7` (57.8 MB to 58.7 MB).
+
+Run on 2026-11-15: `go vet ./...`, gofmt, and `go test -race` of `pkg/p7`, `pkg/p7/p7fx` and `pkg/transport/...` with the Temporal CLI on `PATH`. `pkg/p7/temporal_test.go` makes real TLS 1.3 connections with SVIDs signed by a CA it generates. The client's SVID comes from a Workload API served on a unix socket with the `go-spiffe` protobuf service. The server is a gRPC server with `go-spiffe`'s mutual TLS server config, serving the health check and `GetSystemInfo` that `CheckHealth` calls. The test checks that the server sees the client's SPIFFE ID over TLS 1.3, that a server presenting another SPIFFE ID is refused before any call reaches it, and that closing the client ends its Workload API stream. Not run: a connection to `p7-temporal`, SPIRE, certificate rotation and a deployment.
+
 ## How a process is put together
 
 The commands of both repositories are composed with `go.uber.org/fx` (decided 2026-11-13, user). A long-lived component has a constructor that connects to nothing, and separate start and stop methods: `stream.New` then `Connect`, `stream.NewEmbedded` then `Start`, `coreworker.New` then `Start` and `Stop`, `p7.NewClient` then `Connect`, `p7.NewWorker` then `Start` and `Stop`. A command supplies its flags as configuration values and names its modules. fx starts the components in dependency order and stops them in reverse.

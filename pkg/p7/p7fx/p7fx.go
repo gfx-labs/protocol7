@@ -29,6 +29,9 @@ import (
 type TemporalConfig struct {
 	Address   string
 	Namespace string
+	// SPIFFE, when its ServerID is set, connects with mutual TLS. The zero
+	// value connects in plaintext.
+	SPIFFE p7.TemporalSPIFFE
 }
 
 // TemporalClient provides a client.Client from a TemporalConfig, for code
@@ -37,11 +40,11 @@ type TemporalConfig struct {
 var TemporalClient = fx.Provide(newTemporalClient)
 
 func newTemporalClient(lifecycle fx.Lifecycle, config TemporalConfig, logger *slog.Logger) (client.Client, error) {
-	temporalClient, err := client.NewLazyClient(client.Options{
+	temporalClient, closeClient, err := p7.NewTemporalClient(client.Options{
 		HostPort:  config.Address,
 		Namespace: config.Namespace,
 		Logger:    log.NewStructuredLogger(logger),
-	})
+	}, config.SPIFFE)
 	if err != nil {
 		return nil, fmt.Errorf("configure the Temporal client for %s: %w", config.Address, err)
 	}
@@ -53,8 +56,7 @@ func newTemporalClient(lifecycle fx.Lifecycle, config TemporalConfig, logger *sl
 			return nil
 		},
 		OnStop: func(context.Context) error {
-			temporalClient.Close()
-			return nil
+			return closeClient()
 		},
 	})
 	return temporalClient, nil
