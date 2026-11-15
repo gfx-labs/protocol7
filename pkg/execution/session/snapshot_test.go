@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
+	"github.com/gfx-labs/protocol7/pkg/execution/session"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot/snapshottest"
 )
@@ -52,5 +54,36 @@ func TestASnapshotBeingWrittenDuringCloseIsDeleted(t *testing.T) {
 	}
 	if found, err := store.Restore(ctx, "s1", filepath.Join(t.TempDir(), "x"), nil); err != nil || found {
 		t.Errorf("a closed session was snapshotted: %v, %v", found, err)
+	}
+}
+
+// The snapshot after a turn takes longer than an activity's heartbeat
+// timeout allows, so the turn heartbeats while it is written.
+func TestATurnHeartbeatsWhileItsSnapshotIsWritten(t *testing.T) {
+	s3 := snapshottest.Start(t)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	store, err := snapshot.New(snapshot.Config{Endpoint: s3.URL, Bucket: snapshottest.Bucket, PathStyle: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := open(t)
+	f.manager.SetSnapshots(store)
+	s3.WriteDelay.Store(int64(time.Second))
+
+	var beats atomic.Int32
+	started := time.Now()
+	result, err := f.turn(context.Background(), "t1", "hello", session.TurnControl{Beat: func() { beats.Add(1) }})
+	if err != nil || result.StopReason != "end_turn" {
+		t.Fatalf("turn: %+v, %v", result, err)
+	}
+	elapsed := time.Since(started)
+	// Five writes of a second each, with a beat every two seconds.
+	if elapsed < 4*time.Second || beats.Load() < 2 {
+		t.Errorf("the turn took %s and heartbeat %d times, want a slow snapshot with a beat every two seconds", elapsed, beats.Load())
+	}
+	found, err := store.Restore(context.Background(), "s1", filepath.Join(t.TempDir(), "x"), nil)
+	if err != nil || !found {
+		t.Errorf("the snapshot was not written: %v, %v", found, err)
 	}
 }

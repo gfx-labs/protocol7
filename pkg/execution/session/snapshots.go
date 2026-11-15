@@ -17,6 +17,10 @@ import (
 // snapshotTimeout bounds one snapshot written after a turn.
 const snapshotTimeout = 10 * time.Minute
 
+// snapshotBeat is how often a turn's activity heartbeats while its snapshot
+// is written.
+const snapshotBeat = 2 * time.Second
+
 // harnessDirName is where a session's harness keeps its conversation, when
 // snapshots are on, so that the snapshot holds it.
 const harnessDirName = "harness"
@@ -95,14 +99,36 @@ func (m *Manager) Snapshot(ctx context.Context, id string) error {
 }
 
 // snapshotAfter writes a snapshot, and logs a failure. The work it follows
-// has happened, and the next snapshot tries again.
-func (m *Manager) snapshotAfter(ctx context.Context, id, after string) {
+// has happened, and the next snapshot tries again. beat, if it is not nil, is
+// called every two seconds while the snapshot is written, because the caller
+// is an activity that has to heartbeat, and a snapshot of a large workspace
+// takes longer than its heartbeat timeout.
+func (m *Manager) snapshotAfter(ctx context.Context, id, after string, beat func()) {
 	if m.snapshots == nil {
 		return
 	}
 	// The caller may be cancelled and the work is done all the same.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTimeout)
 	defer cancel()
+	if beat != nil {
+		stopped := make(chan struct{})
+		defer func() { <-stopped }()
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			defer close(stopped)
+			ticker := time.NewTicker(snapshotBeat)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					beat()
+				case <-done:
+					return
+				}
+			}
+		}()
+	}
 	if err := m.Snapshot(ctx, id); err != nil {
 		m.log.Warn("snapshot of the session failed, the previous one stays", "session", id, "after", after, "error", err)
 	}

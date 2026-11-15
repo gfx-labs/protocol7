@@ -13,6 +13,7 @@ import (
 	"time"
 
 	acp "github.com/gfx-labs/go-acp"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -153,6 +154,7 @@ type snapshotStack struct {
 	temporal  client.Client
 	binary    string
 	snapshots p7.SnapshotStore
+	s3        *snapshottest.Server
 }
 
 func startSnapshotStack(t *testing.T) *snapshotStack {
@@ -188,7 +190,7 @@ func startSnapshotStack(t *testing.T) *snapshotStack {
 	}
 	t.Cleanup(consumer.Stop)
 	return &snapshotStack{
-		t: t, temporal: server.Client(), binary: binary,
+		t: t, temporal: server.Client(), binary: binary, s3: s3,
 		snapshots: p7.SnapshotStore{Endpoint: s3.URL, Bucket: snapshottest.Bucket, Prefix: "p7/sessions", PathStyle: true, Exclude: []string{"node_modules"}},
 	}
 }
@@ -344,5 +346,54 @@ func TestASessionContinuesOnAnotherWorkerFromItsSnapshot(t *testing.T) {
 				t.Errorf("after the session closed its snapshot is still there: %v, %v", found, err)
 			}
 		})
+	}
+}
+
+// A snapshot that takes longer than the turn activity's heartbeat timeout of
+// ten seconds does not fail the attempt: the activity heartbeats while the
+// snapshot is written, so each turn runs once.
+func TestASlowSnapshotDoesNotTimeOutTheTurn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("takes about a minute")
+	}
+	stack := startSnapshotStack(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	root := shortDir(t)
+	core := stack.core(root, "")
+	t.Cleanup(core.Stop)
+	// Five writes make a snapshot, so each takes over twelve seconds.
+	stack.s3.WriteDelay.Store(int64(2500 * time.Millisecond))
+
+	run, err := stack.temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{ID: "slow-snapshot", TaskQueue: "consumer"}, "memory", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for turns := 0; turns < 2; {
+		response, err := stack.temporal.QueryWorkflow(ctx, run.GetID(), "", "turns")
+		if err == nil {
+			_ = response.Get(&turns)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err := stack.temporal.TerminateWorkflow(ctx, run.GetID(), "", "done"); err != nil {
+		t.Fatal(err)
+	}
+	started := 0
+	history := stack.temporal.GetWorkflowHistory(ctx, run.GetID(), "", false, enumspb.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+	for history.HasNext() {
+		event, err := history.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attributes := event.GetActivityTaskStartedEventAttributes(); attributes != nil {
+			started++
+			if attributes.GetAttempt() != 1 {
+				t.Errorf("an activity ran as attempt %d, want every one to succeed at the first", attributes.GetAttempt())
+			}
+		}
+	}
+	if started < 3 {
+		t.Errorf("%d activities started, want the open and two turns", started)
 	}
 }

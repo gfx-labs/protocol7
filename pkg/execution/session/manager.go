@@ -161,7 +161,7 @@ func (m *Manager) Open(ctx context.Context, request domain.SessionRequest) (doma
 	if err := p.catchUp(ctx); err != nil {
 		m.log.Warn("publish the journal after opening", "session", rec.ID, "error", err)
 	}
-	m.snapshotAfter(ctx, rec.ID, "open")
+	m.snapshotAfter(ctx, rec.ID, "open", nil)
 	return domain.SessionHandle{ID: rec.ID, Inputs: rec.Inputs}, nil
 }
 
@@ -319,7 +319,7 @@ func (m *Manager) RunTurn(ctx context.Context, request domain.TurnRequest, contr
 	}
 	result, err := m.runTurn(ctx, request, control)
 	if err == nil {
-		m.snapshotAfter(ctx, request.Session, "turn "+request.Turn)
+		m.snapshotAfter(ctx, request.Session, "turn "+request.Turn, control.Beat)
 	}
 	return result, err
 }
