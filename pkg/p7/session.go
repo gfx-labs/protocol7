@@ -162,7 +162,7 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 		// inside it, on the pod's own queue. The open waits on that queue
 		// while the pod is scheduled and its image is pulled.
 		podCtx := workflow.WithActivityOptions(ctx, podOptions)
-		podRequest := domain.PodRequest{Session: request.ID, Owner: request.Owner}
+		podRequest := domain.PodRequest{Session: request.ID, Owner: request.Owner, OpenTimeout: timeout}
 		if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, podRequest).Get(ctx, &pod); err != nil {
 			return nil, fmt.Errorf("open session %s: start its pod: %w", request.ID, err)
 		}

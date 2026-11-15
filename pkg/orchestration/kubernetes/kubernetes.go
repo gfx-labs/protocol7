@@ -27,6 +27,7 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
 )
@@ -40,6 +41,9 @@ const (
 	LabelManaged = "p7.gfx-labs.io/managed"
 	// AnnotationOwner holds the ID of the workflow that opened the session.
 	AnnotationOwner = "p7.gfx-labs.io/owner"
+	// AnnotationOpenTimeout holds how long the pod may take to become ready,
+	// as a Go duration.
+	AnnotationOpenTimeout = "p7.gfx-labs.io/open-timeout"
 	// EnvSession and EnvTaskQueue tell `p7 session` which session it
 	// serves and which queue it polls.
 	EnvSession   = "P7_SESSION"
@@ -64,6 +68,12 @@ type Config struct {
 	// in-cluster paths.
 	TokenFile string
 	CAFile    string
+	// ReconcileInterval is how often the worker looks for pods that nothing
+	// owns. Zero is five minutes.
+	ReconcileInterval time.Duration
+	// OpenTimeout is the time a pod may take to become ready when its
+	// request named none. Zero is fifteen minutes.
+	OpenTimeout time.Duration
 }
 
 const (
@@ -130,6 +140,7 @@ func (p *Pods) Register(w worker.Worker) {
 func NewWorker(temporalClient client.Client, pods *Pods) worker.Worker {
 	w := worker.New(temporalClient, domain.KubernetesQueue, worker.Options{})
 	pods.Register(w)
+	w.RegisterWorkflowWithOptions(ProbeSessionPod, workflow.RegisterOptions{Name: domain.WorkflowProbeSessionPod})
 	return w
 }
 
@@ -156,11 +167,22 @@ func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.Pod
 
 // Delete deletes a session's pod. A pod that is gone is not an error.
 func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
-	err := p.do(ctx, http.MethodDelete, p.podsPath()+"/"+PodName(request.Session), nil, nil)
+	err := p.deletePod(ctx, PodName(request.Session), "")
 	if err == nil {
 		p.logger.Info("session pod deleted", "session", request.Session, "pod", PodName(request.Session))
 	}
-	if isStatus(err, http.StatusNotFound) {
+	return err
+}
+
+// deletePod deletes a pod. With a uid it deletes that pod only, not one
+// that took its name. A pod that is gone is not an error.
+func (p *Pods) deletePod(ctx context.Context, name, uid string) error {
+	var body any
+	if uid != "" {
+		body = map[string]any{"preconditions": map[string]any{"uid": uid}}
+	}
+	err := p.do(ctx, http.MethodDelete, p.podsPath()+"/"+name, body, nil)
+	if isStatus(err, http.StatusNotFound) || (uid != "" && isStatus(err, http.StatusConflict)) {
 		return nil
 	}
 	return err
@@ -191,6 +213,9 @@ func (p *Pods) render(request domain.PodRequest, handle domain.PodHandle) (map[s
 	labels[LabelManaged] = "true"
 	if request.Owner != "" {
 		object(metadata, "annotations")[AnnotationOwner] = request.Owner
+	}
+	if request.OpenTimeout > 0 {
+		object(metadata, "annotations")[AnnotationOpenTimeout] = request.OpenTimeout.String()
 	}
 	spec := object(pod, "spec")
 	delete(pod, "status")

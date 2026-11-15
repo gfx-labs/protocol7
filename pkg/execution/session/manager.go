@@ -476,3 +476,17 @@ func (m *Manager) Close(ctx context.Context, request domain.CloseRequest) error 
 	rec.Closed = true
 	return m.save(rec)
 }
+
+// State says whether a session was opened here and whether it was closed.
+func (m *Manager) State(session string) (domain.SessionState, error) {
+	state := domain.SessionState{Session: session}
+	rec, err := m.load(session)
+	if isMissing(err) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	state.Exists, state.Closed = true, rec.Closed
+	return state, nil
+}

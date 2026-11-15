@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
@@ -69,7 +70,7 @@ func TestStartAndDeleteASessionPod(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	request := domain.PodRequest{Session: "s1", Owner: "chat-x"}
+	request := domain.PodRequest{Session: "s1", Owner: "chat-x", OpenTimeout: 10 * time.Minute}
 	handle, err := pods.Start(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +81,8 @@ func TestStartAndDeleteASessionPod(t *testing.T) {
 	metadata := posted["metadata"].(map[string]any)
 	labels := metadata["labels"].(map[string]any)
 	if metadata["name"] != "p7-session-s1" || metadata["resourceVersion"] != nil || labels["app"] != "p7-session" ||
-		labels[kubernetes.LabelSession] != "s1" || metadata["annotations"].(map[string]any)[kubernetes.AnnotationOwner] != "chat-x" {
+		labels[kubernetes.LabelSession] != "s1" || metadata["annotations"].(map[string]any)[kubernetes.AnnotationOwner] != "chat-x" ||
+		metadata["annotations"].(map[string]any)[kubernetes.AnnotationOpenTimeout] != "10m0s" {
 		t.Errorf("metadata %v", metadata)
 	}
 	session := posted["spec"].(map[string]any)["containers"].([]any)[1].(map[string]any)
