@@ -16,6 +16,23 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
+  temporal:
+    runs-on: talos-metal-gfx-public
+    defaults:
+      run:
+        working-directory: temporal
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: temporal/go.mod
+          cache-dependency-path: temporal/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
   go:
     runs-on: talos-metal-gfx-public
     steps:
