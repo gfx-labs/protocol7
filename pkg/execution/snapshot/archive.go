@@ -255,7 +255,11 @@ func entryPath(name string) (string, error) {
 			return "", unsafeEntry(name, "leaves the workspace with '..'")
 		}
 	}
-	return path.Clean(name), nil
+	clean := path.Clean(name)
+	if !filepath.IsLocal(filepath.FromSlash(clean)) {
+		return "", unsafeEntry(name, "is not a path inside the workspace")
+	}
+	return clean, nil
 }
 
 // extract reads a zstd-compressed tar from r into the existing directory
@@ -299,6 +303,10 @@ func extract(r io.Reader, dest string) error {
 			}
 		}
 		target := filepath.Join(dest, filepath.FromSlash(name))
+		// The name was checked above. This checks the path that is used.
+		if base := filepath.Clean(dest); target != base && !strings.HasPrefix(target, base+string(filepath.Separator)) {
+			return unsafeEntry(header.Name, "would be written outside the workspace")
+		}
 		mode := fs.FileMode(header.Mode).Perm()
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -340,6 +348,12 @@ func extract(r io.Reader, dest string) error {
 			}
 			if linkEscapes(name, header.Linkname) {
 				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which may leave the workspace")
+			}
+			// Where the link points is inside the workspace, as linkEscapes
+			// checked, and so is the path that the link makes from it.
+			if base := filepath.Clean(dest); !strings.HasPrefix(filepath.Join(filepath.Dir(target), header.Linkname), base+string(filepath.Separator)) &&
+				filepath.Join(filepath.Dir(target), header.Linkname) != base {
+				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which leaves the workspace")
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
