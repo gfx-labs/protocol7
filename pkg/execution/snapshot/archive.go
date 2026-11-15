@@ -349,22 +349,39 @@ func extract(r io.Reader, dest string) error {
 			if linkEscapes(name, header.Linkname) {
 				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which may leave the workspace")
 			}
-			// Where the link points is inside the workspace, as linkEscapes
-			// checked. The path the link makes from its directory is checked
-			// again, and the link is made from it, written relative to the
-			// directory.
-			resolved := filepath.Join(filepath.Dir(target), header.Linkname)
-			if base := filepath.Clean(dest); resolved != base && !strings.HasPrefix(resolved, base+string(filepath.Separator)) {
+			// linkEscapes allowed only leading ".." elements. The rest of the
+			// target must be a path inside the directory that they reach, and
+			// the link is made from the two parts.
+			rest, climbs := header.Linkname, 0
+			for strings.HasPrefix(rest, "../") {
+				rest, climbs = rest[3:], climbs+1
+			}
+			if rest == ".." {
+				rest, climbs = ".", climbs+1
+			} else if rest == "" && climbs > 0 {
+				rest = "."
+			}
+			if !filepath.IsLocal(rest) {
 				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which leaves the workspace")
 			}
-			relativeTarget, err := filepath.Rel(filepath.Dir(target), resolved)
-			if err != nil {
-				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which leaves the workspace")
-			}
+			linkTarget := strings.Repeat("../", climbs) + rest
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
 			}
-			if err := os.Symlink(relativeTarget, target); err != nil {
+			// The link is made in the directory that its parent really is,
+			// which is inside dest.
+			parent, err := filepath.EvalSymlinks(filepath.Dir(target))
+			if err != nil {
+				return err
+			}
+			root, err := filepath.EvalSymlinks(dest)
+			if err != nil {
+				return err
+			}
+			if parent != root && !strings.HasPrefix(parent, root+string(filepath.Separator)) {
+				return unsafeEntry(header.Name, "would be made outside the workspace")
+			}
+			if err := os.Symlink(linkTarget, filepath.Join(parent, filepath.Base(target))); err != nil {
 				return err
 			}
 			links[name] = true
