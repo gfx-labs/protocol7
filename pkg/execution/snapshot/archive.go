@@ -232,6 +232,24 @@ type zeros struct{}
 
 func (zeros) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 
+// linkInside reports whether a symbolic link in the directory linkDir, with
+// the target linkname, points to a place inside root. Both are real paths.
+// It follows the links that are already made, so a target that goes through
+// one is judged by where it ends. A target that does not exist yet is judged
+// by its path, which linkEscapes has already checked.
+func linkInside(root, linkDir, linkname string) bool {
+	candidate := filepath.Join(linkDir, linkname)
+	real, err := filepath.EvalSymlinks(candidate)
+	if errors.Is(err, fs.ErrNotExist) {
+		real, err = candidate, nil
+	}
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(root, real)
+	return err == nil && !strings.HasPrefix(filepath.Clean(relative), "..")
+}
+
 // ErrUnsafeArchive is wrapped by the error of an archive that holds an entry
 // that would be written outside the directory it is extracted into.
 var ErrUnsafeArchive = errors.New("unsafe snapshot archive")
@@ -349,22 +367,6 @@ func extract(r io.Reader, dest string) error {
 			if linkEscapes(name, header.Linkname) {
 				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which may leave the workspace")
 			}
-			// linkEscapes allowed only leading ".." elements. The rest of the
-			// target must be a path inside the directory that they reach, and
-			// the link is made from the two parts.
-			rest, climbs := header.Linkname, 0
-			for strings.HasPrefix(rest, "../") {
-				rest, climbs = rest[3:], climbs+1
-			}
-			if rest == ".." {
-				rest, climbs = ".", climbs+1
-			} else if rest == "" && climbs > 0 {
-				rest = "."
-			}
-			if !filepath.IsLocal(rest) {
-				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which leaves the workspace")
-			}
-			linkTarget := strings.Repeat("../", climbs) + rest
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
 			}
@@ -381,7 +383,10 @@ func extract(r io.Reader, dest string) error {
 			if parent != root && !strings.HasPrefix(parent, root+string(filepath.Separator)) {
 				return unsafeEntry(header.Name, "would be made outside the workspace")
 			}
-			if err := os.Symlink(linkTarget, filepath.Join(parent, filepath.Base(target))); err != nil {
+			if !linkInside(root, parent, header.Linkname) {
+				return unsafeEntry(header.Name, "is a symbolic link to "+header.Linkname+", which leaves the workspace")
+			}
+			if err := os.Symlink(header.Linkname, filepath.Join(parent, filepath.Base(target))); err != nil {
 				return err
 			}
 			links[name] = true
