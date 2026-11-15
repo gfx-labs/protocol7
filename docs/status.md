@@ -68,6 +68,19 @@ A workflow decides the permission requests of its session's agent with `SessionS
 - The report is the tool call. Text in the agent's message is never parsed.
 - It was run with a scripted agent, the real shim, the core worker and a Temporal development server (`pkg/p7/report_test.go`). It was not run with a real harness, so whether a model calls the tool reliably from the prompt is not known.
 
+## Session pods that nothing owns
+
+A session pod outlives a workflow that failed, was terminated or lost its `CloseSession`. `p7 pods` therefore reconciles once when it starts and then every `--reconcile-interval` (five minutes by default, `P7_RECONCILE_INTERVAL`).
+
+- It lists the pods with the label `p7.gfx-labs.io/managed=true` in its namespace, and deletes a pod, with a UID precondition, for the first of these reasons that holds. It logs each deletion as `session pod deleted by reconciliation` with the `session`, the `pod` and the `reason`.
+  1. `its owner workflow is not running`: the pod's owner annotation names a workflow whose latest run is not running, or that Temporal does not know. A workflow that continued as new is still running.
+  2. `it is not ready after its open timeout`: the pod has not had its `Ready` condition for longer than the timeout in its `p7.gfx-labs.io/open-timeout` annotation, which is the session's `OpenTimeout` (15 minutes by default; `--open-timeout` for a pod without the annotation). The time counts from the condition's last change, or from the pod's creation if it has none, so a pod that was ready is not deleted for a restart shorter than the timeout.
+  3. `its session is closed`: a ready pod is asked, through the workflow `p7.ProbeSessionPod` on the backend's queue, which runs the activity `p7.SessionState` on the session's queue. The pod's worker answers from its session record.
+- A check that cannot be made is logged and the pod is left for the next pass: Temporal not answering, a pod that does not answer within 30 seconds, and a pod whose image lacks `p7.SessionState` (a pod keeps the image it was created with). A pod without an owner annotation is not checked for its owner. A pod that is being deleted is skipped.
+- `p7 pods` needs the right to list pods, as well as create and delete them. No deployment runs the backend yet, so no role was changed.
+- Run against a Temporal dev server and a stand-in for the pod API: owners that run, failed, were terminated or never existed, a closed session, a pod not ready past its timeout and one still starting. Not run in a cluster.
+- Two `p7 pods` replicas would both reconcile. That is harmless, since deleting a pod that is gone is not an error, but their probes of one session share a workflow ID, and one of them skips that pod until the next pass.
+
 ## Session limit
 
 A session that names a limit waits for a place in it, and `Session.Close` gives the place back.
@@ -156,7 +169,7 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 | Domain types are protobuf | Go structs with JSON tags, in `pkg/domain` |
 | Clients read live output through ticketd | `p7.Client` reads NATS itself. ticketd does not exist |
 | A new chat is a ticket of a chat kind | A chat is a Temporal workflow that the selfdev web server starts. There are no tickets |
-| Host, container and Kubernetes backends | Host and Kubernetes. On `kubernetes`, `p7 pods` (queue `p7-kubernetes`) creates one pod per session from a JSON pod template and deletes it on close. `p7 session` in that pod runs the host session manager on the queue `p7-session-<id>`, where the session's turns run. A session pod keeps the image it was created with. Run against a Temporal dev server with a stand-in for the pod API (`pkg/p7/kubernetes_test.go`), not in a cluster. No container backend. The workspace is on the pod's own disk (gfx-labs/protocol7#6), and pods nobody owns are not cleaned up (gfx-labs/protocol7#5) |
+| Host, container and Kubernetes backends | Host and Kubernetes. On `kubernetes`, `p7 pods` (queue `p7-kubernetes`) creates one pod per session from a JSON pod template and deletes it on close. `p7 session` in that pod runs the host session manager on the queue `p7-session-<id>`, where the session's turns run. A session pod keeps the image it was created with. Run against a Temporal dev server with a stand-in for the pod API (`pkg/p7/kubernetes_test.go`, `pkg/orchestration/kubernetes/reconcile_test.go`), not in a cluster. No container backend. The workspace is on the pod's own disk (gfx-labs/protocol7#6). Pods nobody owns are deleted by reconciliation (see "Session pods that nothing owns") |
 | Model and git credentials come through PDP | On a workstation, sessions use the machine's own logins, which section 5 allows for trusted host execution. The talos-metal deployment puts the model credentials in PDP. Its git credential is a GitHub App token that a second container writes to a file, not a PDP binding |
 | A run pod's SPIFFE ID carries its profile, repository and run ID | The talos-metal deployment has one worker pod with one identity, which every chat shares. Session pods carry the label `p7.gfx-labs.io/session`, which a ClusterSPIFFEID can render into a per-session ID, and the deployment does not use them yet |
 | Permission requests are decided by policy | The workflow that opened a session decides them, with `SessionSpec.Permissions`. A session with no function has every request allowed. There is no policy language |
