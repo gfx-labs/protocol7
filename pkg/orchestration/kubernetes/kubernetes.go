@@ -27,6 +27,7 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
@@ -41,6 +42,9 @@ const (
 	LabelManaged = "p7.gfx-labs.io/managed"
 	// AnnotationOwner holds the ID of the workflow that opened the session.
 	AnnotationOwner = "p7.gfx-labs.io/owner"
+	// AnnotationOpenTimeout holds how long the pod may take to become ready,
+	// as a Go duration.
+	AnnotationOpenTimeout = "p7.gfx-labs.io/open-timeout"
 	// EnvSession and EnvTaskQueue tell `p7 session` which session it
 	// serves and which queue it polls.
 	EnvSession   = "P7_SESSION"
@@ -69,6 +73,12 @@ type Config struct {
 	// Deleting a session's pod then also deletes its snapshot, which the
 	// pod's worker only writes while the session is open.
 	Snapshots snapshot.Config
+	// ReconcileInterval is how often the worker looks for pods that nothing
+	// owns. Zero is five minutes.
+	ReconcileInterval time.Duration
+	// OpenTimeout is the time a pod may take to become ready when its
+	// request named none. Zero is fifteen minutes.
+	OpenTimeout time.Duration
 }
 
 const (
@@ -146,6 +156,7 @@ func (p *Pods) Register(w worker.Worker) {
 func NewWorker(temporalClient client.Client, pods *Pods) worker.Worker {
 	w := worker.New(temporalClient, domain.KubernetesQueue, worker.Options{})
 	pods.Register(w)
+	w.RegisterWorkflowWithOptions(ProbeSessionPod, workflow.RegisterOptions{Name: domain.WorkflowProbeSessionPod})
 	return w
 }
 
@@ -178,22 +189,41 @@ func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.Pod
 // session that was not closed first would otherwise come back. It
 // heartbeats while it waits, and the workflow allows it 20 minutes.
 func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
-	path := p.podsPath() + "/" + PodName(request.Session)
-	err := p.do(ctx, http.MethodDelete, path, nil, nil)
-	if err == nil {
-		p.logger.Info("session pod deleted", "session", request.Session, "pod", PodName(request.Session))
-	}
-	if err != nil && !isStatus(err, http.StatusNotFound) {
+	err := p.deletePod(ctx, PodName(request.Session), "")
+	if err != nil {
 		return err
 	}
+	p.logger.Info("session pod deleted", "session", request.Session, "pod", PodName(request.Session))
+	return p.deleteSnapshotWhenGone(ctx, request.Session)
+}
+
+// deletePod deletes a pod. With a uid it deletes that pod only, not one
+// that took its name. A pod that is gone is not an error.
+func (p *Pods) deletePod(ctx context.Context, name, uid string) error {
+	var body any
+	if uid != "" {
+		body = map[string]any{"preconditions": map[string]any{"uid": uid}}
+	}
+	err := p.do(ctx, http.MethodDelete, p.podsPath()+"/"+name, body, nil)
+	if isStatus(err, http.StatusNotFound) || (uid != "" && isStatus(err, http.StatusConflict)) {
+		return nil
+	}
+	return err
+}
+
+// deleteSnapshotWhenGone waits until the session's pod is gone, and deletes
+// the session's snapshot. It does nothing without snapshots.
+func (p *Pods) deleteSnapshotWhenGone(ctx context.Context, session string) error {
 	if p.snapshots == nil {
 		return nil
 	}
+	path := p.podsPath() + "/" + PodName(session)
+	var err error
 	for err == nil {
 		// The pod is still there until a read finds nothing.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("wait for the pod %s to end: %w", PodName(request.Session), ctx.Err())
+			return fmt.Errorf("wait for the pod %s to end: %w", PodName(session), ctx.Err())
 		case <-time.After(podPoll):
 		}
 		if activity.IsActivity(ctx) {
@@ -204,7 +234,7 @@ func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
 	if !isStatus(err, http.StatusNotFound) {
 		return err
 	}
-	return p.snapshots.Delete(ctx, request.Session)
+	return p.snapshots.Delete(ctx, session)
 }
 
 // podPoll is how often Delete looks for a pod that is ending.
@@ -235,6 +265,9 @@ func (p *Pods) render(request domain.PodRequest, handle domain.PodHandle) (map[s
 	labels[LabelManaged] = "true"
 	if request.Owner != "" {
 		object(metadata, "annotations")[AnnotationOwner] = request.Owner
+	}
+	if request.OpenTimeout > 0 {
+		object(metadata, "annotations")[AnnotationOpenTimeout] = request.OpenTimeout.String()
 	}
 	spec := object(pod, "spec")
 	delete(pod, "status")

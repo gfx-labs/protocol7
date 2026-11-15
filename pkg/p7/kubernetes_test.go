@@ -165,7 +165,8 @@ func TestAKubernetesSessionRunsInItsOwnPod(t *testing.T) {
 	}
 	pods.mu.Lock()
 	defer pods.mu.Unlock()
-	if len(pods.started) != 1 || pods.started[0].Owner != "owner-1" || len(pods.deleted) != 1 || pods.deleted[0] != pods.started[0].Session {
-		t.Errorf("started %+v and deleted %v, want one pod owned by owner-1, deleted on close", pods.started, pods.deleted)
+	if len(pods.started) != 1 || pods.started[0].Owner != "owner-1" || pods.started[0].OpenTimeout != 15*time.Minute ||
+		len(pods.deleted) != 1 || pods.deleted[0] != pods.started[0].Session {
+		t.Errorf("started %+v and deleted %v, want one pod owned by owner-1 with the default open timeout, deleted on close", pods.started, pods.deleted)
 	}
 }

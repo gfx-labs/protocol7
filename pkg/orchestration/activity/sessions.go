@@ -41,6 +41,7 @@ func (s *Sessions) Register(w worker.Worker) {
 	w.RegisterActivityWithOptions(s.Open, activity.RegisterOptions{Name: domain.ActivityOpenSession})
 	w.RegisterActivityWithOptions(s.RunTurn, activity.RegisterOptions{Name: domain.ActivityRunTurn})
 	w.RegisterActivityWithOptions(s.Close, activity.RegisterOptions{Name: domain.ActivityCloseSession})
+	w.RegisterActivityWithOptions(s.State, activity.RegisterOptions{Name: domain.ActivitySessionState})
 }
 
 // Open opens a session and returns its handle. The handle names this
@@ -104,4 +105,9 @@ func classify(err error) error {
 	default:
 		return err
 	}
+}
+
+// State says whether a session is closed.
+func (s *Sessions) State(_ context.Context, request domain.CloseRequest) (domain.SessionState, error) {
+	return s.manager.State(request.Session)
 }

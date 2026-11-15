@@ -107,15 +107,21 @@ var podsModule = fx.Module("pods",
 	fx.Provide(kubernetes.New),
 	fx.Invoke(func(lifecycle fx.Lifecycle, temporalClient client.Client, pods *kubernetes.Pods, logger *slog.Logger) {
 		temporalWorker := kubernetes.NewWorker(temporalClient, pods)
+		reconciler := kubernetes.NewReconciler(pods, temporalClient)
 		lifecycle.Append(fx.StartStopHook(
 			func() error {
 				if err := temporalWorker.Start(); err != nil {
 					return err
 				}
 				logger.Info("kubernetes backend started", "task_queue", domain.KubernetesQueue)
+				// After the worker, which runs the reconciliation's probes.
+				reconciler.Start()
 				return nil
 			},
-			temporalWorker.Stop,
+			func() {
+				reconciler.Stop()
+				temporalWorker.Stop()
+			},
 		))
 	}),
 )

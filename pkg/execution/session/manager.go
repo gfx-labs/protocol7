@@ -540,3 +540,17 @@ func (m *Manager) deleteSnapshot(ctx context.Context, id string) error {
 	defer m.snapshotLock(id)()
 	return m.snapshots.Delete(ctx, id)
 }
+
+// State says whether a session was opened here and whether it was closed.
+func (m *Manager) State(session string) (domain.SessionState, error) {
+	state := domain.SessionState{Session: session}
+	rec, err := m.load(session)
+	if isMissing(err) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	state.Exists, state.Closed = true, rec.Closed
+	return state, nil
+}

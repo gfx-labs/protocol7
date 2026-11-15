@@ -378,3 +378,29 @@ func (a *scriptedAgent) askPermission(ctx context.Context, id acp.SessionId, com
 	})
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, err
 }
+
+// State tells a session that was never opened, one that is open and one that
+// was closed.
+func TestStateOfASession(t *testing.T) {
+	f := open(t)
+	state := func(id string) domain.SessionState {
+		t.Helper()
+		state, err := f.manager.State(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	if got, want := state("s1"), (domain.SessionState{Session: "s1", Exists: true}); got != want {
+		t.Errorf("open session: %+v, want %+v", got, want)
+	}
+	if err := f.manager.Close(t.Context(), domain.CloseRequest{Session: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := state("s1"), (domain.SessionState{Session: "s1", Exists: true, Closed: true}); got != want {
+		t.Errorf("closed session: %+v, want %+v", got, want)
+	}
+	if got, want := state("other"), (domain.SessionState{Session: "other"}); got != want {
+		t.Errorf("unknown session: %+v, want %+v", got, want)
+	}
+}
