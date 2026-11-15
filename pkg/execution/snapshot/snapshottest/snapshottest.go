@@ -31,6 +31,9 @@ type Server struct {
 	// WriteDelay, in nanoseconds, is how long each request that writes
 	// waits before it is served, to make an upload slow.
 	WriteDelay atomic.Int64
+	// ReadDelay, in nanoseconds, is how long each request that reads waits
+	// before it is served, to make a restore slow.
+	ReadDelay atomic.Int64
 	// Requests counts the requests the server got.
 	Requests atomic.Int64
 }
@@ -46,6 +49,9 @@ func Start(t testing.TB) *Server {
 	s3 := gofakes3.New(backend).Server()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fake.Requests.Add(1)
+		if delay := fake.ReadDelay.Load(); delay > 0 && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			time.Sleep(time.Duration(delay))
+		}
 		if delay := fake.WriteDelay.Load(); delay > 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
 			time.Sleep(time.Duration(delay))
 		}

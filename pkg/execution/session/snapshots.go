@@ -18,7 +18,7 @@ import (
 const snapshotTimeout = 10 * time.Minute
 
 // snapshotBeat is how often a turn's activity heartbeats while its snapshot
-// is written.
+// is written or restored.
 const snapshotBeat = 2 * time.Second
 
 // harnessDirName is where a session's harness keeps its conversation, when
@@ -110,28 +110,33 @@ func (m *Manager) snapshotAfter(ctx context.Context, id, after string, beat func
 	// The caller may be cancelled and the work is done all the same.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTimeout)
 	defer cancel()
-	if beat != nil {
-		stopped := make(chan struct{})
-		defer func() { <-stopped }()
-		done := make(chan struct{})
-		defer close(done)
-		go func() {
-			defer close(stopped)
-			ticker := time.NewTicker(snapshotBeat)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					beat()
-				case <-done:
-					return
-				}
-			}
-		}()
-	}
+	defer heartbeats(beat)()
 	if err := m.Snapshot(ctx, id); err != nil {
 		m.log.Warn("snapshot of the session failed, the previous one stays", "session", id, "after", after, "error", err)
 	}
+}
+
+// heartbeats calls beat every two seconds until the returned function is
+// called, which waits for the last call. A nil beat does nothing.
+func heartbeats(beat func()) (stop func()) {
+	if beat == nil {
+		return func() {}
+	}
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(snapshotBeat)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				beat()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() { close(done); <-stopped }
 }
 
 // SnapshotAll writes the snapshot of every session on this machine. A worker

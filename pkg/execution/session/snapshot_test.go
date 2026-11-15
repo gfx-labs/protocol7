@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
+	"github.com/gfx-labs/protocol7/pkg/execution/acpshim"
 	"github.com/gfx-labs/protocol7/pkg/execution/session"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot/snapshottest"
@@ -85,5 +86,45 @@ func TestATurnHeartbeatsWhileItsSnapshotIsWritten(t *testing.T) {
 	found, err := store.Restore(context.Background(), "s1", filepath.Join(t.TempDir(), "x"), nil)
 	if err != nil || !found {
 		t.Errorf("the snapshot was not written: %v, %v", found, err)
+	}
+}
+
+// A turn on a machine that lost the session's disk restores the snapshot
+// first, and heartbeats while it does, because a large restore takes longer
+// than the activity's heartbeat timeout.
+func TestATurnHeartbeatsWhileItsSessionIsRestored(t *testing.T) {
+	s3 := snapshottest.Start(t)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	store, err := snapshot.New(snapshot.Config{Endpoint: s3.URL, Bucket: snapshottest.Bucket, PathStyle: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := open(t)
+	f.manager.SetSnapshots(store)
+	ctx := context.Background()
+	if err := f.manager.Snapshot(ctx, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	// The machine's disk is lost.
+	if err := acpshim.Stop(ctx, filepath.Join(f.root, "sessions", "s1", "shim")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(f.root, "sessions", "s1")); err != nil {
+		t.Fatal(err)
+	}
+	// Reads of a second each: a look at the object and the download.
+	s3.ReadDelay.Store(int64(2 * time.Second))
+
+	var beats atomic.Int32
+	started := time.Now()
+	result, err := f.turn(ctx, "t1", "hello", session.TurnControl{Beat: func() { beats.Add(1) }})
+	if err != nil || result.StopReason != "end_turn" {
+		t.Fatalf("turn: %+v, %v", result, err)
+	}
+	s3.ReadDelay.Store(0)
+	// Two reads of two seconds make a restore of four, with a beat every two.
+	if elapsed := time.Since(started); elapsed < 3*time.Second || beats.Load() < 1 {
+		t.Errorf("the turn took %s and heartbeat %d times, want a slow restore with a beat every two seconds", elapsed, beats.Load())
 	}
 }

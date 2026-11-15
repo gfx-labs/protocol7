@@ -313,7 +313,12 @@ type TurnControl struct {
 // A snapshot that fails is logged and does not fail the turn.
 func (m *Manager) RunTurn(ctx context.Context, request domain.TurnRequest, control TurnControl) (domain.TurnResult, error) {
 	if request.Turn != "" {
-		if _, err := m.Restore(ctx, request.Session); err != nil {
+		// A restore of a large snapshot takes longer than the activity's
+		// heartbeat timeout.
+		stop := heartbeats(control.Beat)
+		_, err := m.Restore(ctx, request.Session)
+		stop()
+		if err != nil {
 			return domain.TurnResult{}, fmt.Errorf("run turn in session %s: %w", request.Session, err)
 		}
 	}
