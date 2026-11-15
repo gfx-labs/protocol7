@@ -22,6 +22,7 @@ import (
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/coreworker"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
+	"github.com/gfx-labs/protocol7/pkg/p7"
 	"github.com/gfx-labs/protocol7/pkg/p7/p7fx"
 )
 
@@ -59,6 +60,21 @@ func (f snapshotFlags) config() snapshot.Config {
 	return snapshot.Config{Endpoint: f.Endpoint, Region: f.Region, Bucket: f.Bucket, Prefix: f.Prefix, PathStyle: f.PathStyle, Exclude: exclude}
 }
 
+// temporalFlags say which Temporal a command talks to, and how.
+type temporalFlags struct {
+	Address      string `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
+	Namespace    string `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
+	SPIFFESocket string `name:"temporal-spiffe-socket" env:"TEMPORAL_SPIFFE_SOCKET" help:"SPIFFE Workload API address that this process's SVID comes from, such as unix:///run/spire/agent-sockets/api.sock. Empty is SPIFFE_ENDPOINT_SOCKET. Used with --temporal-server-spiffe-id."`
+	ServerID     string `name:"temporal-server-spiffe-id" env:"TEMPORAL_SERVER_SPIFFE_ID" help:"SPIFFE ID the Temporal frontend must present. Setting it connects with mutual TLS and this process's SVID. Empty connects in plaintext."`
+}
+
+func (f temporalFlags) config() p7fx.TemporalConfig {
+	return p7fx.TemporalConfig{
+		Address: f.Address, Namespace: f.Namespace,
+		SPIFFE: p7.TemporalSPIFFE{Socket: f.SPIFFESocket, ServerID: f.ServerID},
+	}
+}
+
 // hostName is the name of this machine: named if it is set, else the
 // hostname.
 func hostName(named string) (string, error) {
@@ -94,14 +110,13 @@ const snapshotStopTimeout = 12 * time.Minute
 
 // workerCommand is the core worker of this machine.
 type workerCommand struct {
-	TemporalAddress   string        `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
-	TemporalNamespace string        `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
-	NATSURL           string        `name:"nats-url" default:"nats://127.0.0.1:4222" env:"P7_NATS_URL" help:"NATS server that session frames are published to. Empty publishes none."`
-	Host              string        `name:"host" env:"P7_HOST" help:"Name of this machine. The worker polls local-<host>. Default: the hostname."`
-	StateDir          string        `name:"state-dir" env:"P7_STATE_DIR" help:"Directory that holds this machine's sessions. Default: p7 in the XDG state directory."`
-	Shim              string        `name:"shim" env:"P7_SHIM" help:"Path of p7acpshim. Default: beside this executable, then PATH."`
-	Harness           harnessFlags  `embed:""`
-	Snapshots         snapshotFlags `embed:""`
+	Temporal  temporalFlags `embed:""`
+	NATSURL   string        `name:"nats-url" default:"nats://127.0.0.1:4222" env:"P7_NATS_URL" help:"NATS server that session frames are published to. Empty publishes none."`
+	Host      string        `name:"host" env:"P7_HOST" help:"Name of this machine. The worker polls local-<host>. Default: the hostname."`
+	StateDir  string        `name:"state-dir" env:"P7_STATE_DIR" help:"Directory that holds this machine's sessions. Default: p7 in the XDG state directory."`
+	Shim      string        `name:"shim" env:"P7_SHIM" help:"Path of p7acpshim. Default: beside this executable, then PATH."`
+	Harness   harnessFlags  `embed:""`
+	Snapshots snapshotFlags `embed:""`
 
 	// session names the session of a session's pod, whose snapshot is
 	// restored before the worker polls.
@@ -133,7 +148,7 @@ func (c *workerCommand) options() (fx.Option, error) {
 	options := []fx.Option{
 		fx.StopTimeout(timeout),
 		fx.Supply(
-			p7fx.TemporalConfig{Address: c.TemporalAddress, Namespace: c.TemporalNamespace},
+			c.Temporal.config(),
 			coreworker.Config{Host: host, TaskQueue: c.taskQueue, Session: c.session, Snapshots: snapshots},
 		),
 		p7fx.TemporalClient,
@@ -188,8 +203,7 @@ func (c *sessionCommand) Run(ctx context.Context, logger *slog.Logger) error {
 // podsCommand creates and deletes session pods. It holds the right to
 // create pods in one namespace and nothing else.
 type podsCommand struct {
-	TemporalAddress   string        `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
-	TemporalNamespace string        `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
+	Temporal          temporalFlags `embed:""`
 	Namespace         string        `name:"namespace" required:"" env:"P7_POD_NAMESPACE" help:"Kubernetes namespace that session pods are created in."`
 	Template          string        `name:"template" required:"" env:"P7_POD_TEMPLATE" help:"File holding the session pod template, a pod manifest in JSON. Read for each new pod."`
 	Container         string        `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7 session."`
@@ -204,7 +218,7 @@ func (c *podsCommand) options() (fx.Option, error) {
 	return fx.Options(
 		fx.StopTimeout(stopTimeout),
 		fx.Supply(
-			p7fx.TemporalConfig{Address: c.TemporalAddress, Namespace: c.TemporalNamespace},
+			c.Temporal.config(),
 			kubernetes.Config{
 				Namespace: c.Namespace, TemplateFile: c.Template, SessionContainer: c.Container,
 				ReconcileInterval: c.ReconcileInterval, OpenTimeout: c.OpenTimeout,

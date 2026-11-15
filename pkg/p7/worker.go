@@ -19,6 +19,9 @@ type WorkerConfig struct {
 	TaskQueue         string
 	TemporalAddress   string
 	TemporalNamespace string
+	// TemporalSPIFFE, when its ServerID is set, connects to Temporal with
+	// mutual TLS. The zero value connects in plaintext.
+	TemporalSPIFFE TemporalSPIFFE
 	// Deployment and BuildID turn Worker Versioning on when both are set.
 	// Workflows are then pinned to the build they started on. A versioned
 	// worker gets no tasks until its build is made the deployment's current
@@ -35,7 +38,9 @@ type WorkerConfig struct {
 type Worker struct {
 	config   WorkerConfig
 	temporal client.Client
-	worker   worker.Worker
+	// closeTemporal closes the client and the source of its certificates.
+	closeTemporal func() error
+	worker        worker.Worker
 }
 
 // NewWorker returns a worker that is not connected and not polling.
@@ -50,18 +55,19 @@ func NewWorker(config WorkerConfig) (*Worker, error) {
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
-	}
-	// The client connects when the worker starts, or on its first call.
-	temporalClient, err := client.NewLazyClient(client.Options{
-		HostPort:  config.TemporalAddress,
-		Namespace: config.TemporalNamespace,
-		Logger:    log.NewStructuredLogger(logger),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("new worker: configure the Temporal client for %s: %w", config.TemporalAddress, err)
+		config.Logger = logger
 	}
 	if err := config.Limits.validate(); err != nil {
 		return nil, fmt.Errorf("new worker: %w", err)
+	}
+	// The client connects when the worker starts, or on its first call.
+	temporalClient, closeTemporal, err := NewTemporalClient(client.Options{
+		HostPort:  config.TemporalAddress,
+		Namespace: config.TemporalNamespace,
+		Logger:    log.NewStructuredLogger(logger),
+	}, config.TemporalSPIFFE)
+	if err != nil {
+		return nil, fmt.Errorf("new worker: configure the Temporal client for %s: %w", config.TemporalAddress, err)
 	}
 	options := worker.Options{}
 	if config.Deployment != "" {
@@ -71,7 +77,7 @@ func NewWorker(config WorkerConfig) (*Worker, error) {
 			DefaultVersioningBehavior: workflow.VersioningBehaviorPinned,
 		}
 	}
-	w := &Worker{config: config, temporal: temporalClient, worker: worker.New(temporalClient, config.TaskQueue, options)}
+	w := &Worker{config: config, temporal: temporalClient, closeTemporal: closeTemporal, worker: worker.New(temporalClient, config.TaskQueue, options)}
 	limits := &limitActivities{temporal: temporalClient, config: config.Limits, queue: config.TaskQueue}
 	w.RegisterWorkflow(limitWorkflowName, limitWorkflow)
 	w.RegisterActivity(activityLimitStart, limits.Start)
@@ -108,13 +114,19 @@ func (w *Worker) Start() error {
 // Stop stops polling, waits for running tasks and closes the client.
 func (w *Worker) Stop() {
 	w.worker.Stop()
-	w.temporal.Close()
+	w.close()
+}
+
+func (w *Worker) close() {
+	if err := w.closeTemporal(); err != nil {
+		w.config.Logger.Warn("close the SPIFFE Workload API source", "error", err)
+	}
 }
 
 // Run starts the worker, waits until ctx ends and stops it.
 func (w *Worker) Run(ctx context.Context) error {
 	if err := w.Start(); err != nil {
-		w.temporal.Close()
+		w.close()
 		return err
 	}
 	<-ctx.Done()
