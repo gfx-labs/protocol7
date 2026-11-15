@@ -240,7 +240,7 @@ func (m *Manager) ensure(ctx context.Context, rec *record) (client *acpshim.Clie
 	if err != nil {
 		return client, "", err
 	}
-	if m.tools(*rec) != nil && !initialized.AgentCapabilities.McpCapabilities.Acp {
+	if m.offersTools(*rec) && !initialized.AgentCapabilities.McpCapabilities.Acp {
 		return client, "", fmt.Errorf("session %s has tools, and the harness does not take MCP servers over ACP (towa does from 0.4.0)", rec.ID)
 	}
 

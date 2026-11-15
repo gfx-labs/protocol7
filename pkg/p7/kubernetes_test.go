@@ -24,7 +24,7 @@ import (
 )
 
 // fakePods stands in for the kubernetes backend: starting a pod starts a
-// core worker on the session's own queue, as `p7-worker session` does in a
+// core worker on the session's own queue, as `p7 session` does in a
 // real pod, and deleting it stops that worker.
 type fakePods struct {
 	t        *testing.T

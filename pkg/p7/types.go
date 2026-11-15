@@ -24,7 +24,7 @@ const BackendKubernetes = domain.BackendKubernetes
 // PathStyle and the list Exclude of what a snapshot leaves out. Credentials
 // come from the standard AWS environment and credential chain. The zero
 // value keeps no snapshots. It is set as coreworker.Config.Snapshots and
-// with the --snapshot-* flags of p7-worker.
+// with the --snapshot-* flags of p7 worker, p7 session and p7 pods.
 type SnapshotStore = snapshot.Config
 
 // Placement says where a session runs.

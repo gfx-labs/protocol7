@@ -31,7 +31,7 @@ type Tools interface {
 
 // mcpServers is what a session is opened or loaded with.
 func (c *Client) mcpServers() []acp.McpServer {
-	if c.tools == nil {
+	if c.tools == nil || len(c.tools.List()) == 0 {
 		return []acp.McpServer{}
 	}
 	return []acp.McpServer{{Acp: &acp.McpServerAcpInline{Name: "p7", ServerId: toolServerID}}}

@@ -18,7 +18,8 @@ on:
 jobs:
   notify:
     if: github.ref == 'refs/heads/master'
-    runs-on: talos-metal-gfx
+    # An API call only, so the small pool without Docker.
+    runs-on: talos-metal-gfx-public-small
     permissions: {}
     steps:
       # A token for the one repository that is told, and for nothing else.

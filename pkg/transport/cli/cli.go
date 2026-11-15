@@ -192,7 +192,7 @@ type podsCommand struct {
 	TemporalNamespace string `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
 	Namespace         string `name:"namespace" required:"" env:"P7_POD_NAMESPACE" help:"Kubernetes namespace that session pods are created in."`
 	Template          string `name:"template" required:"" env:"P7_POD_TEMPLATE" help:"File holding the session pod template, a pod manifest in JSON. Read for each new pod."`
-	Container         string `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7-worker session."`
+	Container         string `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7 session."`
 	// Snapshots, when set, makes deleting a session's pod delete the
 	// session's snapshot. Use the same as the session pods.
 	Snapshots snapshotFlags `embed:""`

@@ -1,6 +1,6 @@
 // Package kubernetes is the kubernetes backend: one pod per session. Its
 // worker polls the queue p7-kubernetes and only creates and deletes pods. The
-// session's activities then run in the session's pod, where `p7-worker
+// session's activities then run in the session's pod, where `p7
 // session` runs the host session manager for that one session on its own
 // queue.
 //
@@ -41,7 +41,7 @@ const (
 	LabelManaged = "p7.gfx-labs.io/managed"
 	// AnnotationOwner holds the ID of the workflow that opened the session.
 	AnnotationOwner = "p7.gfx-labs.io/owner"
-	// EnvSession and EnvTaskQueue tell `p7-worker session` which session it
+	// EnvSession and EnvTaskQueue tell `p7 session` which session it
 	// serves and which queue it polls.
 	EnvSession   = "P7_SESSION"
 	EnvTaskQueue = "P7_TASK_QUEUE"
@@ -57,7 +57,7 @@ type Config struct {
 	// SessionContainer. It is read once per pod, so a new template applies
 	// to the next session.
 	TemplateFile string
-	// SessionContainer names the container that runs `p7-worker session`.
+	// SessionContainer names the container that runs `p7 session`.
 	SessionContainer string
 	// APIServer is the Kubernetes API. Empty is the in-cluster address.
 	APIServer string
