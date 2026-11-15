@@ -146,11 +146,13 @@ func (c *sessionCommand) Run(ctx context.Context, logger *slog.Logger) error {
 // podsCommand creates and deletes session pods. It holds the right to
 // create pods in one namespace and nothing else.
 type podsCommand struct {
-	TemporalAddress   string `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
-	TemporalNamespace string `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
-	Namespace         string `name:"namespace" required:"" env:"P7_POD_NAMESPACE" help:"Kubernetes namespace that session pods are created in."`
-	Template          string `name:"template" required:"" env:"P7_POD_TEMPLATE" help:"File holding the session pod template, a pod manifest in JSON. Read for each new pod."`
-	Container         string `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7 session."`
+	TemporalAddress   string        `name:"temporal-address" default:"127.0.0.1:7233" env:"TEMPORAL_ADDRESS" help:"Temporal frontend address."`
+	TemporalNamespace string        `name:"temporal-namespace" default:"default" env:"TEMPORAL_NAMESPACE" help:"Temporal namespace."`
+	Namespace         string        `name:"namespace" required:"" env:"P7_POD_NAMESPACE" help:"Kubernetes namespace that session pods are created in."`
+	Template          string        `name:"template" required:"" env:"P7_POD_TEMPLATE" help:"File holding the session pod template, a pod manifest in JSON. Read for each new pod."`
+	Container         string        `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7 session."`
+	ReconcileInterval time.Duration `name:"reconcile-interval" default:"5m" env:"P7_RECONCILE_INTERVAL" help:"How often to delete session pods that nothing owns: those whose session is closed, whose owner workflow is not running, or that are not ready after their open timeout. Also done at start."`
+	OpenTimeout       time.Duration `name:"open-timeout" default:"15m" env:"P7_OPEN_TIMEOUT" help:"How long a pod may take to become ready when its request names no open timeout."`
 }
 
 func (c *podsCommand) options() (fx.Option, error) {
@@ -158,7 +160,10 @@ func (c *podsCommand) options() (fx.Option, error) {
 		fx.StopTimeout(stopTimeout),
 		fx.Supply(
 			p7fx.TemporalConfig{Address: c.TemporalAddress, Namespace: c.TemporalNamespace},
-			kubernetes.Config{Namespace: c.Namespace, TemplateFile: c.Template, SessionContainer: c.Container},
+			kubernetes.Config{
+				Namespace: c.Namespace, TemplateFile: c.Template, SessionContainer: c.Container,
+				ReconcileInterval: c.ReconcileInterval, OpenTimeout: c.OpenTimeout,
+			},
 		),
 		p7fx.TemporalClient,
 		podsModule,
