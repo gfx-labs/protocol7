@@ -54,6 +54,16 @@ Every Temporal client that protocol7 makes can connect with mutual TLS. `p7.NewT
 
 Run on 2026-11-15: `go vet ./...`, gofmt, and `go test -race` of `pkg/p7`, `pkg/p7/p7fx` and `pkg/transport/...` with the Temporal CLI on `PATH`. `pkg/p7/temporal_test.go` makes real TLS 1.3 connections with SVIDs signed by a CA it generates. The client's SVID comes from a Workload API served on a unix socket with the `go-spiffe` protobuf service. The server is a gRPC server with `go-spiffe`'s mutual TLS server config, serving the health check and `GetSystemInfo` that `CheckHealth` calls. The test checks that the server sees the client's SPIFFE ID over TLS 1.3, that a server presenting another SPIFFE ID is refused before any call reaches it, and that closing the client ends its Workload API stream. Not run: a connection to `p7-temporal`, SPIRE, certificate rotation and a deployment.
 
+## Egress through PDP, in process
+
+`pkg/egress` lets a Go process make its own HTTP requests through PDP with its SPIFFE identity, with no `pdp forward` container in its pod. `pdp forward` reads no HTTP: it opens an mTLS connection to PDP for each connection it accepts and copies bytes. `egress.Egress` does the same inside an `http.Transport`, by dialing PDP where the transport would dial its proxy, so the proxy conversation (CONNECT for https, an absolute URL for plain http) reaches PDP as the client wrote it.
+
+- `egress.New(ctx, egress.Config{WorkloadAPI, Gateway, GatewayID, CAFile})` opens the Workload API source and waits for the first SVID. `NewFromSource` takes an SVID and bundle the caller already has. `Transport()` and `Client(timeout)` make clients, and `DialGateway` is the raw mTLS dial. `Close` closes the source.
+- The gateway must present exactly `GatewayID`, over TLS 1.3, or nothing is sent. `CAFile` is added to the system roots, for PDP's interception CA. The transport takes no proxy setting from the environment.
+- Every request made with the client is made as the workload. A process that runs code it does not trust should not hold one, which is why the agent's pod keeps the container.
+
+Run on 2026-11-16: `go vet ./...` and `go test -race ./pkg/egress`. The test stands in for PDP with a gateway that requires a client SVID, answers CONNECT and terminates TLS with its own interception CA. It checks https and plain http, the identity the gateway sees, TLS 1.3, an untrusted interception CA, a gateway with another SPIFFE ID (no request reaches it), and that `HTTPS_PROXY` is ignored. Not run: against a real PDP or a real Workload API (`New` itself, past its argument checks).
+
 ## How a process is put together
 
 The commands of both repositories are composed with `go.uber.org/fx` (decided 2026-11-13, user). A long-lived component has a constructor that connects to nothing, and separate start and stop methods: `stream.New` then `Connect`, `stream.NewEmbedded` then `Start`, `coreworker.New` then `Start` and `Stop`, `p7.NewClient` then `Connect`, `p7.NewWorker` then `Start` and `Stop`. A command supplies its flags as configuration values and names its modules. fx starts the components in dependency order and stops them in reverse.
