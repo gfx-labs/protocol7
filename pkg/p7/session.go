@@ -52,17 +52,20 @@ type SessionSpec struct {
 	// HandlePermissions and this same function. An error from it, and a
 	// request that cannot reach the workflow, deny the request.
 	Permissions func(ctx workflow.Context, request PermissionRequest) (PermissionDecision, error)
-	// Group, on the kubernetes backend, puts the session in the pod that
-	// the sessions of this group share, and makes that pod if none exists.
-	// Empty gives the session a pod of its own. See domain.ValidGroup for
-	// what a key may hold.
+	// Pool, on the kubernetes backend, puts the session on a worker of a pool
+	// instead of a pod of its own: up to Pool.SessionsPerWorker sessions on each
+	// of up to Pool.MaxWorkers pods, started on demand. Opening waits when the
+	// pool is full. Nil gives the session a pod of its own.
 	//
-	// Sessions of one group see each other's files, processes and queue, and
-	// run with one identity. The caller derives the key from everything that
+	// Sessions on one worker see each other's files, processes and queue, and
+	// a pool has one identity. The caller names the pool after everything that
 	// decides what a session may do, so that only sessions with identical
-	// permissions share it.
-	Group string
+	// permissions share a pool.
+	Pool *SessionPool
 }
+
+// SessionPool says how a pool of workers is made. See domain.PoolSpec.
+type SessionPool = domain.PoolSpec
 
 // ErrorHarnessStopped is the type of the application error that opening or
 // a turn fails with when the harness exited while the session was made
@@ -85,8 +88,10 @@ type Session struct {
 	// Pod is the session's pod on the kubernetes backend, which Close
 	// deletes. Empty on the host backend.
 	Pod string `json:"pod,omitempty"`
-	// Group is the group whose pod it is, if the pod is shared.
-	Group string `json:"group,omitempty"`
+	// Pool is the pool whose worker holds the session, if it is in one. The
+	// session's TaskQueue and Pod are those of its worker, and change when the
+	// worker is lost and the session is placed on another.
+	Pool *SessionPool `json:"pool,omitempty"`
 }
 
 var sessionRetry = &temporal.RetryPolicy{
@@ -106,11 +111,11 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open session: %w", err)
 	}
-	if spec.Group != "" {
+	if spec.Pool != nil {
 		if spec.Placement.Backend != domain.BackendKubernetes {
-			return nil, errors.New("open session: a group needs the kubernetes backend")
+			return nil, errors.New("open session: a pool needs the kubernetes backend")
 		}
-		if err := domain.ValidGroup(spec.Group); err != nil {
+		if err := spec.Pool.Validate(); err != nil {
 			return nil, fmt.Errorf("open session: %w", err)
 		}
 	}
@@ -179,16 +184,22 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 	})
 	var pod domain.PodHandle
 	if spec.Placement.Backend == domain.BackendKubernetes {
-		// The pod is created first, and the session is opened by the worker
-		// inside it, on the pod's own queue. The open waits on that queue
-		// while the pod is scheduled and its image is pulled.
-		podCtx := workflow.WithActivityOptions(ctx, podOptions)
-		podRequest := domain.PodRequest{Session: request.ID, Group: spec.Group, Owner: request.Owner, OpenTimeout: timeout}
-		if spec.Group != "" {
-			podCtx = workflow.WithActivityOptions(ctx, groupStartOptions)
-		}
-		if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, podRequest).Get(ctx, &pod); err != nil {
-			return nil, fmt.Errorf("open session %s: start its pod: %w", request.ID, err)
+		if spec.Pool != nil {
+			// The pool says which worker, and waits for room if it is full.
+			placement, err := placeSession(ctx, *spec.Pool, request.ID, request.Owner)
+			if err != nil {
+				return nil, fmt.Errorf("open session %s: place it in pool %s: %w", request.ID, spec.Pool.Name, err)
+			}
+			pod = domain.PodHandle{Name: placement.Pod, TaskQueue: placement.TaskQueue}
+		} else {
+			// The pod is created first, and the session is opened by the worker
+			// inside it, on the pod's own queue. The open waits on that queue
+			// while the pod is scheduled and its image is pulled.
+			podCtx := workflow.WithActivityOptions(ctx, podOptions)
+			podRequest := domain.PodRequest{Session: request.ID, Owner: request.Owner, OpenTimeout: timeout}
+			if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, podRequest).Get(ctx, &pod); err != nil {
+				return nil, fmt.Errorf("open session %s: start its pod: %w", request.ID, err)
+			}
 		}
 		activityCtx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 			TaskQueue:              pod.TaskQueue,
@@ -200,14 +211,19 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 	var handle domain.SessionHandle
 	if err := workflow.ExecuteActivity(activityCtx, domain.ActivityOpenSession, request).Get(ctx, &handle); err != nil {
 		if pod.Name != "" {
-			// A session that could not open leaves no pod behind.
+			// A session that could not open leaves no pod behind, and no
+			// place in its pool.
 			deleteCtx, _ := workflow.NewDisconnectedContext(ctx)
-			deleteCtx = workflow.WithActivityOptions(deleteCtx, podDeleteOptions)
-			_ = workflow.ExecuteActivity(deleteCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: request.ID, Group: spec.Group}).Get(deleteCtx, nil)
+			if spec.Pool != nil {
+				releaseSession(deleteCtx, *spec.Pool, request.ID)
+			} else {
+				deleteCtx = workflow.WithActivityOptions(deleteCtx, podDeleteOptions)
+				_ = workflow.ExecuteActivity(deleteCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: request.ID}).Get(deleteCtx, nil)
+			}
 		}
 		return nil, fmt.Errorf("open session %s: %w", request.ID, err)
 	}
-	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil, Pod: pod.Name, Group: spec.Group}, nil
+	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil, Pod: pod.Name, Pool: spec.Pool}, nil
 }
 
 // podOptions are those of the activities that create and delete session
@@ -218,14 +234,37 @@ var podOptions = workflow.ActivityOptions{
 	RetryPolicy:         &temporal.RetryPolicy{InitialInterval: 2 * time.Second, BackoffCoefficient: 2, MaximumInterval: 30 * time.Second, MaximumAttempts: 10},
 }
 
-// groupStartOptions are those of the activity that starts a session in a
-// group's pod. It waits while an earlier pod of the group ends, which can take
-// minutes when its worker writes a last snapshot, and heartbeats while it does.
-var groupStartOptions = workflow.ActivityOptions{
+// placeOptions are those of the activity that places a session in a pool. It
+// returns when a worker has room, which can take as long as the sessions that
+// fill the pool, and it heartbeats while it waits.
+var placeOptions = workflow.ActivityOptions{
 	TaskQueue:           domain.KubernetesQueue,
-	StartToCloseTimeout: 20 * time.Minute,
-	HeartbeatTimeout:    30 * time.Second,
-	RetryPolicy:         podOptions.RetryPolicy,
+	StartToCloseTimeout: 12 * time.Hour,
+	HeartbeatTimeout:    time.Minute,
+	RetryPolicy:         &temporal.RetryPolicy{InitialInterval: 2 * time.Second, BackoffCoefficient: 2, MaximumInterval: 30 * time.Second, MaximumAttempts: 10},
+}
+
+// placeSession asks a pool where a session runs. Each call has an attempt ID
+// of its own, in history, which makes the activity's retries ask once.
+func placeSession(ctx workflow.Context, pool domain.PoolSpec, session, owner string) (domain.PoolPlacement, error) {
+	var attempt string
+	if err := newID(ctx, &attempt); err != nil {
+		return domain.PoolPlacement{}, err
+	}
+	var placement domain.PoolPlacement
+	request := domain.PlaceRequest{Pool: pool, Session: session, Owner: owner, Attempt: attempt}
+	err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, placeOptions), domain.ActivityPlaceSession, request).Get(ctx, &placement)
+	return placement, err
+}
+
+// releaseSession gives back a session's place in its pool, and deletes its
+// snapshot, which no worker writes once the session is closed or lost. It
+// does not fail: a pool that cannot be told closes the sessions whose owner
+// is not running.
+func releaseSession(ctx workflow.Context, pool domain.PoolSpec, session string) {
+	podCtx := workflow.WithActivityOptions(ctx, podOptions)
+	_ = workflow.ExecuteActivity(podCtx, domain.ActivityDeletePoolSnapshots, domain.PoolSnapshotsRequest{Pool: pool.Name, Session: session}).Get(ctx, nil)
+	_ = workflow.ExecuteActivity(podCtx, domain.ActivityReleaseSession, domain.ReleaseRequest{Pool: pool, Session: session}).Get(ctx, nil)
 }
 
 // podDeleteOptions are those of the activity that deletes a session pod.
@@ -342,12 +381,20 @@ func runTurnInPod(ctx workflow.Context, session *Session, request domain.TurnReq
 				settable.Set(turn, err)
 				return
 			}
-			podCtx := workflow.WithActivityOptions(ctx, podOptions)
-			if session.Group != "" {
-				podCtx = workflow.WithActivityOptions(ctx, groupStartOptions)
+			if session.Pool != nil {
+				// Another worker of the pool, or the same if it is there.
+				placement, err := placeSession(ctx, *session.Pool, session.ID, owner)
+				if err != nil {
+					settable.Set(turn, fmt.Errorf("place session %s in its pool again: %w", session.ID, err))
+					return
+				}
+				session.TaskQueue, session.Pod = placement.TaskQueue, placement.Pod
+				options.TaskQueue = placement.TaskQueue
+				continue
 			}
+			podCtx := workflow.WithActivityOptions(ctx, podOptions)
 			var pod domain.PodHandle
-			if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, domain.PodRequest{Session: session.ID, Group: session.Group, Owner: owner}).Get(ctx, &pod); err != nil {
+			if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, domain.PodRequest{Session: session.ID, Owner: owner}).Get(ctx, &pod); err != nil {
 				settable.Set(turn, fmt.Errorf("make the pod of session %s again: %w", session.ID, err))
 				return
 			}
@@ -400,9 +447,15 @@ func (s *Session) Close(ctx workflow.Context) error {
 		}
 		return nil
 	}
-	podCtx := workflow.WithActivityOptions(ctx, podDeleteOptions)
-	if err := workflow.ExecuteActivity(podCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: s.ID, Group: s.Group}).Get(ctx, nil); err != nil {
-		return fmt.Errorf("close session %s: delete its pod: %w", s.ID, err)
+	if s.Pool != nil {
+		// The worker stays for the pool's other sessions and goes when it has
+		// had none for the pool's IdleTimeout.
+		releaseSession(ctx, *s.Pool, s.ID)
+	} else {
+		podCtx := workflow.WithActivityOptions(ctx, podDeleteOptions)
+		if err := workflow.ExecuteActivity(podCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: s.ID}).Get(ctx, nil); err != nil {
+			return fmt.Errorf("close session %s: delete its pod: %w", s.ID, err)
+		}
 	}
 	if s.Lease != nil {
 		releaseLease(ctx, *s.Lease)

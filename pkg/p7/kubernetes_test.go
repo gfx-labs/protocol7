@@ -34,10 +34,6 @@ type fakePods struct {
 
 	mu      sync.Mutex
 	workers map[string]*coreworker.Worker
-	// members are the sessions of each group's pod, and made counts the
-	// workers that were started.
-	members map[string]map[string]bool
-	made    int
 	started []domain.PodRequest
 	deleted []string
 }
@@ -47,17 +43,6 @@ func (f *fakePods) start(_ context.Context, request domain.PodRequest) (domain.P
 	defer f.mu.Unlock()
 	handle := domain.PodHandle{Name: "p7-session-" + request.Session, TaskQueue: domain.SessionQueue(request.Session)}
 	key := request.Session
-	if request.Group != "" {
-		handle = domain.PodHandle{Name: domain.GroupPodName(request.Group), TaskQueue: domain.GroupQueue(request.Group)}
-		key = "group-" + request.Group
-		if f.members == nil {
-			f.members = map[string]map[string]bool{}
-		}
-		if f.members[key] == nil {
-			f.members[key] = map[string]bool{}
-		}
-		f.members[key][request.Session] = true
-	}
 	f.started = append(f.started, request)
 	if f.workers[key] != nil {
 		return handle, nil
@@ -78,7 +63,6 @@ func (f *fakePods) start(_ context.Context, request domain.PodRequest) (domain.P
 		return handle, err
 	}
 	f.workers[key] = core
-	f.made++
 	return handle, nil
 }
 
@@ -87,14 +71,6 @@ func (f *fakePods) delete(_ context.Context, request domain.PodRequest) error {
 	defer f.mu.Unlock()
 	f.deleted = append(f.deleted, request.Session)
 	key := request.Session
-	if request.Group != "" {
-		// A group's pod goes with its last session.
-		key = "group-" + request.Group
-		delete(f.members[key], request.Session)
-		if len(f.members[key]) > 0 {
-			return nil
-		}
-	}
 	if core := f.workers[key]; core != nil {
 		// Stopping waits for running activities, among them this close's
 		// caller's, so it runs apart.
@@ -321,150 +297,5 @@ func TestALostPodIsMadeAgain(t *testing.T) {
 	}
 	if len(pods.deleted) != 1 {
 		t.Errorf("deleted %v, want the pod deleted once, on close", pods.deleted)
-	}
-}
-
-// groupWorkflow opens a session in a group's pod, runs a turn, says which
-// queue it ran on, and closes the session when it is signalled "finish".
-func groupWorkflow(ctx workflow.Context, group string) (string, error) {
-	var queue string
-	if err := workflow.SetQueryHandler(ctx, "queue", func() (string, error) { return queue, nil }); err != nil {
-		return "", err
-	}
-	session, err := p7.OpenSession(ctx, p7.SessionSpec{Placement: p7.Placement{Backend: p7.BackendKubernetes}, Group: group})
-	if err != nil {
-		return "", err
-	}
-	if _, err := p7.PromptText(ctx, session, p7.TextPrompt{Text: "echo hi"}); err != nil {
-		return "", err
-	}
-	queue = session.TaskQueue
-	workflow.GetSignalChannel(ctx, "finish").Receive(ctx, nil)
-	return queue, session.Close(ctx)
-}
-
-// Three workflows that name one group run their sessions in one pod, on the
-// group's queue, and the pod goes with the last of them. A workflow that
-// names no group gets a pod of its own, and a group on the host backend is
-// refused.
-func TestSessionsOfAGroupRunInOnePod(t *testing.T) {
-	temporalCLI, err := exec.LookPath("temporal")
-	if err != nil {
-		t.Skip("the temporal CLI is not on PATH")
-	}
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := t.Context()
-	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{
-		ExistingPath: temporalCLI, LogLevel: "error", Stdout: os.Stderr, Stderr: os.Stderr,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = server.Stop() })
-	temporalClient := server.Client()
-	root, err := os.MkdirTemp("", "p7")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-
-	pods := &fakePods{t: t, temporal: temporalClient, binary: binary, root: root, workers: map[string]*coreworker.Worker{}}
-	backend := worker.New(temporalClient, domain.KubernetesQueue, worker.Options{})
-	backend.RegisterActivityWithOptions(pods.start, activity.RegisterOptions{Name: domain.ActivityStartSessionPod})
-	backend.RegisterActivityWithOptions(pods.delete, activity.RegisterOptions{Name: domain.ActivityDeleteSessionPod})
-	if err := backend.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(backend.Stop)
-	consumer, err := p7.NewWorker(p7.WorkerConfig{TaskQueue: "consumer", TemporalAddress: server.FrontendHostPort()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumer.RegisterWorkflow("group", groupWorkflow)
-	if err := consumer.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(consumer.Stop)
-
-	const group = "0123456789abcdef"
-	runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	ids := []string{"parent", "child-1", "child-2"}
-	runs := map[string]client.WorkflowRun{}
-	for _, id := range ids {
-		runs[id], err = temporalClient.ExecuteWorkflow(runCtx, client.StartWorkflowOptions{ID: "group-" + id, TaskQueue: "consumer"}, "group", group)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, id := range ids {
-		for {
-			value, err := temporalClient.QueryWorkflow(runCtx, "group-"+id, "", "queue")
-			var queue string
-			if err == nil && value.Get(&queue) == nil && queue != "" {
-				if queue != domain.GroupQueue(group) {
-					t.Errorf("%s ran on %q, want the group's queue", id, queue)
-				}
-				break
-			}
-			select {
-			case <-runCtx.Done():
-				t.Fatalf("%s did not finish its turn: %v", id, err)
-			case <-time.After(100 * time.Millisecond):
-			}
-		}
-	}
-	live := func() (made, workers int) {
-		pods.mu.Lock()
-		defer pods.mu.Unlock()
-		return pods.made, len(pods.workers)
-	}
-	if made, workers := live(); made != 1 || workers != 1 {
-		t.Fatalf("%d pods made and %d running for three sessions of one group, want 1 and 1", made, workers)
-	}
-	for index, id := range ids {
-		if err := temporalClient.SignalWorkflow(runCtx, "group-"+id, "", "finish", nil); err != nil {
-			t.Fatal(err)
-		}
-		if err := runs[id].Get(runCtx, nil); err != nil {
-			t.Fatal(err)
-		}
-		want := 1
-		if index == len(ids)-1 {
-			want = 0
-		}
-		if _, workers := live(); workers != want {
-			t.Errorf("after %d of 3 sessions closed %d pods run, want %d", index+1, workers, want)
-		}
-	}
-	pods.mu.Lock()
-	for _, request := range pods.started {
-		if request.Group != group {
-			t.Errorf("a pod request without the group: %+v", request)
-		}
-	}
-	pods.mu.Unlock()
-}
-
-func TestAGroupNeedsTheKubernetesBackend(t *testing.T) {
-	suite := &testsuite.WorkflowTestSuite{}
-	env := suite.NewTestWorkflowEnvironment()
-	env.ExecuteWorkflow(func(ctx workflow.Context) error {
-		_, err := p7.OpenSession(ctx, p7.SessionSpec{Placement: p7.Placement{Backend: p7.BackendHost, Host: "h"}, Group: "0123456789abcdef"})
-		return err
-	})
-	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "a group needs the kubernetes backend") {
-		t.Errorf("error %v", err)
-	}
-	env = suite.NewTestWorkflowEnvironment()
-	env.ExecuteWorkflow(func(ctx workflow.Context) error {
-		_, err := p7.OpenSession(ctx, p7.SessionSpec{Placement: p7.Placement{Backend: p7.BackendKubernetes}, Group: "BAD"})
-		return err
-	})
-	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "group") {
-		t.Errorf("error %v", err)
 	}
 }
