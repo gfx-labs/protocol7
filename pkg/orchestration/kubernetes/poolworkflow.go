@@ -19,9 +19,11 @@ import (
 // session is on which, and which sessions wait. It is the only thing that
 // starts or deletes the pool's pods, and it does so in one place, its loop,
 // with activities, so no two changes race. The workflows that open sessions
-// reach it by an update (place, release) that the backend's activities send,
-// and it answers when a worker has room. It ends when it holds nothing, and
-// the next place starts it again.
+// reach it by an update (place, release) that the backend's activities send.
+// An update never waits: a session without room is queued and told so, and the
+// activity asks again, so that any number of sessions may wait (Temporal
+// allows ten in-flight updates in a workflow). It ends when it holds nothing,
+// and the next place starts it again.
 
 // Timings of a pool. Variables so that a test can shorten them.
 var (
@@ -37,6 +39,10 @@ var (
 	// poolReadyTimeout is how long a pod may stay not ready before the pool
 	// takes it for lost.
 	poolReadyTimeout = 15 * time.Minute
+	// poolWaiterTTL is how long a queued session, or a failure that is
+	// waiting to be read, is kept without its caller asking again. Callers
+	// ask every few seconds.
+	poolWaiterTTL = time.Minute
 )
 
 // PoolInput is the input of the pool workflow, and what it hands to the next
@@ -75,6 +81,9 @@ type PoolWaiter struct {
 	Session string `json:"session"`
 	Owner   string `json:"owner,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// Seen is when its caller last asked, or for an error when it was made.
+	// A caller that stops asking (its activity was cancelled) is dropped.
+	Seen time.Time `json:"seen,omitzero"`
 }
 
 var poolActivityOptions = workflow.ActivityOptions{
@@ -118,7 +127,7 @@ func Pool(ctx workflow.Context, input PoolInput) error {
 		if p.empty() && workflow.AllHandlersFinished(ctx) {
 			return nil
 		}
-		if workflow.GetInfo(ctx).GetContinueAsNewSuggested() && len(p.Waiting) == 0 && workflow.AllHandlersFinished(ctx) {
+		if workflow.GetInfo(ctx).GetContinueAsNewSuggested() && workflow.AllHandlersFinished(ctx) {
 			return workflow.NewContinueAsNewError(ctx, Pool, p.PoolInput)
 		}
 		wake := p.wakeIn(ctx)
@@ -197,45 +206,43 @@ func (p *pool) validatePlace(_ workflow.Context, request domain.PlaceRequest) er
 	return nil
 }
 
-// place answers where a session runs. A session that is placed is checked
-// against the pool's pods first, because the worker it was placed on may be
-// gone, and then it is placed anew: this is how a session whose pod was lost
-// gets another worker.
+// place answers where a session runs, or that it does not run anywhere yet.
+// It never waits: a session that has no room is queued, in order, and its
+// caller asks again.
+//
+// A session that is placed is checked against the pool's pods first, because
+// the worker it was placed on may be gone, and then it is placed anew: this is
+// how a session whose pod was lost gets another worker. The first ask of such
+// a session asks for the check and is answered Pending with the number of the
+// last one, the next carries that number in After.
 func (p *pool) place(ctx workflow.Context, request domain.PlaceRequest) (domain.PoolPlacement, error) {
 	p.Spec = request.Pool
-	if _, placed := p.placement(request.Session); placed {
-		before := p.Checks
-		p.wantCheck, p.dirty = true, true
-		if err := workflow.Await(ctx, func() bool { return p.Checks > before }); err != nil {
-			return domain.PoolPlacement{}, err
-		}
-	}
-	if placement, ok := p.placement(request.Session); ok {
-		return placement, nil
-	}
-	if _, waiting := p.waiter(request.Session); !waiting {
-		p.Waiting = append(p.Waiting, PoolWaiter{Session: request.Session, Owner: request.Owner})
-	}
-	p.dirty = true
-	err := workflow.Await(ctx, func() bool {
-		if _, ok := p.placement(request.Session); ok {
-			return true
-		}
-		_, waiting := p.waiter(request.Session)
-		return !waiting
-	})
-	if err != nil {
-		return domain.PoolPlacement{}, err
-	}
-	if placement, ok := p.placement(request.Session); ok {
-		return placement, nil
-	}
-	if index := slices.IndexFunc(p.Failed, func(w PoolWaiter) bool { return w.Session == request.Session }); index >= 0 {
+	session := request.Session
+	if index := slices.IndexFunc(p.Failed, func(w PoolWaiter) bool { return w.Session == session }); index >= 0 {
 		failure := p.Failed[index].Error
 		p.Failed = slices.Delete(p.Failed, index, index+1)
 		return domain.PoolPlacement{}, temporal.NewNonRetryableApplicationError(failure, "PoolWorker", nil)
 	}
-	return domain.PoolPlacement{}, temporal.NewNonRetryableApplicationError("the session was released while it waited", "Released", nil)
+	if placement, placed := p.placement(session); placed {
+		switch {
+		case request.Queued:
+			return placement, nil
+		case request.After != nil && p.Checks > *request.After:
+			return placement, nil
+		case request.After != nil:
+			p.wantCheck, p.dirty = true, true
+			return domain.PoolPlacement{Pending: true, Checks: *request.After}, nil
+		}
+		p.wantCheck, p.dirty = true, true
+		return domain.PoolPlacement{Pending: true, Checks: p.Checks}, nil
+	}
+	if index, waiting := p.waiter(session); waiting {
+		p.Waiting[index].Seen = workflow.Now(ctx)
+	} else {
+		p.Waiting = append(p.Waiting, PoolWaiter{Session: session, Owner: request.Owner, Seen: workflow.Now(ctx)})
+		p.dirty = true
+	}
+	return domain.PoolPlacement{Pending: true, Queued: true}, nil
 }
 
 func (p *pool) release(ctx workflow.Context, request domain.ReleaseRequest) error {
@@ -263,11 +270,15 @@ func (p *pool) removeSession(ctx workflow.Context, session string) {
 
 // wakeIn is how long until the loop has something to do without being told.
 func (p *pool) wakeIn(ctx workflow.Context) time.Duration {
-	if len(p.Workers) == 0 {
-		return time.Hour
-	}
 	now := workflow.Now(ctx)
-	wake := p.nextCheck.Sub(now)
+	wake := time.Hour
+	for _, w := range slices.Concat(p.Waiting, p.Failed) {
+		wake = min(wake, w.Seen.Add(poolWaiterTTL).Sub(now))
+	}
+	if len(p.Workers) == 0 {
+		return wake
+	}
+	wake = min(wake, p.nextCheck.Sub(now))
 	for _, w := range p.Workers {
 		if !w.EmptyFrom.IsZero() {
 			wake = min(wake, w.EmptyFrom.Add(p.Spec.Idle()).Sub(now))
@@ -280,6 +291,10 @@ func (p *pool) wakeIn(ctx workflow.Context) time.Duration {
 // sessions that wait, and the removal of workers that were empty long enough.
 func (p *pool) schedule(ctx workflow.Context) {
 	now := workflow.Now(ctx)
+	// Callers that stopped asking are not placed: nobody would use the place.
+	alive := func(w PoolWaiter) bool { return now.Sub(w.Seen) < poolWaiterTTL }
+	p.Waiting = slices.DeleteFunc(p.Waiting, func(w PoolWaiter) bool { return !alive(w) })
+	p.Failed = slices.DeleteFunc(p.Failed, func(w PoolWaiter) bool { return !alive(w) })
 	if len(p.Workers) > 0 && (p.wantCheck || !now.Before(p.nextCheck)) {
 		p.check(ctx)
 	}
@@ -300,7 +315,7 @@ func (p *pool) schedule(ctx workflow.Context) {
 			if failure != "" {
 				// This session cannot be placed. The next one may be.
 				failed := p.Waiting[0]
-				failed.Error = failure
+				failed.Error, failed.Seen = failure, workflow.Now(ctx)
 				p.Waiting = p.Waiting[1:]
 				p.Failed = append(p.Failed, failed)
 				continue

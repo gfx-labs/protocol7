@@ -143,9 +143,20 @@ type PlaceRequest struct {
 	// Owner is the ID of the workflow that opened the session. The pool
 	// closes the sessions of an owner that is not running.
 	Owner string `json:"owner,omitempty"`
-	// Attempt is unique to one call, and is the ID of its update, so that a
-	// retried activity gets the answer of the first try.
+	// Attempt is unique to one call of the activity.
 	Attempt string `json:"attempt,omitempty"`
+	// The update does not wait. A session that must wait for room is queued
+	// and answered at once with Pending, and asks again every few seconds:
+	// a waiting session holds no update open, which Temporal limits to ten
+	// at a time in a workflow.
+	//
+	// Queued is set by a caller that was told it is queued: if the session
+	// has a place by now it is returned as it is.
+	Queued bool `json:"queued,omitempty"`
+	// After is set by a caller that asked for a check of the pool's pods
+	// (Pending with Checks): the number of the check it was told about. The
+	// session's place is returned once a later check has been made.
+	After *int `json:"after,omitempty"`
 }
 
 // PoolPlacement says where a session of a pool runs.
@@ -155,6 +166,12 @@ type PoolPlacement struct {
 	// Pod is the worker's pod and TaskQueue the queue its worker polls.
 	Pod       string `json:"pod"`
 	TaskQueue string `json:"task_queue"`
+	// Pending is set by the update, and never by the activity, when the
+	// session has no place yet: it is in the queue (Queued), or the pool
+	// checks its pods first, and Checks is the number of the last check.
+	Pending bool `json:"pending,omitempty"`
+	Queued  bool `json:"queued,omitempty"`
+	Checks  int  `json:"checks,omitempty"`
 }
 
 // ReleaseRequest is the input of ActivityReleaseSession and of UpdatePoolRelease.

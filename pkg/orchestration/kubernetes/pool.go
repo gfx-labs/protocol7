@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
@@ -237,11 +238,25 @@ func beats(ctx context.Context) func() {
 	return func() { close(done); <-stopped }
 }
 
+// poolAskEvery is how often a session that waits for room asks its pool
+// again, and poolAskFailures how many asks in a row may fail before the
+// activity does. Variables so that a test can shorten them.
+var (
+	poolAskEvery    atomic.Int64 // nanoseconds
+	poolAskFailures = 5
+)
+
+func init() { poolAskEvery.Store(int64(2 * time.Second)) }
+
 // PlaceSession asks the session's pool where the session runs, and starts the
 // pool's workflow if it is not running. It returns when a worker has room for
-// the session, which can take as long as the sessions that fill the pool,
-// and it heartbeats while it waits. A retry with the same Attempt gets the
-// answer of the first.
+// the session, which can take as long as the sessions that fill the pool.
+//
+// The pool queues the session at once and answers each ask without waiting, so
+// a session that waits holds no update open (a workflow has ten at a time) and
+// any number of sessions may wait in the order they asked. The activity asks
+// again every few seconds, which also tells the pool that the session still
+// waits, and heartbeats.
 func (a *poolActivities) PlaceSession(ctx context.Context, request domain.PlaceRequest) (domain.PoolPlacement, error) {
 	var placement domain.PoolPlacement
 	if err := request.Pool.Validate(); err != nil {
@@ -251,6 +266,51 @@ func (a *poolActivities) PlaceSession(ctx context.Context, request domain.PlaceR
 		return placement, refusedRequest(errors.New("place a session: the session and the attempt are required"))
 	}
 	defer beats(ctx)()
+	failures := 0
+	for ask := 0; ; ask++ {
+		answer, err := a.askPool(ctx, request, request.Attempt+"-"+strconv.Itoa(ask)+"-"+strconv.FormatInt(time.Now().UnixNano(), 36))
+		var application *temporal.ApplicationError
+		switch {
+		case err == nil:
+			failures = 0
+		case ctx.Err() != nil:
+			return placement, ctx.Err()
+		case errors.As(err, &application) && application.NonRetryable():
+			return placement, err
+		default:
+			// A busy server or a workflow that is starting. The ask is
+			// idempotent, so it is made again.
+			if failures++; failures >= poolAskFailures {
+				return placement, fmt.Errorf("place session %s in pool %s: %w", request.Session, request.Pool.Name, err)
+			}
+			answer = domain.PoolPlacement{Pending: true, Queued: request.Queued, Checks: -1}
+		}
+		if !answer.Pending {
+			return answer, nil
+		}
+		if answer.Queued {
+			request.Queued, request.After = true, nil
+		} else if answer.Checks >= 0 {
+			checks := answer.Checks
+			request.After = &checks
+		}
+		// A session that waits for room asks every few seconds. One that
+		// waits for a check of the pool's pods will be answered at once.
+		delay := time.Duration(poolAskEvery.Load())
+		if !answer.Queued && !request.Queued {
+			delay = min(delay, 250*time.Millisecond)
+		}
+		select {
+		case <-ctx.Done():
+			return placement, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+}
+
+// askPool sends one ask to the pool, which starts if it is not running.
+func (a *poolActivities) askPool(ctx context.Context, request domain.PlaceRequest, updateID string) (domain.PoolPlacement, error) {
+	var placement domain.PoolPlacement
 	operation := a.temporal.NewWithStartWorkflowOperation(client.StartWorkflowOptions{
 		ID:                       domain.PoolWorkflowID(request.Pool.Name),
 		TaskQueue:                domain.KubernetesQueue,
@@ -260,7 +320,7 @@ func (a *poolActivities) PlaceSession(ctx context.Context, request domain.PlaceR
 	handle, err := a.temporal.UpdateWithStartWorkflow(ctx, client.UpdateWithStartWorkflowOptions{
 		StartWorkflowOperation: operation,
 		UpdateOptions: client.UpdateWorkflowOptions{
-			UpdateID: request.Attempt, UpdateName: domain.UpdatePoolPlace, Args: []any{request},
+			UpdateID: updateID, UpdateName: domain.UpdatePoolPlace, Args: []any{request},
 			WaitForStage: client.WorkflowUpdateStageCompleted,
 		},
 	})
@@ -268,11 +328,7 @@ func (a *poolActivities) PlaceSession(ctx context.Context, request domain.PlaceR
 		return placement, fmt.Errorf("place session %s in pool %s: %w", request.Session, request.Pool.Name, err)
 	}
 	if err := handle.Get(ctx, &placement); err != nil {
-		var application *temporal.ApplicationError
-		if errors.As(err, &application) && application.NonRetryable() {
-			return placement, err
-		}
-		return placement, fmt.Errorf("place session %s in pool %s: %w", request.Session, request.Pool.Name, err)
+		return placement, err
 	}
 	return placement, nil
 }

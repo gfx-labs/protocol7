@@ -443,6 +443,9 @@ func TestPoolsDoNotShareWorkers(t *testing.T) {
 func TestASessionWhoseOwnerIsGoneIsReleased(t *testing.T) {
 	restore := kubernetes.SetPoolTimings(time.Minute, time.Hour, time.Second)
 	defer restore()
+	// The callers ask before the pool's check closes the session of the owner
+	// that is gone, as they would: a caller whose owner is gone does not ask.
+	defer kubernetes.SetPoolWaiting(50*time.Millisecond, time.Minute)()
 	rig := startPoolRig(t)
 	spec := domain.PoolSpec{Name: poolA, MaxWorkers: 1, SessionsPerWorker: 2, IdleTimeout: time.Second}
 	// The worker's queue answers the close the pool sends.
@@ -506,11 +509,14 @@ func TestAPoolSpecIsChecked(t *testing.T) {
 // no longer waiting when the worker is there: the pool goes on, keeps the
 // worker for its idle timeout, and places the next session on it.
 func TestASessionReleasedWhileAWorkerStartsIsNotPlaced(t *testing.T) {
+	// The caller that was released does not ask again, as one whose activity
+	// was cancelled does not.
+	defer kubernetes.SetPoolWaiting(time.Hour, time.Minute)()
 	rig := startPoolRig(t)
 	spec := domain.PoolSpec{Name: poolA, MaxWorkers: 1, SessionsPerWorker: 1, IdleTimeout: time.Hour}
 	gate := make(chan struct{})
 	rig.api.gate.Store(&gate)
-	run := rig.place(spec, "a", "")
+	rig.place(spec, "a", "")
 	waitFor(t, "the session to wait for its worker", 20*time.Second, func() bool {
 		value, err := rig.temporal.QueryWorkflow(t.Context(), domain.PoolWorkflowID(poolA), "", domain.QueryPoolState)
 		if err != nil {
@@ -521,15 +527,11 @@ func TestASessionReleasedWhileAWorkerStartsIsNotPlaced(t *testing.T) {
 	})
 	rig.release(spec, "a")
 	close(gate)
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	var placement domain.PoolPlacement
-	if err := run.Get(ctx, &placement); err == nil {
-		t.Fatalf("the released session was placed: %+v", placement)
-	}
 	// The pool is not stuck: it holds the worker, empty, and places the next.
 	waitFor(t, "the worker", 20*time.Second, func() bool { return rig.podCount(poolA) == 1 })
-	// A workflow task that panics is retried only after seconds.
+	// A workflow task that panics is retried only after seconds. The caller
+	// that was released stays asleep: only new ones ask quickly.
+	kubernetes.SetPoolAsk(200 * time.Millisecond)
 	started := time.Now()
 	if placement := rig.placed(spec, "b"); placement.Worker != 1 {
 		t.Errorf("placement %+v", placement)
@@ -538,6 +540,74 @@ func TestASessionReleasedWhileAWorkerStartsIsNotPlaced(t *testing.T) {
 		t.Errorf("the pool took %s to place the next session: its workflow task failed", took)
 	}
 	if state := rig.state(poolA); len(state.Waiting) != 0 || len(state.Workers) != 1 || len(state.Workers[0].Sessions) != 1 {
+		t.Errorf("state %+v", state)
+	}
+}
+
+// Many sessions may wait: each holds no update open (Temporal allows ten in a
+// workflow), and they are placed in the order they asked.
+func TestManySessionsWaitInOrder(t *testing.T) {
+	defer kubernetes.SetPoolWaiting(300*time.Millisecond, time.Minute)()
+	rig := startPoolRig(t)
+	spec := domain.PoolSpec{Name: poolA, MaxWorkers: 1, SessionsPerWorker: 1, IdleTimeout: time.Minute}
+	const waiters = 15
+	rig.placed(spec, "first")
+	runs := map[string]client.WorkflowRun{}
+	var order []string
+	for index := 1; index <= waiters; index++ {
+		session := "w" + strconv.Itoa(index)
+		runs[session] = rig.place(spec, session, "")
+		order = append(order, session)
+		want := index
+		waitFor(t, session+" to be queued", 20*time.Second, func() bool {
+			value, err := rig.temporal.QueryWorkflow(t.Context(), domain.PoolWorkflowID(poolA), "", domain.QueryPoolState)
+			var state domain.PoolState
+			return err == nil && value.Get(&state) == nil && len(state.Waiting) == want
+		})
+	}
+	if state := rig.state(poolA); !slices.Equal(state.Waiting, order) {
+		t.Fatalf("queue %v, want %v", state.Waiting, order)
+	}
+	// Each release places the next in line, and no other.
+	previous := "first"
+	for _, session := range order {
+		rig.release(spec, previous)
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+		var placement domain.PoolPlacement
+		if err := runs[session].Get(ctx, &placement); err != nil {
+			cancel()
+			t.Fatalf("%s was not placed after %s was released: %v", session, previous, err)
+		}
+		cancel()
+		if placement.Worker != 1 {
+			t.Errorf("%s: %+v", session, placement)
+		}
+		previous = session
+	}
+	if state := rig.state(poolA); len(state.Waiting) != 0 || len(state.Workers) != 1 || !slices.Equal(state.Workers[0].Sessions, []string{previous}) {
+		t.Errorf("state %+v", state)
+	}
+}
+
+// A caller that stops asking is dropped from the queue, and does not take the
+// place that frees up.
+func TestACallerThatStopsAskingLeavesTheQueue(t *testing.T) {
+	defer kubernetes.SetPoolWaiting(200*time.Millisecond, 2*time.Second)()
+	rig := startPoolRig(t)
+	spec := domain.PoolSpec{Name: poolA, MaxWorkers: 1, SessionsPerWorker: 1, IdleTimeout: time.Minute}
+	rig.placed(spec, "first")
+	gone := rig.place(spec, "gone", "")
+	waitFor(t, "gone to be queued", 20*time.Second, func() bool { return len(rig.state(poolA).Waiting) == 1 })
+	// Its activity is cancelled with its workflow.
+	if err := rig.temporal.TerminateWorkflow(t.Context(), gone.GetID(), gone.GetRunID(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "gone to leave the queue", 20*time.Second, func() bool { return len(rig.state(poolA).Waiting) == 0 })
+	rig.release(spec, "first")
+	if placement := rig.placed(spec, "next"); placement.Worker != 1 {
+		t.Errorf("placement %+v", placement)
+	}
+	if state := rig.state(poolA); len(state.Workers[0].Sessions) != 1 || state.Workers[0].Sessions[0] != "next" {
 		t.Errorf("state %+v", state)
 	}
 }

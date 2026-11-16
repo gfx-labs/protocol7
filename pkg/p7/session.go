@@ -241,7 +241,7 @@ var podOptions = workflow.ActivityOptions{
 
 // placeOptions are those of the activity that places a session in a pool. It
 // returns when a worker has room, which can take as long as the sessions that
-// fill the pool, and it heartbeats while it waits.
+// fill the pool: it asks the pool again every few seconds, and heartbeats.
 var placeOptions = workflow.ActivityOptions{
 	TaskQueue:           domain.KubernetesQueue,
 	StartToCloseTimeout: 12 * time.Hour,
