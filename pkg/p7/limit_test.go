@@ -145,6 +145,34 @@ func TestASessionOverTheLimitWaitsForAPlace(t *testing.T) {
 	finish(one)
 	finish(two)
 
+	// Exercise the same semaphore independently of a session, as a caller
+	// bounding model turns does. A cancelled lease context must still release.
+	w := func(ctx workflow.Context) error {
+		lease, err := p7.AcquireLimit(ctx, "model:test", 0)
+		if err != nil {
+			return err
+		}
+		cancelled, cancel := workflow.WithCancel(ctx)
+		cancel()
+		lease.Release(cancelled)
+		lease.Release(cancelled)
+		return nil
+	}
+	temporalWorker := startStackWith(t, agentEnv, p7.WorkerConfig{
+		Limits: p7.LimitConfig{Capacity: map[string]int{"model:*": 1}},
+	}, func(worker *p7.Worker) { worker.RegisterWorkflow("turn-limit", w) })
+	run, err := temporalWorker.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: "consumer"}, "turn-limit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Get(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	status, err = p7.QueryLimit(ctx, temporalWorker, "model:test")
+	if err != nil || len(status.Holders) != 0 || len(status.Waiters) != 0 {
+		t.Fatalf("per-turn lease not released: %+v, %v", status, err)
+	}
+
 	// A limit with no capacity in the configuration is an error and not a wait.
 	unconfigured, err := temporalClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: "consumer"},
 		"hold", "test", "nothing", 0)

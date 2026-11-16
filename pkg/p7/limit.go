@@ -408,6 +408,19 @@ func (s *limitState) reconcile(ctx workflow.Context) {
 	})
 }
 
+// AcquireLimit waits for a lease in a worker-configured shared limit. It can
+// bound work shorter than a session, such as a single model turn. The caller
+// must release the returned lease, including when its context is cancelled.
+func AcquireLimit(ctx workflow.Context, name string, priority int) (*Lease, error) {
+	if name == "" {
+		return nil, errors.New("acquire limit: a name is required")
+	}
+	return acquireLease(ctx, name, priority)
+}
+
+// Release gives this lease back. Releasing it more than once is harmless.
+func (l Lease) Release(ctx workflow.Context) { releaseLease(ctx, l) }
+
 // acquireLease waits for a place in the limit. A cancelled ctx gives the
 // place up.
 func acquireLease(ctx workflow.Context, name string, priority int) (*Lease, error) {
