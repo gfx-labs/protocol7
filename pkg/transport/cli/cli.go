@@ -7,6 +7,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/alecthomas/kong"
 	"go.uber.org/fx"
 
+	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/execution/session"
 	"github.com/gfx-labs/protocol7/pkg/execution/snapshot"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/coreworker"
@@ -176,15 +178,37 @@ type root struct {
 }
 
 // sessionCommand is the worker inside a session's pod. It is the host
-// session manager, polling the queue of its one session.
+// session manager, polling the queue of its one session, or the queue of its
+// group in a pod that the sessions of a group share.
 type sessionCommand struct {
 	Worker    workerCommand `embed:""`
-	SessionID string        `name:"session" required:"" env:"P7_SESSION" help:"The session this pod serves. The kubernetes backend sets it."`
-	Queue     string        `name:"task-queue" required:"" env:"P7_TASK_QUEUE" help:"The queue of the session. The kubernetes backend sets it."`
+	SessionID string        `name:"session" env:"P7_SESSION" help:"The session this pod serves. The kubernetes backend sets it in a pod of one session. Exclusive with --group."`
+	Group     string        `name:"group" env:"P7_GROUP" help:"The group this pod serves, which many sessions share. The kubernetes backend sets it in a group's pod. Each session keeps its snapshot under <snapshot prefix>/groups/<group>/<session>/, and is restored from it when it is first used. Exclusive with --session."`
+	Queue     string        `name:"task-queue" required:"" env:"P7_TASK_QUEUE" help:"The queue of the session or group. The kubernetes backend sets it."`
 }
 
 func (c *sessionCommand) options() (fx.Option, error) {
+	switch {
+	case c.SessionID != "" && c.Group != "":
+		return nil, errors.New("p7 session: name a session or a group, not both")
+	case c.SessionID == "" && c.Group == "":
+		return nil, errors.New("p7 session: name a session (--session) or a group (--group)")
+	}
 	c.Worker.taskQueue = c.Queue
+	if c.Group != "" {
+		if err := domain.ValidGroup(c.Group); err != nil {
+			return nil, err
+		}
+		// No session is restored at start: each is restored when it is
+		// first used, from the prefix of the group.
+		if c.Worker.Snapshots.Bucket != "" {
+			c.Worker.Snapshots.Prefix = domain.GroupSnapshotPrefix(c.Worker.Snapshots.Prefix, c.Group)
+		}
+		if c.Worker.Host == "" {
+			c.Worker.Host = "group-" + c.Group
+		}
+		return c.Worker.options()
+	}
 	c.Worker.session = c.SessionID
 	if c.Worker.Host == "" {
 		c.Worker.Host = "session-" + c.SessionID
@@ -197,7 +221,12 @@ func (c *sessionCommand) Run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	return p7fx.Run(ctx, logger.With("session", c.SessionID), options)
+	if c.Group != "" {
+		logger = logger.With("group", c.Group)
+	} else {
+		logger = logger.With("session", c.SessionID)
+	}
+	return p7fx.Run(ctx, logger, options)
 }
 
 // podsCommand creates and deletes session pods. It holds the right to
