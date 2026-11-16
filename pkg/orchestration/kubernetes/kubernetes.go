@@ -1,6 +1,5 @@
-// Package kubernetes is the kubernetes backend: one pod per session, or one
-// pod for a group of sessions that a deployment says may share one (see
-// group.go). Its
+// Package kubernetes is the kubernetes backend: one pod per session, or the
+// worker pods of a pool that many sessions share (see pool.go). Its
 // worker polls the queue p7-kubernetes and only creates and deletes pods. The
 // session's activities then run in the session's pod, where `p7
 // session` runs the host session manager for that one session on its own
@@ -40,16 +39,11 @@ const (
 	// LabelSession holds the session ID. A ClusterSPIFFEID can render the
 	// pod's identity from it, and only this worker sets it.
 	LabelSession = "p7.gfx-labs.io/session"
-	// LabelGroup holds the group key of a group's pod. It carries no
-	// LabelSession: the pod's identity is the group's. Only this worker sets
-	// it.
-	LabelGroup = "p7.gfx-labs.io/group"
-	// AnnotationMemberPrefix starts the name of each annotation that makes
-	// a session a member of a group's pod: <prefix><session>, with the ID of
-	// the workflow that owns the session as its value. A merge patch sets or
-	// removes one member without touching the others, and the pod's
-	// resourceVersion makes a join race with the last member's leave.
-	AnnotationMemberPrefix = "p7.gfx-labs.io/member-"
+	// LabelPool holds the name of the pool whose worker a pod is. It carries
+	// no LabelSession: the pod's identity is the pool's. LabelWorker holds the
+	// worker's slot. Only this worker sets them.
+	LabelPool   = "p7.gfx-labs.io/pool"
+	LabelWorker = "p7.gfx-labs.io/worker"
 	// LabelManaged marks a pod this backend created.
 	LabelManaged = "p7.gfx-labs.io/managed"
 	// AnnotationOwner holds the ID of the workflow that opened the session.
@@ -60,8 +54,10 @@ const (
 	// EnvSession and EnvTaskQueue tell `p7 session` which session it
 	// serves and which queue it polls.
 	EnvSession = "P7_SESSION"
-	// EnvGroup replaces EnvSession in a group's pod: the group it serves.
-	EnvGroup     = "P7_GROUP"
+	// EnvPool and EnvWorker replace EnvSession in a pool worker's pod: the
+	// pool it serves and its slot.
+	EnvPool      = "P7_POOL"
+	EnvWorker    = "P7_WORKER"
 	EnvTaskQueue = "P7_TASK_QUEUE"
 )
 
@@ -186,7 +182,7 @@ func NewWorker(temporalClient client.Client, pods *Pods) worker.Worker {
 	w := worker.New(temporalClient, domain.KubernetesQueue, worker.Options{})
 	pods.Register(w)
 	w.RegisterWorkflowWithOptions(ProbeSessionPod, workflow.RegisterOptions{Name: domain.WorkflowProbeSessionPod})
-	w.RegisterWorkflowWithOptions(ProbeGroupSession, workflow.RegisterOptions{Name: domain.WorkflowProbeGroupSession})
+	registerPools(w, pods, temporalClient)
 	return w
 }
 
@@ -194,9 +190,6 @@ func NewWorker(temporalClient client.Client, pods *Pods) worker.Worker {
 // API server accepted it. The session's worker polls the returned queue once
 // the pod runs.
 func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.PodHandle, error) {
-	if request.Group != "" {
-		return p.startGroup(ctx, request)
-	}
 	handle := domain.PodHandle{Name: PodName(request.Session), TaskQueue: domain.SessionQueue(request.Session)}
 	pod, err := p.render(request, handle)
 	if err != nil {
@@ -222,9 +215,6 @@ func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.Pod
 // session that was not closed first would otherwise come back. It
 // heartbeats while it waits, and the workflow allows it 20 minutes.
 func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
-	if request.Group != "" {
-		return p.leaveGroup(ctx, request)
-	}
 	err := p.deletePod(ctx, PodName(request.Session), "")
 	if err != nil {
 		return err
@@ -289,68 +279,77 @@ func (p *Pods) podsPath() string { return "/api/v1/namespaces/" + p.config.Names
 
 // render makes a session's pod from the template.
 func (p *Pods) render(request domain.PodRequest, handle domain.PodHandle) (map[string]any, error) {
-	group := request.Group != ""
-	raw, err := os.ReadFile(p.config.TemplateFile)
+	pod, container, err := p.template()
 	if err != nil {
-		return nil, fmt.Errorf("read the session pod template: %w", err)
+		return nil, err
 	}
-	var pod map[string]any
-	if err := json.Unmarshal(raw, &pod); err != nil {
-		return nil, fmt.Errorf("the session pod template %s is not JSON: %w", p.config.TemplateFile, err)
-	}
-	pod["apiVersion"], pod["kind"] = "v1", "Pod"
 	metadata := object(pod, "metadata")
-	// Fields a template copied from a live pod could carry.
-	for _, field := range []string{"generateName", "resourceVersion", "uid", "creationTimestamp", "ownerReferences"} {
-		delete(metadata, field)
-	}
 	metadata["name"] = handle.Name
-	metadata["namespace"] = p.config.Namespace
 	labels := object(metadata, "labels")
+	labels[LabelSession] = request.Session
 	labels[LabelManaged] = "true"
-	if group {
-		// The pod has the identity of the group, which its label renders.
-		delete(labels, LabelSession)
-		labels[LabelGroup] = request.Group
-		key, err := memberAnnotation(request.Session)
-		if err != nil {
-			return nil, err
-		}
-		object(metadata, "annotations")[key] = request.Owner
-	} else {
-		delete(labels, LabelGroup)
-		labels[LabelSession] = request.Session
-		if request.Owner != "" {
-			object(metadata, "annotations")[AnnotationOwner] = request.Owner
-		}
+	if request.Owner != "" {
+		object(metadata, "annotations")[AnnotationOwner] = request.Owner
 	}
 	if request.OpenTimeout > 0 {
 		object(metadata, "annotations")[AnnotationOpenTimeout] = request.OpenTimeout.String()
 	}
-	spec := object(pod, "spec")
+	setEnv(container, map[string]string{EnvSession: request.Session, EnvTaskQueue: handle.TaskQueue})
+	return pod, nil
+}
+
+// template reads the pod template and returns it with the container that
+// runs `p7 session`. The pod has the namespace, no status, and none of the
+// fields that a template copied from a live pod could carry.
+func (p *Pods) template() (pod, container map[string]any, err error) {
+	raw, err := os.ReadFile(p.config.TemplateFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the session pod template: %w", err)
+	}
+	if err := json.Unmarshal(raw, &pod); err != nil {
+		return nil, nil, fmt.Errorf("the session pod template %s is not JSON: %w", p.config.TemplateFile, err)
+	}
+	pod["apiVersion"], pod["kind"] = "v1", "Pod"
+	metadata := object(pod, "metadata")
+	for _, field := range []string{"generateName", "resourceVersion", "uid", "creationTimestamp", "ownerReferences"} {
+		delete(metadata, field)
+	}
+	metadata["namespace"] = p.config.Namespace
+	labels := object(metadata, "labels")
+	// The labels that name what the pod serves are set by the caller.
+	for _, label := range []string{LabelSession, LabelPool, LabelWorker} {
+		delete(labels, label)
+	}
 	delete(pod, "status")
-	containers, _ := spec["containers"].([]any)
+	containers, _ := object(pod, "spec")["containers"].([]any)
 	for _, entry := range containers {
-		container, ok := entry.(map[string]any)
-		if !ok || container["name"] != p.config.SessionContainer {
-			continue
+		if named, ok := entry.(map[string]any); ok && named["name"] == p.config.SessionContainer {
+			return pod, named, nil
 		}
-		env, _ := container["env"].([]any)
-		var kept []any
-		for _, variable := range env {
-			if named, ok := variable.(map[string]any); ok && (named["name"] == EnvSession || named["name"] == EnvGroup || named["name"] == EnvTaskQueue) {
+	}
+	return nil, nil, fmt.Errorf("the session pod template has no container named %q", p.config.SessionContainer)
+}
+
+// setEnv sets variables of a container, and removes those of the template
+// that name what the pod serves.
+func setEnv(container map[string]any, set map[string]string) {
+	env, _ := container["env"].([]any)
+	var kept []any
+	for _, variable := range env {
+		if named, ok := variable.(map[string]any); ok {
+			switch named["name"] {
+			case EnvSession, EnvPool, EnvWorker, EnvTaskQueue:
 				continue
 			}
-			kept = append(kept, variable)
 		}
-		who := map[string]any{"name": EnvSession, "value": request.Session}
-		if group {
-			who = map[string]any{"name": EnvGroup, "value": request.Group}
-		}
-		container["env"] = append(kept, who, map[string]any{"name": EnvTaskQueue, "value": handle.TaskQueue})
-		return pod, nil
+		kept = append(kept, variable)
 	}
-	return nil, fmt.Errorf("the session pod template has no container named %q", p.config.SessionContainer)
+	for _, name := range []string{EnvSession, EnvPool, EnvWorker, EnvTaskQueue} {
+		if value, ok := set[name]; ok {
+			kept = append(kept, map[string]any{"name": name, "value": value})
+		}
+	}
+	container["env"] = kept
 }
 
 func object(parent map[string]any, key string) map[string]any {

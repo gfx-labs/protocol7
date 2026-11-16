@@ -24,7 +24,7 @@ const (
 	ReasonOwnerGone    = "its owner workflow is not running"
 	ReasonSessionClose = "its session is closed"
 	ReasonNotReady     = "it is not ready after its open timeout"
-	ReasonNoMembers    = "its group has no session left"
+	ReasonPoolGone     = "its pool is not running"
 )
 
 const (
@@ -47,26 +47,6 @@ func ProbeSessionPod(ctx workflow.Context, session string) (domain.SessionState,
 		RetryPolicy:            &temporal.RetryPolicy{MaximumAttempts: 1},
 	})
 	err := workflow.ExecuteActivity(ctx, domain.ActivitySessionState, domain.CloseRequest{Session: session}).Get(ctx, &state)
-	return state, err
-}
-
-// ProbeGroupRequest is the input of ProbeGroupSession.
-type ProbeGroupRequest struct {
-	Group   string `json:"group"`
-	Session string `json:"session"`
-}
-
-// ProbeGroupSession is ProbeSessionPod for a session in a group's pod: it
-// asks the worker on the group's queue.
-func ProbeGroupSession(ctx workflow.Context, request ProbeGroupRequest) (domain.SessionState, error) {
-	var state domain.SessionState
-	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		TaskQueue:              domain.GroupQueue(request.Group),
-		ScheduleToStartTimeout: probeTimeout,
-		StartToCloseTimeout:    probeTimeout,
-		RetryPolicy:            &temporal.RetryPolicy{MaximumAttempts: 1},
-	})
-	err := workflow.ExecuteActivity(ctx, domain.ActivitySessionState, domain.CloseRequest{Session: request.Session}).Get(ctx, &state)
 	return state, err
 }
 
@@ -157,6 +137,7 @@ type podObject struct {
 		DeletionTimestamp *time.Time        `json:"deletionTimestamp"`
 	} `json:"metadata"`
 	Status struct {
+		Phase      string `json:"phase"`
 		Conditions []struct {
 			Type               string    `json:"type"`
 			Status             string    `json:"status"`
@@ -228,8 +209,8 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		if pod.Metadata.DeletionTimestamp != nil {
 			continue
 		}
-		if group := pod.Metadata.Labels[LabelGroup]; group != "" {
-			if err := r.reconcileGroup(ctx, pod, group); err != nil {
+		if pool := pod.Metadata.Labels[LabelPool]; pool != "" {
+			if err := r.reconcilePool(ctx, pod, pool); err != nil {
 				failed = append(failed, err)
 			}
 			continue
@@ -307,7 +288,12 @@ func (r *Reconciler) unowned(ctx context.Context, pod *podObject, session string
 
 // ownerRunning says whether the latest run of a workflow is running.
 func (r *Reconciler) ownerRunning(ctx context.Context, workflowID string) (bool, error) {
-	described, err := r.temporal.DescribeWorkflowExecution(ctx, workflowID, "")
+	return workflowRunning(ctx, r.temporal, workflowID)
+}
+
+// workflowRunning says whether the latest run of a workflow is running.
+func workflowRunning(ctx context.Context, temporalClient client.Client, workflowID string) (bool, error) {
+	described, err := temporalClient.DescribeWorkflowExecution(ctx, workflowID, "")
 	var notFound *serviceerror.NotFound
 	switch {
 	case errors.As(err, &notFound):
@@ -329,23 +315,6 @@ func (r *Reconciler) probe(ctx context.Context, session string) (domain.SessionS
 		WorkflowExecutionTimeout: 2 * probeTimeout,
 		WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 	}, domain.WorkflowProbeSessionPod, session)
-	if err != nil {
-		return state, err
-	}
-	err = run.Get(ctx, &state)
-	return state, err
-}
-
-func (r *Reconciler) probeGroup(ctx context.Context, group, session string) (domain.SessionState, error) {
-	var state domain.SessionState
-	ctx, cancel := context.WithTimeout(ctx, 2*probeTimeout)
-	defer cancel()
-	run, err := r.temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       "p7.probe/" + session,
-		TaskQueue:                domain.KubernetesQueue,
-		WorkflowExecutionTimeout: 2 * probeTimeout,
-		WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
-	}, domain.WorkflowProbeGroupSession, ProbeGroupRequest{Group: group, Session: session})
 	if err != nil {
 		return state, err
 	}

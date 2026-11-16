@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -179,33 +180,42 @@ type root struct {
 
 // sessionCommand is the worker inside a session's pod. It is the host
 // session manager, polling the queue of its one session, or the queue of its
-// group in a pod that the sessions of a group share.
+// slot in a pool, which many sessions share.
 type sessionCommand struct {
 	Worker    workerCommand `embed:""`
-	SessionID string        `name:"session" env:"P7_SESSION" help:"The session this pod serves. The kubernetes backend sets it in a pod of one session. Exclusive with --group."`
-	Group     string        `name:"group" env:"P7_GROUP" help:"The group this pod serves, which many sessions share. The kubernetes backend sets it in a group's pod. Each session keeps its snapshot under <snapshot prefix>/groups/<group>/<session>/, and is restored from it when it is first used. Exclusive with --session."`
-	Queue     string        `name:"task-queue" required:"" env:"P7_TASK_QUEUE" help:"The queue of the session or group. The kubernetes backend sets it."`
+	SessionID string        `name:"session" env:"P7_SESSION" help:"The session this pod serves. The kubernetes backend sets it in a pod of one session. Exclusive with --pool."`
+	Pool      string        `name:"pool" env:"P7_POOL" help:"The pool this pod is a worker of, which many sessions share. The kubernetes backend sets it in a pool's pods. Each session keeps its snapshot under <snapshot prefix>/pools/<pool>/<session>/, and is restored from it when it is first used. Exclusive with --session."`
+	WorkerNum string        `name:"worker" env:"P7_WORKER" help:"The slot of this worker in its pool. The kubernetes backend sets it with --pool."`
+	Queue     string        `name:"task-queue" required:"" env:"P7_TASK_QUEUE" help:"The queue of the session or of the worker. The kubernetes backend sets it."`
 }
 
 func (c *sessionCommand) options() (fx.Option, error) {
 	switch {
-	case c.SessionID != "" && c.Group != "":
-		return nil, errors.New("p7 session: name a session or a group, not both")
-	case c.SessionID == "" && c.Group == "":
-		return nil, errors.New("p7 session: name a session (--session) or a group (--group)")
+	case c.SessionID != "" && c.Pool != "":
+		return nil, errors.New("p7 session: name a session or a pool, not both")
+	case c.SessionID == "" && c.Pool == "":
+		return nil, errors.New("p7 session: name a session (--session) or a pool (--pool)")
 	}
 	c.Worker.taskQueue = c.Queue
-	if c.Group != "" {
-		if err := domain.ValidGroup(c.Group); err != nil {
+	if c.Pool != "" {
+		if err := domain.ValidPool(c.Pool); err != nil {
 			return nil, err
 		}
+		slot, err := strconv.Atoi(c.WorkerNum)
+		if err != nil || slot < 1 || slot > domain.MaxPoolWorkers {
+			return nil, fmt.Errorf("p7 session: --worker must be a slot from 1 to %d, not %q", domain.MaxPoolWorkers, c.WorkerNum)
+		}
+		if want := domain.PoolQueue(c.Pool, slot); c.Queue != want {
+			return nil, fmt.Errorf("p7 session: the queue of slot %d of pool %s is %s, not %s", slot, c.Pool, want, c.Queue)
+		}
 		// No session is restored at start: each is restored when it is
-		// first used, from the prefix of the group.
+		// first used, from the prefix of the pool, on whichever worker it
+		// is placed.
 		if c.Worker.Snapshots.Bucket != "" {
-			c.Worker.Snapshots.Prefix = domain.GroupSnapshotPrefix(c.Worker.Snapshots.Prefix, c.Group)
+			c.Worker.Snapshots.Prefix = domain.PoolSnapshotPrefix(c.Worker.Snapshots.Prefix, c.Pool)
 		}
 		if c.Worker.Host == "" {
-			c.Worker.Host = "group-" + c.Group
+			c.Worker.Host = "pool-" + c.Pool + "-" + c.WorkerNum
 		}
 		return c.Worker.options()
 	}
@@ -221,8 +231,8 @@ func (c *sessionCommand) Run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if c.Group != "" {
-		logger = logger.With("group", c.Group)
+	if c.Pool != "" {
+		logger = logger.With("pool", c.Pool, "worker", c.WorkerNum)
 	} else {
 		logger = logger.With("session", c.SessionID)
 	}
