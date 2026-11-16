@@ -23,6 +23,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	commandpb "go.temporal.io/api/command/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/server/common/api"
 	"go.temporal.io/server/common/authorization"
@@ -257,6 +258,115 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 	if _, err := mapper.GetClaims(&authorization.AuthInfo{TLSConnection: &credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: serverSVID.Certificates}}}); err == nil {
 		t.Fatal("accepted unverified peer certificates")
 	}
+}
+
+// A session pod's identity is one element below a prefix, and its grant
+// limits the queues it may poll to the one named after that element.
+func TestTaskQueueGrants(t *testing.T) {
+	apis := `"PollWorkflowTaskQueue","PollActivityTaskQueue","RespondActivityTaskCompleted","RecordActivityTaskHeartbeat","UpdateWorkflowExecution","PollWorkflowExecutionUpdate","SignalWithStartWorkflowExecution"`
+	mapping, err := temporalauth.LoadConfig(strings.NewReader(`{
+		"trust_domain":"test.example",
+		"identities":{
+			"spiffe://test.example/ns/core/sa/temporal":{"system_admin":true},
+			"spiffe://test.example/ns/core/sa/fixed":{"namespace_apis":{"default":[` + apis + `]},"task_queues":["only-this"]}
+		},
+		"prefixes":{
+			"spiffe://test.example/ns/core/sa/":{"namespaces":{"default":["writer","worker"]}},
+			"spiffe://test.example/ns/core/session/":{"namespace_apis":{"default":[` + apis + `]},"task_queues":["p7-session-{id}"]}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapper, err := temporalauth.NewMapper(mapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, key := makeCA(t)
+	bundle := x509bundle.FromX509Authorities(spiffeid.RequireTrustDomainFromString(trustDomain), []*x509.Certificate{ca})
+	serverSVID := makeSVID(t, ca, key, serverIdentity)
+	provider, err := temporalauth.NewTLSProvider(serverSVID, bundle, serverSVID.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontend, err := provider.GetFrontendServerConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer := temporalauth.NewAuthorizer()
+	normal := func(name string) *taskqueuepb.TaskQueue {
+		return &taskqueuepb.TaskQueue{Name: name, Kind: enumspb.TASK_QUEUE_KIND_NORMAL}
+	}
+	sticky := func(name, normalName string) *taskqueuepb.TaskQueue {
+		return &taskqueuepb.TaskQueue{Name: name, NormalName: normalName, Kind: enumspb.TASK_QUEUE_KIND_STICKY}
+	}
+	tests := []struct {
+		name, identity, method string
+		request                any
+		allow                  bool
+	}{
+		{"own activity queue", "core/session/abc", "PollActivityTaskQueue", &workflowservice.PollActivityTaskQueueRequest{TaskQueue: normal("p7-session-abc")}, true},
+		{"own workflow queue", "core/session/abc", "PollWorkflowTaskQueue", &workflowservice.PollWorkflowTaskQueueRequest{TaskQueue: normal("p7-session-abc")}, true},
+		{"own sticky queue", "core/session/abc", "PollWorkflowTaskQueue", &workflowservice.PollWorkflowTaskQueueRequest{TaskQueue: sticky("host:1234", "p7-session-abc")}, true},
+		{"another session's activity queue", "core/session/abc", "PollActivityTaskQueue", &workflowservice.PollActivityTaskQueueRequest{TaskQueue: normal("p7-session-abd")}, false},
+		{"another session's workflow queue", "core/session/abc", "PollWorkflowTaskQueue", &workflowservice.PollWorkflowTaskQueueRequest{TaskQueue: normal("p7-session-xyz")}, false},
+		{"the backend's queue", "core/session/abc", "PollActivityTaskQueue", &workflowservice.PollActivityTaskQueueRequest{TaskQueue: normal("p7-kubernetes")}, false},
+		{"the host queue", "core/session/abc", "PollActivityTaskQueue", &workflowservice.PollActivityTaskQueueRequest{TaskQueue: normal("local-selfdev")}, false},
+		{"sticky queue of another session", "core/session/abc", "PollWorkflowTaskQueue", &workflowservice.PollWorkflowTaskQueueRequest{TaskQueue: sticky("p7-session-abc", "p7-session-xyz")}, false},
+		{"describe another queue", "core/session/abc", "DescribeTaskQueue", &workflowservice.DescribeTaskQueueRequest{TaskQueue: normal("p7-session-xyz")}, false},
+		{"poll without its request", "core/session/abc", "PollActivityTaskQueue", nil, false},
+		{"complete a task", "core/session/abc", "RespondActivityTaskCompleted", &workflowservice.RespondActivityTaskCompletedRequest{}, true},
+		{"heartbeat", "core/session/abc", "RecordActivityTaskHeartbeat", &workflowservice.RecordActivityTaskHeartbeatRequest{}, true},
+		{"update the owner", "core/session/abc", "UpdateWorkflowExecution", &workflowservice.UpdateWorkflowExecutionRequest{}, true},
+		{"file a review", "core/session/abc", "SignalWithStartWorkflowExecution", &workflowservice.SignalWithStartWorkflowExecutionRequest{TaskQueue: normal("selfdev")}, true},
+		{"complete by ID", "core/session/abc", "RespondActivityTaskCompletedById", &workflowservice.RespondActivityTaskCompletedByIdRequest{}, false},
+		{"read history", "core/session/abc", "GetWorkflowExecutionHistory", &workflowservice.GetWorkflowExecutionHistoryRequest{}, false},
+		{"start", "core/session/abc", "StartWorkflowExecution", &workflowservice.StartWorkflowExecutionRequest{TaskQueue: normal("p7-session-abc")}, false},
+		{"signal", "core/session/abc", "SignalWorkflowExecution", &workflowservice.SignalWorkflowExecutionRequest{}, false},
+		{"terminate", "core/session/abc", "TerminateWorkflowExecution", &workflowservice.TerminateWorkflowExecutionRequest{}, false},
+		{"list", "core/session/abc", "ListWorkflowExecutions", &workflowservice.ListWorkflowExecutionsRequest{}, false},
+		{"register a namespace", "core/session/abc", "RegisterNamespace", &workflowservice.RegisterNamespaceRequest{}, false},
+		{"create a schedule", "core/session/abc", "CreateSchedule", &workflowservice.CreateScheduleRequest{}, false},
+		{"fixed queue", "core/sa/fixed", "PollActivityTaskQueue", &workflowservice.PollActivityTaskQueueRequest{TaskQueue: normal("only-this")}, true},
+		{"fixed queue, another", "core/sa/fixed", "PollActivityTaskQueue", &workflowservice.PollActivityTaskQueueRequest{TaskQueue: normal("p7-session-abc")}, false},
+		{"no limit on a writer", "core/sa/selfdev", "PollActivityTaskQueue", &workflowservice.PollActivityTaskQueueRequest{TaskQueue: normal("anything")}, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			svid := makeSVID(t, ca, key, "spiffe://test.example/ns/"+test.identity)
+			claims, err := exchange(t, frontend, temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID), mapper)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := authorizer.Authorize(context.Background(), claims, &authorization.CallTarget{Namespace: "default", APIName: api.WorkflowServicePrefix + test.method, Request: test.request})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (result.Decision == authorization.DecisionAllow) != test.allow {
+				t.Fatalf("%s: got %v, allow=%v", test.method, result.Decision, test.allow)
+			}
+		})
+	}
+	// The identity must be one element below the prefix, or {id} would name
+	// a queue that more than one session could poll.
+	for _, identity := range []string{"spiffe://test.example/ns/core/session/abc/def"} {
+		t.Run("reject "+identity, func(t *testing.T) {
+			svid := makeSVID(t, ca, key, identity)
+			if _, err := exchange(t, frontend, temporalauth.ClientTLSConfig(svid, bundle, serverSVID.ID), mapper); err == nil {
+				t.Fatal("authorized an identity two elements below the prefix")
+			}
+		})
+	}
+	t.Run("a grant cannot name an empty queue", func(t *testing.T) {
+		input := fmt.Sprintf(`{"trust_domain":"test.example","identities":{"%s":{"task_queues":[""]}}}`, serverIdentity)
+		cfg, err := temporalauth.LoadConfig(strings.NewReader(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := temporalauth.NewMapper(cfg); err == nil {
+			t.Fatal("accepted an empty task queue")
+		}
+	})
 }
 
 // exchange crosses a real TLS 1.3 connection, then passes the server's verified

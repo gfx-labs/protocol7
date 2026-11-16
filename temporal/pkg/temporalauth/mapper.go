@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -26,10 +27,27 @@ type Grant struct {
 	SystemAdmin   bool                `json:"system_admin,omitempty"`
 	Namespaces    map[string][]string `json:"namespaces,omitempty"`
 	NamespaceAPIs map[string][]string `json:"namespace_apis,omitempty"`
+	// TaskQueues limits the task queues the identity may poll and describe,
+	// in every namespace it has a grant in. The other grants say which calls
+	// are allowed, and this says which queues those calls may name. In a
+	// prefix grant, {id} stands for the rest of the caller's SPIFFE ID after
+	// the prefix, which must be one path element: a prefix
+	// ".../ns/x/session/" with the queue "p7-session-{id}" lets
+	// ".../ns/x/session/abc" poll "p7-session-abc" and no other queue. Empty
+	// puts no limit on queues.
+	TaskQueues []string `json:"task_queues,omitempty"`
 }
 
 // namespaceAPIs contains fully qualified, namespace-scoped workflow RPC names.
 type namespaceAPIs map[string]map[string]bool
+
+// extension is what a mapped identity carries beyond Temporal's claims.
+type extension struct {
+	apis namespaceAPIs
+	// queues is the template of Grant.TaskQueues until GetClaims has
+	// expanded it for the caller. Nil is no limit.
+	queues []string
+}
 
 type Mapper struct {
 	trustDomain spiffeid.TrustDomain
@@ -123,7 +141,15 @@ func grantClaims(grant Grant) (*authorization.Claims, error) {
 			permissions[namespace][qualified] = true
 		}
 	}
-	claims.Extensions = permissions
+	claims.Extensions = extension{apis: permissions}
+	if len(grant.TaskQueues) > 0 {
+		for _, queue := range grant.TaskQueues {
+			if queue == "" {
+				return nil, fmt.Errorf("task queue names must not be empty")
+			}
+		}
+		claims.Extensions = extension{apis: permissions, queues: slices.Clone(grant.TaskQueues)}
+	}
 	return claims, nil
 }
 
@@ -144,11 +170,13 @@ func (m *Mapper) GetClaims(info *authorization.AuthInfo) (*authorization.Claims,
 	}
 	identity := id.String()
 	grant := m.identities[identity]
+	// rest is what follows the prefix that granted, for {id}.
+	rest := ""
 	if grant == nil {
 		longest := 0
 		for prefix, candidate := range m.prefixes {
 			if strings.HasPrefix(identity, prefix) && len(prefix) > longest {
-				grant, longest = candidate, len(prefix)
+				grant, longest, rest = candidate, len(prefix), identity[len(prefix):]
 			}
 		}
 	}
@@ -161,7 +189,17 @@ func (m *Mapper) GetClaims(info *authorization.AuthInfo) (*authorization.Claims,
 	for namespace, role := range grant.Namespaces {
 		claims.Namespaces[namespace] = role
 	}
-	permissions := grant.Extensions.(namespaceAPIs)
+	granted := grant.Extensions.(extension)
+	var queues []string
+	for _, template := range granted.queues {
+		if strings.Contains(template, "{id}") {
+			if rest == "" || strings.Contains(rest, "/") {
+				return nil, fmt.Errorf("SPIFFE identity %q is not one element below its prefix, which its task queues need", identity)
+			}
+		}
+		queues = append(queues, strings.ReplaceAll(template, "{id}", rest))
+	}
+	permissions := granted.apis
 	cloned := make(namespaceAPIs, len(permissions))
 	for namespace, methods := range permissions {
 		cloned[namespace] = make(map[string]bool, len(methods))
@@ -169,6 +207,6 @@ func (m *Mapper) GetClaims(info *authorization.AuthInfo) (*authorization.Claims,
 			cloned[namespace][method] = allowed
 		}
 	}
-	claims.Extensions = cloned
+	claims.Extensions = extension{apis: cloned, queues: queues}
 	return &claims, nil
 }
