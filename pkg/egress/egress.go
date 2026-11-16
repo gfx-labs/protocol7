@@ -22,7 +22,7 @@
 //
 // The identity is the process's: every request made with the client is made
 // as the workload, so PDP's policy judges the process and not the caller
-// inside it, so use it in a process whose own code is trusted with that
+// inside it. Use it in a process whose own code is trusted with that
 // identity, such as a web server.
 package egress
 
