@@ -34,6 +34,15 @@ import (
 // CONNECT, and terminates the target's TLS with a certificate from its own
 // interception CA, which the client is given as Config.CAFile.
 func TestRequestsGoThroughTheGatewayAsTheWorkload(t *testing.T) {
+	// The environment says to bypass every proxy and names one that is not
+	// there. A transport that took its proxy from the environment would send
+	// the TLS handshake of the target to the gateway as if it were a proxy, or
+	// fail, so every request below depends on this being ignored. Set before
+	// any request: net/http reads the environment once.
+	t.Setenv("NO_PROXY", "*")
+	t.Setenv("no_proxy", "*")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("https_proxy", "http://127.0.0.1:1")
 	trustDomain := spiffeid.RequireTrustDomainFromString("example.org")
 	authority := newAuthority(t, trustDomain)
 	workloadID := spiffeid.RequireFromPath(trustDomain, "/ns/app/sa/navi")
@@ -96,6 +105,20 @@ func TestRequestsGoThroughTheGatewayAsTheWorkload(t *testing.T) {
 		}
 	})
 
+	t.Run("a gateway that offers only TLS 1.2 is refused", func(t *testing.T) {
+		gateway := startGateway(t, authority.issue(t, gatewayID), authority.bundle, interception, tls.VersionTLS12)
+		e, err := egress.NewFromSource(authority.issue(t, workloadID), authority.bundle, egress.Config{Gateway: gateway.address, GatewayID: gatewayID.String(), CAFile: caFile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Client(5 * time.Second).Get("https://api.example.test/"); err == nil {
+			t.Fatal("the client used a gateway that does not offer TLS 1.3")
+		}
+		if got := gateway.connects(); len(got) != 0 {
+			t.Fatalf("a request reached the gateway: %v", got)
+		}
+	})
+
 	t.Run("a gateway with another SPIFFE ID gets no request", func(t *testing.T) {
 		gateway := startGateway(t, authority.issue(t, spiffeid.RequireFromPath(trustDomain, "/other")), authority.bundle, interception)
 		e, err := egress.NewFromSource(authority.issue(t, workloadID), authority.bundle, egress.Config{Gateway: gateway.address, GatewayID: gatewayID.String(), CAFile: caFile})
@@ -108,20 +131,6 @@ func TestRequestsGoThroughTheGatewayAsTheWorkload(t *testing.T) {
 		if got := gateway.connects(); len(got) != 0 {
 			t.Fatalf("a request reached the gateway: %v", got)
 		}
-	})
-
-	t.Run("the environment's proxy setting is not used", func(t *testing.T) {
-		gateway := startGateway(t, authority.issue(t, gatewayID), authority.bundle, interception)
-		t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
-		e, err := egress.NewFromSource(authority.issue(t, workloadID), authority.bundle, egress.Config{Gateway: gateway.address, GatewayID: gatewayID.String(), CAFile: caFile})
-		if err != nil {
-			t.Fatal(err)
-		}
-		response, err := e.Client(10 * time.Second).Get("https://api.example.test/")
-		if err != nil {
-			t.Fatal(err)
-		}
-		response.Body.Close()
 	})
 }
 
@@ -174,7 +183,8 @@ func (g *gateway) version() uint16 {
 	return g.tls
 }
 
-func startGateway(t *testing.T, svid *x509svid.SVID, bundle *x509bundle.Bundle, interception *interceptionCA) *gateway {
+// startGateway serves on TLS 1.3 at most, or at most maxVersion if one is given.
+func startGateway(t *testing.T, svid *x509svid.SVID, bundle *x509bundle.Bundle, interception *interceptionCA, maxVersion ...uint16) *gateway {
 	t.Helper()
 	g := &gateway{}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,6 +224,9 @@ func startGateway(t *testing.T, svid *x509svid.SVID, bundle *x509bundle.Bundle, 
 	})}
 	config := tlsconfig.MTLSServerConfig(svid, bundle, tlsconfig.AuthorizeMemberOf(bundle.TrustDomain()))
 	config.NextProtos = []string{"http/1.1"}
+	if len(maxVersion) > 0 {
+		config.MaxVersion = maxVersion[0]
+	}
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", config)
 	if err != nil {
 		t.Fatal(err)
