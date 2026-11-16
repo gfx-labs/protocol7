@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -257,7 +258,7 @@ func PromptTextFuture(ctx workflow.Context, session *Session, prompt TextPrompt)
 		copied.NonRetryableErrorTypes = append(slices.Clone(copied.NonRetryableErrorTypes), sessionRetry.NonRetryableErrorTypes...)
 		retry = &copied
 	}
-	activityCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+	options := workflow.ActivityOptions{
 		TaskQueue:           session.TaskQueue,
 		StartToCloseTimeout: timeout,
 		// A cancel request reaches a running activity in the answer to a
@@ -267,8 +268,61 @@ func PromptTextFuture(ctx workflow.Context, session *Session, prompt TextPrompt)
 		// A cancelled turn still ends with a result. Wait for it.
 		WaitForCancellation: true,
 		RetryPolicy:         retry,
+	}
+	if session.Pod != "" {
+		return runTurnInPod(ctx, session, request, options)
+	}
+	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, options), domain.ActivityRunTurn, request)
+}
+
+// podLostAfter is how long a turn waits for the worker in its session's pod
+// to take it before the pod is made again. The worker of a pod that exists
+// takes it at once, so a longer wait means that the pod is gone, was deleted
+// and is ending, or is starting, which the new request for it tells apart.
+var podLostAfter = time.Minute
+
+// podRecoveries is how many times a turn makes its pod again before it
+// gives up. With podLostAfter that is about 40 minutes, which covers a pod
+// that ends slowly because its worker is writing a last snapshot (12
+// minutes) and the new pod's image pull and restore.
+const podRecoveries = 40
+
+// runTurnInPod runs a turn on the queue of a session's pod. A pod that is
+// deleted mid-turn, or while the session is idle, leaves nobody to poll
+// the queue, and the activity's retries would wait for ever. So each
+// attempt may wait podLostAfter to be taken. An attempt that is not taken
+// fails with a schedule-to-start timeout, which the retry policy does not
+// retry, and the pod is requested again: that creates it when it is gone,
+// and finds it when it exists. The new pod restores the session's snapshot
+// before its worker polls (see SnapshotStore), and the turn, which has the
+// same ID, runs again in it. A turn the agent ended in any other way is
+// returned as it is.
+func runTurnInPod(ctx workflow.Context, session *Session, request domain.TurnRequest, options workflow.ActivityOptions) workflow.Future {
+	future, settable := workflow.NewFuture(ctx)
+	options.ScheduleToStartTimeout = podLostAfter
+	workflow.Go(ctx, func(ctx workflow.Context) {
+		owner := workflow.GetInfo(ctx).WorkflowExecution.ID
+		for recoveries := 0; ; recoveries++ {
+			var turn domain.TurnResult
+			err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, options), domain.ActivityRunTurn, request).Get(ctx, &turn)
+			if !isScheduleToStartTimeout(err) || ctx.Err() != nil || recoveries == podRecoveries {
+				settable.Set(turn, err)
+				return
+			}
+			podCtx := workflow.WithActivityOptions(ctx, podOptions)
+			var pod domain.PodHandle
+			if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, domain.PodRequest{Session: session.ID, Owner: owner}).Get(ctx, &pod); err != nil {
+				settable.Set(turn, fmt.Errorf("make the pod of session %s again: %w", session.ID, err))
+				return
+			}
+		}
 	})
-	return workflow.ExecuteActivity(activityCtx, domain.ActivityRunTurn, request)
+	return future
+}
+
+func isScheduleToStartTimeout(err error) bool {
+	var timeout *temporal.TimeoutError
+	return errors.As(err, &timeout) && timeout.TimeoutType() == enumspb.TIMEOUT_TYPE_SCHEDULE_TO_START
 }
 
 // PromptText runs one turn and returns it. A turn that the agent ended with

@@ -11,3 +11,11 @@ func NextWaiter(aging time.Duration, now time.Time, waiters []LimitEntry) int {
 	state := limitState{Aging: aging, Waiters: waiters}
 	return state.next(now)
 }
+
+// SetPodLostAfter changes how long a turn waits for its pod's worker, and
+// returns what restores it.
+func SetPodLostAfter(d time.Duration) func() {
+	was := podLostAfter
+	podLostAfter = d
+	return func() { podLostAfter = was }
+}
