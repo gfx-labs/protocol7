@@ -114,7 +114,7 @@ A session's directory can be kept in S3-compatible object storage, so that a ses
 
 ## Session pods that nothing owns
 
-A session pod outlives a workflow that failed, was terminated or lost its `CloseSession`. `p7 pods` therefore reconciles once when it starts and then every `--reconcile-interval` (five minutes by default, `P7_RECONCILE_INTERVAL`).
+A session pod outlives a workflow that failed, was terminated or lost its `CloseSession`. `p7 pods` therefore reconciles once when it starts and then every `--reconcile-interval` (five minutes by default, `P7_RECONCILE_INTERVAL`), on the replica that holds the lease (below).
 
 - It lists the pods with the label `p7.gfx-labs.io/managed=true` in its namespace, and deletes a pod, with a UID precondition, for the first of these reasons that holds. It logs each deletion as `session pod deleted by reconciliation` with the `session`, the `pod` and the `reason`.
   1. `its owner workflow is not running`: the pod's owner annotation names a workflow whose latest run is not running, or that Temporal does not know. A workflow that continued as new is still running.
@@ -123,7 +123,8 @@ A session pod outlives a workflow that failed, was terminated or lost its `Close
 - A check that cannot be made is logged and the pod is left for the next pass: Temporal not answering, a pod that does not answer within 30 seconds, and a pod whose image lacks `p7.SessionState` (a pod keeps the image it was created with). A pod without an owner annotation is not checked for its owner. A pod that is being deleted is skipped.
 - `p7 pods` needs the right to list pods, as well as create and delete them. No deployment runs the backend yet, so no role was changed.
 - Run against a Temporal dev server and a stand-in for the pod API: owners that run, failed, were terminated or never existed, a closed session, a pod not ready past its timeout and one still starting. Not run in a cluster.
-- Two `p7 pods` replicas would both reconcile. That is harmless, since deleting a pod that is gone is not an error, but their probes of one session share a workflow ID, and one of them skips that pod until the next pass.
+- One reconciler runs across the replicas of `p7 pods`. They campaign for a `coordination.k8s.io` Lease named `--lease-name` (`P7_LEASE_NAME`, default `p7-pods-reconciler`) in the pod namespace, and only the holder runs passes. The holder renews it every `--lease-duration`/7.5. It releases it at a clean stop, and another replica leads within one retry period. A holder that dies or is cut off from the API server stops leading after two thirds of `--lease-duration` (`P7_LEASE_DURATION`, default 15s) without a renewal, and another takes over once the record has not changed for a whole duration. Replicas never compare the clocks in the lease. Each logs `session pod reconciler elected` and `session pod reconciler stopped leading` with its `identity`, which is the pod's host name and a random suffix. The service account of `p7 pods` needs get, create and update on `leases` in its namespace, in addition to pods. A Temporal Schedule was not chosen, because the pass needs the pod API and the worker's SPIFFE grant denies schedules. client-go's `leaderelection` was not used, because it adds 34 MB to the binary (`p7` 58.7 MB to 92.4 MB); `lease.go` is the same protocol on the backend's plain HTTP calls.
+- Run: two reconcilers over one fake API server make one pass per interval between them, the other takes over within a retry period of the leader's stop, and takes over after the lease expired when the leader is cut off (`TestTwoReconcilersMakeOnePassPerInterval`). Not run in a cluster, and no deployment runs `p7 pods` yet, so no role grants leases.
 
 ## Session limit
 

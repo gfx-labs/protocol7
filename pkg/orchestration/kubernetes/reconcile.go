@@ -51,6 +51,10 @@ func ProbeSessionPod(ctx workflow.Context, session string) (domain.SessionState,
 
 // Reconciler deletes session pods that nothing owns: a workflow that failed,
 // was terminated or lost its CloseSession leaves its session's pod running.
+//
+// Every `p7 pods` replica has one. Start makes them campaign for a
+// Kubernetes Lease (see lease.go): only the replica that holds it runs the
+// passes, and another takes over when it stops or dies.
 type Reconciler struct {
 	pods     *Pods
 	temporal client.Client
@@ -68,38 +72,26 @@ func NewReconciler(pods *Pods, temporalClient client.Client) *Reconciler {
 	return &Reconciler{pods: pods, temporal: temporalClient, logger: pods.logger, now: time.Now}
 }
 
-// Start reconciles at once and then every Config.ReconcileInterval, until
-// Stop. It returns at once.
+// Start joins the election for the lease and returns at once. While this
+// replica holds the lease it reconciles at once and then every
+// Config.ReconcileInterval. It stops reconciling when it loses the lease or
+// at Stop, and a replica that does not hold the lease does nothing.
 func (r *Reconciler) Start() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cancel != nil {
 		return
 	}
-	interval := r.pods.config.ReconcileInterval
-	if interval <= 0 {
-		interval = defaultReconcileInterval
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel, r.done = cancel, make(chan struct{})
 	go func() {
 		defer close(r.done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			if err := r.Reconcile(ctx); err != nil && ctx.Err() == nil {
-				r.logger.Error("reconcile session pods", "error", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
+		r.pods.newElector().campaign(ctx, r.passes)
 	}()
 }
 
-// Stop ends the reconciliation and waits for a pass in progress.
+// Stop ends the reconciliation, gives the lease back when this replica holds
+// it, and waits for a pass in progress.
 func (r *Reconciler) Stop() {
 	r.mu.Lock()
 	cancel, done := r.cancel, r.done
@@ -108,6 +100,27 @@ func (r *Reconciler) Stop() {
 	if cancel != nil {
 		cancel()
 		<-done
+	}
+}
+
+// passes runs a pass now and then each interval, until ctx ends: the lease is
+// lost or the reconciler stops.
+func (r *Reconciler) passes(ctx context.Context) {
+	interval := r.pods.config.ReconcileInterval
+	if interval <= 0 {
+		interval = defaultReconcileInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		if err := r.Reconcile(ctx); err != nil && ctx.Err() == nil {
+			r.logger.Error("reconcile session pods", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

@@ -207,7 +207,9 @@ type podsCommand struct {
 	Namespace         string        `name:"namespace" required:"" env:"P7_POD_NAMESPACE" help:"Kubernetes namespace that session pods are created in."`
 	Template          string        `name:"template" required:"" env:"P7_POD_TEMPLATE" help:"File holding the session pod template, a pod manifest in JSON. Read for each new pod."`
 	Container         string        `name:"session-container" default:"session" env:"P7_SESSION_CONTAINER" help:"Container in the template that runs p7 session."`
-	ReconcileInterval time.Duration `name:"reconcile-interval" default:"5m" env:"P7_RECONCILE_INTERVAL" help:"How often to delete session pods that nothing owns: those whose session is closed, whose owner workflow is not running, or that are not ready after their open timeout. Also done at start."`
+	ReconcileInterval time.Duration `name:"reconcile-interval" default:"5m" env:"P7_RECONCILE_INTERVAL" help:"How often to delete session pods that nothing owns: those whose session is closed, whose owner workflow is not running, or that are not ready after their open timeout. Also done at start. Only the replica that holds the lease does it."`
+	LeaseName         string        `name:"lease-name" default:"p7-pods-reconciler" env:"P7_LEASE_NAME" help:"Lease, in the pod namespace, that the replicas campaign for. Only the replica that holds it reconciles. It needs get, create and update on leases."`
+	LeaseDuration     time.Duration `name:"lease-duration" default:"15s" env:"P7_LEASE_DURATION" help:"How long after the reconciling replica dies another takes over. A replica that stops cleanly hands over at once."`
 	OpenTimeout       time.Duration `name:"open-timeout" default:"15m" env:"P7_OPEN_TIMEOUT" help:"How long a pod may take to become ready when its request names no open timeout."`
 	// Snapshots, when set, makes deleting a session's pod delete the
 	// session's snapshot. Use the same as the session pods.
@@ -222,6 +224,7 @@ func (c *podsCommand) options() (fx.Option, error) {
 			kubernetes.Config{
 				Namespace: c.Namespace, TemplateFile: c.Template, SessionContainer: c.Container,
 				ReconcileInterval: c.ReconcileInterval, OpenTimeout: c.OpenTimeout,
+				LeaseName: c.LeaseName, LeaseDuration: c.LeaseDuration,
 				Snapshots: c.Snapshots.config(),
 			},
 		),
