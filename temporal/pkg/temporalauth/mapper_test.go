@@ -263,7 +263,9 @@ func TestMTLSNamespaceAuthorization(t *testing.T) {
 // A session pod's identity is one element below a prefix, and its grant
 // limits the queues it may poll to the one named after that element.
 func TestTaskQueueGrants(t *testing.T) {
-	apis := `"PollWorkflowTaskQueue","PollActivityTaskQueue","RespondActivityTaskCompleted","RecordActivityTaskHeartbeat","UpdateWorkflowExecution","PollWorkflowExecutionUpdate","SignalWithStartWorkflowExecution"`
+	// What a session pod's worker calls, as recorded from one (pkg/p7), and
+	// what its turns and the agent's tools add.
+	apis := `"PollWorkflowTaskQueue","PollActivityTaskQueue","RespondActivityTaskCompleted","RespondActivityTaskFailed","RespondActivityTaskCanceled","RecordActivityTaskHeartbeat","ShutdownWorker","RecordWorkerHeartbeat","DescribeNamespace","UpdateWorkflowExecution","PollWorkflowExecutionUpdate","SignalWithStartWorkflowExecution"`
 	mapping, err := temporalauth.LoadConfig(strings.NewReader(`{
 		"trust_domain":"test.example",
 		"identities":{
