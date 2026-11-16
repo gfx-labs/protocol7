@@ -233,9 +233,9 @@ func (p *pool) place(ctx workflow.Context, request domain.PlaceRequest) (domain.
 	if index := slices.IndexFunc(p.Failed, func(w PoolWaiter) bool { return w.Session == request.Session }); index >= 0 {
 		failure := p.Failed[index].Error
 		p.Failed = slices.Delete(p.Failed, index, index+1)
-		return domain.PoolPlacement{}, temporal.NewApplicationError(failure, "PoolWorker")
+		return domain.PoolPlacement{}, temporal.NewNonRetryableApplicationError(failure, "PoolWorker", nil)
 	}
-	return domain.PoolPlacement{}, temporal.NewApplicationError("the session was released while it waited", "Released")
+	return domain.PoolPlacement{}, temporal.NewNonRetryableApplicationError("the session was released while it waited", "Released", nil)
 }
 
 func (p *pool) release(ctx workflow.Context, request domain.ReleaseRequest) error {
@@ -290,7 +290,14 @@ func (p *pool) schedule(ctx workflow.Context) {
 				break
 			}
 			var failure string
-			if slot, failure = p.newWorker(ctx); failure != "" {
+			slot, failure = p.newWorker(ctx)
+			// The activity blocked, and a release or a check may have taken
+			// the waiting session out of the queue meanwhile. The worker
+			// stays, empty, and goes after its idle timeout.
+			if len(p.Waiting) == 0 {
+				break
+			}
+			if failure != "" {
 				// This session cannot be placed. The next one may be.
 				failed := p.Waiting[0]
 				failed.Error = failure

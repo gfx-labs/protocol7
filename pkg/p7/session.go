@@ -188,6 +188,11 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 			// The pool says which worker, and waits for room if it is full.
 			placement, err := placeSession(ctx, *spec.Pool, request.ID, request.Owner)
 			if err != nil {
+				// A placement that failed or was cancelled may still be
+				// waiting in the pool, and would take a place that nothing
+				// uses. Releasing a session that has none does nothing.
+				releaseCtx, _ := workflow.NewDisconnectedContext(ctx)
+				releaseSession(releaseCtx, *spec.Pool, request.ID)
 				return nil, fmt.Errorf("open session %s: place it in pool %s: %w", request.ID, spec.Pool.Name, err)
 			}
 			pod = domain.PodHandle{Name: placement.Pod, TaskQueue: placement.TaskQueue}

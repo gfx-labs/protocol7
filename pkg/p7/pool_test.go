@@ -14,6 +14,7 @@ import (
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -306,5 +307,37 @@ func TestAPoolNeedsTheKubernetesBackendAndASpec(t *testing.T) {
 		if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "open session") {
 			t.Errorf("%s: error %v", name, err)
 		}
+	}
+}
+
+// A placement that fails leaves no place in the pool: the session is released,
+// because the pool may still hold it among those that wait.
+func TestAFailedPlacementReleasesTheSession(t *testing.T) {
+	suite := &testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	var mu sync.Mutex
+	var released []domain.ReleaseRequest
+	env.RegisterActivityWithOptions(func(context.Context, domain.PlaceRequest) (domain.PoolPlacement, error) {
+		return domain.PoolPlacement{}, temporal.NewNonRetryableApplicationError("no worker", "PoolWorker", nil)
+	}, activity.RegisterOptions{Name: domain.ActivityPlaceSession})
+	env.RegisterActivityWithOptions(func(_ context.Context, request domain.ReleaseRequest) error {
+		mu.Lock()
+		defer mu.Unlock()
+		released = append(released, request)
+		return nil
+	}, activity.RegisterOptions{Name: domain.ActivityReleaseSession})
+	env.RegisterActivityWithOptions(func(context.Context, domain.PoolSnapshotsRequest) error { return nil }, activity.RegisterOptions{Name: domain.ActivityDeletePoolSnapshots})
+	pool := testPoolSpec()
+	env.ExecuteWorkflow(func(ctx workflow.Context) error {
+		_, err := p7.OpenSession(ctx, p7.SessionSpec{Placement: p7.Placement{Backend: p7.BackendKubernetes}, Pool: &pool})
+		return err
+	})
+	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "no worker") {
+		t.Fatalf("error %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(released) != 1 || released[0].Pool.Name != testPool {
+		t.Errorf("released %+v, want the one session in the pool", released)
 	}
 }

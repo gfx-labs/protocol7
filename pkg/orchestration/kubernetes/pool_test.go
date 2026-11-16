@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,9 +35,14 @@ type poolAPI struct {
 	mu      sync.Mutex
 	pods    map[string]map[string]any
 	created int
+	// gate, when set, holds the creation of a pod until it is closed.
+	gate atomic.Pointer[chan struct{}]
 }
 
 func (a *poolAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if gate := a.gate.Load(); gate != nil && r.Method == http.MethodPost {
+		<-*gate
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	prefix := "/api/v1/namespaces/p7/pods"
@@ -493,5 +499,45 @@ func TestAPoolSpecIsChecked(t *testing.T) {
 	}
 	if got := rig.api.names(); len(got) != 0 {
 		t.Errorf("pods %v for specs that were refused", got)
+	}
+}
+
+// A session that is released while the pool starts the worker it waits for is
+// no longer waiting when the worker is there: the pool goes on, keeps the
+// worker for its idle timeout, and places the next session on it.
+func TestASessionReleasedWhileAWorkerStartsIsNotPlaced(t *testing.T) {
+	rig := startPoolRig(t)
+	spec := domain.PoolSpec{Name: poolA, MaxWorkers: 1, SessionsPerWorker: 1, IdleTimeout: time.Hour}
+	gate := make(chan struct{})
+	rig.api.gate.Store(&gate)
+	run := rig.place(spec, "a", "")
+	waitFor(t, "the session to wait for its worker", 20*time.Second, func() bool {
+		value, err := rig.temporal.QueryWorkflow(t.Context(), domain.PoolWorkflowID(poolA), "", domain.QueryPoolState)
+		if err != nil {
+			return false
+		}
+		var state domain.PoolState
+		return value.Get(&state) == nil && len(state.Waiting) == 1
+	})
+	rig.release(spec, "a")
+	close(gate)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	var placement domain.PoolPlacement
+	if err := run.Get(ctx, &placement); err == nil {
+		t.Fatalf("the released session was placed: %+v", placement)
+	}
+	// The pool is not stuck: it holds the worker, empty, and places the next.
+	waitFor(t, "the worker", 20*time.Second, func() bool { return rig.podCount(poolA) == 1 })
+	// A workflow task that panics is retried only after seconds.
+	started := time.Now()
+	if placement := rig.placed(spec, "b"); placement.Worker != 1 {
+		t.Errorf("placement %+v", placement)
+	}
+	if took := time.Since(started); took > 4*time.Second {
+		t.Errorf("the pool took %s to place the next session: its workflow task failed", took)
+	}
+	if state := rig.state(poolA); len(state.Waiting) != 0 || len(state.Workers) != 1 || len(state.Workers[0].Sessions) != 1 {
+		t.Errorf("state %+v", state)
 	}
 }
