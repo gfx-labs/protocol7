@@ -35,6 +35,10 @@ type fakeAPI struct {
 	mu      sync.Mutex
 	pods    map[string]map[string]any
 	deleted []string
+	// leases are the coordination.k8s.io leases by name, and version counts
+	// their writes.
+	leases  map[string]map[string]any
+	version int
 }
 
 func (f *fakeAPI) add(name string, labels map[string]string, annotations map[string]string, created time.Time, ready *bool, readySince time.Time) {
@@ -57,7 +61,10 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	prefix := "/api/v1/namespaces/p7/pods"
+	leasePrefix := "/apis/coordination.k8s.io/v1/namespaces/p7/leases"
 	switch {
+	case strings.HasPrefix(r.URL.Path, leasePrefix):
+		f.serveLease(w, r, strings.Trim(strings.TrimPrefix(r.URL.Path, leasePrefix), "/"))
 	case r.Method == http.MethodGet && r.URL.Path == prefix:
 		selector := r.URL.Query().Get("labelSelector")
 		key, value, _ := strings.Cut(selector, "=")
@@ -398,5 +405,218 @@ func TestReconcilerRunsAtStartAndOnEachInterval(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 	if len(api.names()) != 1 {
 		t.Errorf("a pod was deleted after Stop: %v", api.names())
+	}
+}
+
+// serveLease serves get, create and update of a lease the way the API server
+// does: an update that does not carry the current resourceVersion is a 409.
+func (f *fakeAPI) serveLease(w http.ResponseWriter, r *http.Request, name string) {
+	if f.leases == nil {
+		f.leases = map[string]map[string]any{}
+	}
+	fail := func(code int, message string) {
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": message})
+	}
+	write := func(lease map[string]any) {
+		_ = json.NewEncoder(w).Encode(lease)
+	}
+	store := func(lease map[string]any) {
+		f.version++
+		lease["metadata"].(map[string]any)["resourceVersion"] = fmt.Sprint(f.version)
+		f.leases[lease["metadata"].(map[string]any)["name"].(string)] = lease
+	}
+	var lease map[string]any
+	if r.Method == http.MethodPost || r.Method == http.MethodPut {
+		if err := json.NewDecoder(r.Body).Decode(&lease); err != nil {
+			fail(http.StatusBadRequest, err.Error())
+			return
+		}
+		// The API server refuses a time that is not a MicroTime.
+		spec, _ := lease["spec"].(map[string]any)
+		for _, field := range []string{"acquireTime", "renewTime"} {
+			if value, ok := spec[field].(string); ok {
+				if _, err := time.Parse("2006-01-02T15:04:05.000000Z07:00", value); err != nil || len(value) != 27 {
+					fail(http.StatusUnprocessableEntity, field+" is not a MicroTime: "+value)
+					return
+				}
+			}
+		}
+	}
+	existing, found := f.leases[name]
+	switch {
+	case r.Method == http.MethodGet && name != "":
+		if !found {
+			fail(http.StatusNotFound, "not found")
+			return
+		}
+		write(existing)
+	case r.Method == http.MethodPost && name == "":
+		metadata, _ := lease["metadata"].(map[string]any)
+		created, _ := metadata["name"].(string)
+		if _, exists := f.leases[created]; exists {
+			fail(http.StatusConflict, "exists")
+			return
+		}
+		store(lease)
+		write(lease)
+	case r.Method == http.MethodPut && found:
+		sent, _ := lease["metadata"].(map[string]any)["resourceVersion"].(string)
+		if sent != existing["metadata"].(map[string]any)["resourceVersion"] {
+			fail(http.StatusConflict, "the object has been modified")
+			return
+		}
+		store(lease)
+		write(lease)
+	default:
+		fail(http.StatusNotImplemented, "unexpected "+r.Method+" "+r.URL.Path)
+	}
+}
+
+// holder is the identity that holds the lease, or "".
+func (f *fakeAPI) holder(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	spec, _ := f.leases[name]["spec"].(map[string]any)
+	holder, _ := spec["holderIdentity"].(string)
+	return holder
+}
+
+// replica is one `p7 pods` replica: its own view of the API server, which
+// counts the pod lists it makes and can be cut off from the API server.
+type replica struct {
+	pods       *kubernetes.Pods
+	reconciler *kubernetes.Reconciler
+	logs       *logLines
+	mu         sync.Mutex
+	lists      []time.Time
+	cut        bool
+}
+
+func (r *replica) listed() []time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]time.Time(nil), r.lists...)
+}
+
+func (r *replica) partition() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cut = true
+}
+
+func newReplica(t *testing.T, api *fakeAPI, identity string, interval, lease time.Duration) *replica {
+	t.Helper()
+	dir := t.TempDir()
+	token, template := filepath.Join(dir, "token"), filepath.Join(dir, "pod.json")
+	for file, content := range map[string]string{token: "tok", template: "{}"} {
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &replica{logs: &logLines{}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		cut := r.cut
+		if !cut && req.Method == http.MethodGet && req.URL.Path == "/api/v1/namespaces/p7/pods" {
+			r.lists = append(r.lists, time.Now())
+		}
+		r.mu.Unlock()
+		if cut {
+			http.Error(w, "unreachable", http.StatusServiceUnavailable)
+			return
+		}
+		api.ServeHTTP(w, req)
+	}))
+	t.Cleanup(server.Close)
+	var err error
+	r.pods, err = kubernetes.New(kubernetes.Config{
+		Namespace: "p7", TemplateFile: template, SessionContainer: "session", APIServer: server.URL, TokenFile: token,
+		ReconcileInterval: interval, LeaseDuration: lease, Identity: identity,
+	}, slog.New(slog.NewTextHandler(r.logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With no pods, a pass makes no call to Temporal.
+	r.reconciler = kubernetes.NewReconciler(r.pods, nil)
+	t.Cleanup(r.reconciler.Stop)
+	return r
+}
+
+func waitFor(t *testing.T, what string, within time.Duration, condition func() bool) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for time.Now().Before(start.Add(within)) {
+		if condition() {
+			return time.Since(start)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("after %v: %s", within, what)
+	return 0
+}
+
+// Two reconcilers over one API server make one pass per interval between
+// them, and the other takes over when the leader stops, whether it releases
+// the lease or is cut off from the API server and cannot.
+func TestTwoReconcilersMakeOnePassPerInterval(t *testing.T) {
+	const interval, lease = 100 * time.Millisecond, time.Second
+	api := &fakeAPI{pods: map[string]map[string]any{}}
+	a := newReplica(t, api, "replica-a", interval, lease)
+	b := newReplica(t, api, "replica-b", interval, lease)
+	replicas := map[string]*replica{"replica-a": a, "replica-b": b}
+	a.reconciler.Start()
+	b.reconciler.Start()
+
+	// One leads and makes the passes. The other makes none.
+	waitFor(t, "no replica holds the lease", 5*time.Second, func() bool { return api.holder("p7-pods-reconciler") != "" })
+	window := 1500 * time.Millisecond
+	time.Sleep(window)
+	leader := replicas[api.holder("p7-pods-reconciler")]
+	follower := a
+	if leader == a {
+		follower = b
+	}
+	if got := len(follower.listed()); got != 0 {
+		t.Errorf("the replica that does not hold the lease listed pods %d times", got)
+	}
+	// A pass at once and one for each interval: about window/interval.
+	if got, most := len(leader.listed()), int(window/interval)+3; got < 5 || got > most {
+		t.Errorf("the leader made %d passes in %v at an interval of %v, want 5 to %d", got, window, interval, most)
+	}
+	if strings.Count(a.logs.String()+b.logs.String(), "session pod reconciler elected") != 1 {
+		t.Errorf("want one election:\na: %s\nb: %s", a.logs.String(), b.logs.String())
+	}
+
+	// The leader stops, which releases the lease, and the other takes over
+	// within a retry period, long before the lease would expire.
+	leader.reconciler.Stop()
+	stopped, before := len(leader.listed()), len(follower.listed())
+	took := waitFor(t, "the other did not take over", lease, func() bool { return len(follower.listed()) > before })
+	t.Logf("took over %v after the leader stopped", took)
+	if holder := api.holder("p7-pods-reconciler"); holder != map[*replica]string{a: "replica-a", b: "replica-b"}[follower] {
+		t.Errorf("the lease is held by %q, want the other replica", holder)
+	}
+	if got := len(leader.listed()); got != stopped {
+		t.Errorf("the stopped replica went on listing: %d lists, %d at its stop", got, stopped)
+	}
+
+	// A leader that cannot reach the API server cannot release the lease.
+	// It stops leading by itself, and the other takes over once the lease
+	// has expired.
+	follower.partition()
+	leader.reconciler.Start()
+	waited := waitFor(t, "the restarted replica did not take over", 4*lease, func() bool { return len(leader.listed()) > stopped })
+	if waited < lease/2 {
+		t.Errorf("took the lease after %v, before it could have expired (%v)", waited, lease)
+	}
+	if !strings.Contains(follower.logs.String(), "stopped leading") {
+		t.Errorf("the cut off leader did not stop leading:\n%s", follower.logs.String())
+	}
+	// It will not make another pass.
+	count := len(follower.listed())
+	time.Sleep(3 * interval)
+	if len(follower.listed()) != count {
+		t.Errorf("the cut off replica went on listing")
 	}
 }

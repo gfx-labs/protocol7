@@ -79,6 +79,17 @@ type Config struct {
 	// OpenTimeout is the time a pod may take to become ready when its
 	// request named none. Zero is fifteen minutes.
 	OpenTimeout time.Duration
+	// LeaseName is the Lease, in Namespace, that the replicas of `p7 pods`
+	// campaign for: the holder reconciles and the others wait. Empty is
+	// p7-pods-reconciler.
+	LeaseName string
+	// LeaseDuration is how long a replica that died keeps the lease before
+	// another takes over. The holder renews it about every LeaseDuration/7.5,
+	// and one that stops cleanly releases it. Zero is fifteen seconds.
+	LeaseDuration time.Duration
+	// Identity names this replica in the lease. Empty is the host name and a
+	// random suffix.
+	Identity string
 }
 
 const (
@@ -91,6 +102,7 @@ type Pods struct {
 	http      *http.Client
 	logger    *slog.Logger
 	snapshots *snapshot.Store
+	identity  string
 }
 
 // New returns the backend. It reads the CA file now and the token on each
@@ -130,7 +142,10 @@ func New(config Config, logger *slog.Logger) (*Pods, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	pods := &Pods{config: config, http: &http.Client{Transport: transport, Timeout: 30 * time.Second}, logger: logger}
+	pods := &Pods{config: config, http: &http.Client{Transport: transport, Timeout: 30 * time.Second}, logger: logger, identity: config.Identity}
+	if pods.identity == "" {
+		pods.identity = newIdentity()
+	}
 	if err := config.Snapshots.Validate(); err != nil {
 		return nil, fmt.Errorf("kubernetes backend: %w", err)
 	}
