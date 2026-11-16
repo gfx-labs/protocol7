@@ -1,4 +1,6 @@
-// Package kubernetes is the kubernetes backend: one pod per session. Its
+// Package kubernetes is the kubernetes backend: one pod per session, or one
+// pod for a group of sessions that a deployment says may share one (see
+// group.go). Its
 // worker polls the queue p7-kubernetes and only creates and deletes pods. The
 // session's activities then run in the session's pod, where `p7
 // session` runs the host session manager for that one session on its own
@@ -38,6 +40,16 @@ const (
 	// LabelSession holds the session ID. A ClusterSPIFFEID can render the
 	// pod's identity from it, and only this worker sets it.
 	LabelSession = "p7.gfx-labs.io/session"
+	// LabelGroup holds the group key of a group's pod. It carries no
+	// LabelSession: the pod's identity is the group's. Only this worker sets
+	// it.
+	LabelGroup = "p7.gfx-labs.io/group"
+	// AnnotationMemberPrefix starts the name of each annotation that makes
+	// a session a member of a group's pod: <prefix><session>, with the ID of
+	// the workflow that owns the session as its value. A merge patch sets or
+	// removes one member without touching the others, and the pod's
+	// resourceVersion makes a join race with the last member's leave.
+	AnnotationMemberPrefix = "p7.gfx-labs.io/member-"
 	// LabelManaged marks a pod this backend created.
 	LabelManaged = "p7.gfx-labs.io/managed"
 	// AnnotationOwner holds the ID of the workflow that opened the session.
@@ -47,7 +59,9 @@ const (
 	AnnotationOpenTimeout = "p7.gfx-labs.io/open-timeout"
 	// EnvSession and EnvTaskQueue tell `p7 session` which session it
 	// serves and which queue it polls.
-	EnvSession   = "P7_SESSION"
+	EnvSession = "P7_SESSION"
+	// EnvGroup replaces EnvSession in a group's pod: the group it serves.
+	EnvGroup     = "P7_GROUP"
 	EnvTaskQueue = "P7_TASK_QUEUE"
 )
 
@@ -172,6 +186,7 @@ func NewWorker(temporalClient client.Client, pods *Pods) worker.Worker {
 	w := worker.New(temporalClient, domain.KubernetesQueue, worker.Options{})
 	pods.Register(w)
 	w.RegisterWorkflowWithOptions(ProbeSessionPod, workflow.RegisterOptions{Name: domain.WorkflowProbeSessionPod})
+	w.RegisterWorkflowWithOptions(ProbeGroupSession, workflow.RegisterOptions{Name: domain.WorkflowProbeGroupSession})
 	return w
 }
 
@@ -179,6 +194,9 @@ func NewWorker(temporalClient client.Client, pods *Pods) worker.Worker {
 // API server accepted it. The session's worker polls the returned queue once
 // the pod runs.
 func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.PodHandle, error) {
+	if request.Group != "" {
+		return p.startGroup(ctx, request)
+	}
 	handle := domain.PodHandle{Name: PodName(request.Session), TaskQueue: domain.SessionQueue(request.Session)}
 	pod, err := p.render(request, handle)
 	if err != nil {
@@ -204,6 +222,9 @@ func (p *Pods) Start(ctx context.Context, request domain.PodRequest) (domain.Pod
 // session that was not closed first would otherwise come back. It
 // heartbeats while it waits, and the workflow allows it 20 minutes.
 func (p *Pods) Delete(ctx context.Context, request domain.PodRequest) error {
+	if request.Group != "" {
+		return p.leaveGroup(ctx, request)
+	}
 	err := p.deletePod(ctx, PodName(request.Session), "")
 	if err != nil {
 		return err
@@ -232,13 +253,22 @@ func (p *Pods) deleteSnapshotWhenGone(ctx context.Context, session string) error
 	if p.snapshots == nil {
 		return nil
 	}
-	path := p.podsPath() + "/" + PodName(session)
+	if err := p.waitGone(ctx, PodName(session)); err != nil {
+		return err
+	}
+	return p.snapshots.Delete(ctx, session)
+}
+
+// waitGone waits until a read of the pod finds nothing, and heartbeats
+// while it does.
+func (p *Pods) waitGone(ctx context.Context, name string) error {
+	path := p.podsPath() + "/" + name
 	var err error
 	for err == nil {
 		// The pod is still there until a read finds nothing.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("wait for the pod %s to end: %w", PodName(session), ctx.Err())
+			return fmt.Errorf("wait for the pod %s to end: %w", name, ctx.Err())
 		case <-time.After(podPoll):
 		}
 		if activity.IsActivity(ctx) {
@@ -249,7 +279,7 @@ func (p *Pods) deleteSnapshotWhenGone(ctx context.Context, session string) error
 	if !isStatus(err, http.StatusNotFound) {
 		return err
 	}
-	return p.snapshots.Delete(ctx, session)
+	return nil
 }
 
 // podPoll is how often Delete looks for a pod that is ending.
@@ -259,6 +289,7 @@ func (p *Pods) podsPath() string { return "/api/v1/namespaces/" + p.config.Names
 
 // render makes a session's pod from the template.
 func (p *Pods) render(request domain.PodRequest, handle domain.PodHandle) (map[string]any, error) {
+	group := request.Group != ""
 	raw, err := os.ReadFile(p.config.TemplateFile)
 	if err != nil {
 		return nil, fmt.Errorf("read the session pod template: %w", err)
@@ -276,10 +307,22 @@ func (p *Pods) render(request domain.PodRequest, handle domain.PodHandle) (map[s
 	metadata["name"] = handle.Name
 	metadata["namespace"] = p.config.Namespace
 	labels := object(metadata, "labels")
-	labels[LabelSession] = request.Session
 	labels[LabelManaged] = "true"
-	if request.Owner != "" {
-		object(metadata, "annotations")[AnnotationOwner] = request.Owner
+	if group {
+		// The pod has the identity of the group, which its label renders.
+		delete(labels, LabelSession)
+		labels[LabelGroup] = request.Group
+		key, err := memberAnnotation(request.Session)
+		if err != nil {
+			return nil, err
+		}
+		object(metadata, "annotations")[key] = request.Owner
+	} else {
+		delete(labels, LabelGroup)
+		labels[LabelSession] = request.Session
+		if request.Owner != "" {
+			object(metadata, "annotations")[AnnotationOwner] = request.Owner
+		}
 	}
 	if request.OpenTimeout > 0 {
 		object(metadata, "annotations")[AnnotationOpenTimeout] = request.OpenTimeout.String()
@@ -295,15 +338,16 @@ func (p *Pods) render(request domain.PodRequest, handle domain.PodHandle) (map[s
 		env, _ := container["env"].([]any)
 		var kept []any
 		for _, variable := range env {
-			if named, ok := variable.(map[string]any); ok && (named["name"] == EnvSession || named["name"] == EnvTaskQueue) {
+			if named, ok := variable.(map[string]any); ok && (named["name"] == EnvSession || named["name"] == EnvGroup || named["name"] == EnvTaskQueue) {
 				continue
 			}
 			kept = append(kept, variable)
 		}
-		container["env"] = append(kept,
-			map[string]any{"name": EnvSession, "value": request.Session},
-			map[string]any{"name": EnvTaskQueue, "value": handle.TaskQueue},
-		)
+		who := map[string]any{"name": EnvSession, "value": request.Session}
+		if group {
+			who = map[string]any{"name": EnvGroup, "value": request.Group}
+		}
+		container["env"] = append(kept, who, map[string]any{"name": EnvTaskQueue, "value": handle.TaskQueue})
 		return pod, nil
 	}
 	return nil, fmt.Errorf("the session pod template has no container named %q", p.config.SessionContainer)
@@ -334,6 +378,11 @@ func isStatus(err error, code int) bool {
 }
 
 func (p *Pods) do(ctx context.Context, method, path string, body, result any) error {
+	return p.doAs(ctx, method, path, "application/json", body, result)
+}
+
+// doAs is do with the content type of the body, which a merge patch sets.
+func (p *Pods) doAs(ctx context.Context, method, path, contentType string, body, result any) error {
 	token, err := os.ReadFile(p.config.TokenFile)
 	if err != nil {
 		return fmt.Errorf("read the service account token: %w", err)
@@ -353,7 +402,7 @@ func (p *Pods) do(ctx context.Context, method, path string, body, result any) er
 	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	request.Header.Set("Accept", "application/json")
 	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Content-Type", contentType)
 	}
 	response, err := p.http.Do(request)
 	if err != nil {

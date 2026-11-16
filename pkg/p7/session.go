@@ -52,6 +52,16 @@ type SessionSpec struct {
 	// HandlePermissions and this same function. An error from it, and a
 	// request that cannot reach the workflow, deny the request.
 	Permissions func(ctx workflow.Context, request PermissionRequest) (PermissionDecision, error)
+	// Group, on the kubernetes backend, puts the session in the pod that
+	// the sessions of this group share, and makes that pod if none exists.
+	// Empty gives the session a pod of its own. See domain.ValidGroup for
+	// what a key may hold.
+	//
+	// Sessions of one group see each other's files, processes and queue, and
+	// run with one identity. The caller derives the key from everything that
+	// decides what a session may do, so that only sessions with identical
+	// permissions share it.
+	Group string
 }
 
 // ErrorHarnessStopped is the type of the application error that opening or
@@ -75,6 +85,8 @@ type Session struct {
 	// Pod is the session's pod on the kubernetes backend, which Close
 	// deletes. Empty on the host backend.
 	Pod string `json:"pod,omitempty"`
+	// Group is the group whose pod it is, if the pod is shared.
+	Group string `json:"group,omitempty"`
 }
 
 var sessionRetry = &temporal.RetryPolicy{
@@ -93,6 +105,14 @@ func OpenSession(ctx workflow.Context, spec SessionSpec) (*Session, error) {
 	taskQueue, err := spec.Placement.TaskQueue()
 	if err != nil {
 		return nil, fmt.Errorf("open session: %w", err)
+	}
+	if spec.Group != "" {
+		if spec.Placement.Backend != domain.BackendKubernetes {
+			return nil, errors.New("open session: a group needs the kubernetes backend")
+		}
+		if err := domain.ValidGroup(spec.Group); err != nil {
+			return nil, fmt.Errorf("open session: %w", err)
+		}
 	}
 	if spec.Limit == "" {
 		return openSession(ctx, spec, taskQueue)
@@ -163,7 +183,10 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 		// inside it, on the pod's own queue. The open waits on that queue
 		// while the pod is scheduled and its image is pulled.
 		podCtx := workflow.WithActivityOptions(ctx, podOptions)
-		podRequest := domain.PodRequest{Session: request.ID, Owner: request.Owner, OpenTimeout: timeout}
+		podRequest := domain.PodRequest{Session: request.ID, Group: spec.Group, Owner: request.Owner, OpenTimeout: timeout}
+		if spec.Group != "" {
+			podCtx = workflow.WithActivityOptions(ctx, groupStartOptions)
+		}
 		if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, podRequest).Get(ctx, &pod); err != nil {
 			return nil, fmt.Errorf("open session %s: start its pod: %w", request.ID, err)
 		}
@@ -180,11 +203,11 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 			// A session that could not open leaves no pod behind.
 			deleteCtx, _ := workflow.NewDisconnectedContext(ctx)
 			deleteCtx = workflow.WithActivityOptions(deleteCtx, podDeleteOptions)
-			_ = workflow.ExecuteActivity(deleteCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: request.ID}).Get(deleteCtx, nil)
+			_ = workflow.ExecuteActivity(deleteCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: request.ID, Group: spec.Group}).Get(deleteCtx, nil)
 		}
 		return nil, fmt.Errorf("open session %s: %w", request.ID, err)
 	}
-	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil, Pod: pod.Name}, nil
+	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil, Pod: pod.Name, Group: spec.Group}, nil
 }
 
 // podOptions are those of the activities that create and delete session
@@ -193,6 +216,16 @@ var podOptions = workflow.ActivityOptions{
 	TaskQueue:           domain.KubernetesQueue,
 	StartToCloseTimeout: time.Minute,
 	RetryPolicy:         &temporal.RetryPolicy{InitialInterval: 2 * time.Second, BackoffCoefficient: 2, MaximumInterval: 30 * time.Second, MaximumAttempts: 10},
+}
+
+// groupStartOptions are those of the activity that starts a session in a
+// group's pod. It waits while an earlier pod of the group ends, which can take
+// minutes when its worker writes a last snapshot, and heartbeats while it does.
+var groupStartOptions = workflow.ActivityOptions{
+	TaskQueue:           domain.KubernetesQueue,
+	StartToCloseTimeout: 20 * time.Minute,
+	HeartbeatTimeout:    30 * time.Second,
+	RetryPolicy:         podOptions.RetryPolicy,
 }
 
 // podDeleteOptions are those of the activity that deletes a session pod.
@@ -310,8 +343,11 @@ func runTurnInPod(ctx workflow.Context, session *Session, request domain.TurnReq
 				return
 			}
 			podCtx := workflow.WithActivityOptions(ctx, podOptions)
+			if session.Group != "" {
+				podCtx = workflow.WithActivityOptions(ctx, groupStartOptions)
+			}
 			var pod domain.PodHandle
-			if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, domain.PodRequest{Session: session.ID, Owner: owner}).Get(ctx, &pod); err != nil {
+			if err := workflow.ExecuteActivity(podCtx, domain.ActivityStartSessionPod, domain.PodRequest{Session: session.ID, Group: session.Group, Owner: owner}).Get(ctx, &pod); err != nil {
 				settable.Set(turn, fmt.Errorf("make the pod of session %s again: %w", session.ID, err))
 				return
 			}
@@ -365,7 +401,7 @@ func (s *Session) Close(ctx workflow.Context) error {
 		return nil
 	}
 	podCtx := workflow.WithActivityOptions(ctx, podDeleteOptions)
-	if err := workflow.ExecuteActivity(podCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: s.ID}).Get(ctx, nil); err != nil {
+	if err := workflow.ExecuteActivity(podCtx, domain.ActivityDeleteSessionPod, domain.PodRequest{Session: s.ID, Group: s.Group}).Get(ctx, nil); err != nil {
 		return fmt.Errorf("close session %s: delete its pod: %w", s.ID, err)
 	}
 	if s.Lease != nil {

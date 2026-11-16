@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,10 @@ const (
 // which is not a workflow itself and so cannot run an activity.
 const WorkflowProbeSessionPod = "p7.ProbeSessionPod"
 
+// WorkflowProbeGroupSession is WorkflowProbeSessionPod for a session in a
+// group's pod. Its input has the group and the session.
+const WorkflowProbeGroupSession = "p7.ProbeGroupSession"
+
 // BackendHost runs a session as a process on a named machine.
 const BackendHost = "host"
 
@@ -39,6 +44,36 @@ const KubernetesQueue = "p7-kubernetes"
 
 // SessionQueue is the queue of the worker in a session's pod.
 func SessionQueue(session string) string { return "p7-session-" + session }
+
+// GroupQueue is the queue of the worker in a group's pod. Every session of the
+// group runs its activities on it.
+func GroupQueue(group string) string { return "p7-group-" + group }
+
+// GroupPodName is the name of a group's pod.
+func GroupPodName(group string) string { return "p7-group-" + group }
+
+// ValidGroup checks a group key: 8 to 40 lower case letters and digits, such
+// as the start of a hash. It becomes part of a pod name, a queue name, a
+// SPIFFE ID and an object path, so nothing else is allowed in it.
+func ValidGroup(group string) error {
+	if len(group) < 8 || len(group) > 40 {
+		return fmt.Errorf("group %q: the key must be 8 to 40 characters", group)
+	}
+	for _, c := range group {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return fmt.Errorf("group %q: the key may hold only a-z and 0-9", group)
+		}
+	}
+	return nil
+}
+
+// GroupSnapshotPrefix is the prefix under which a group's sessions keep their
+// snapshots: <prefix>/groups/<group>/<session>/workspace.tar.zst. The group's
+// identity may touch that prefix and no other, so a group cannot read the
+// snapshots of another.
+func GroupSnapshotPrefix(prefix, group string) string {
+	return strings.Trim(strings.Trim(prefix, "/")+"/groups/"+group, "/")
+}
 
 // Placement says where a session or step runs.
 type Placement struct {
@@ -120,6 +155,12 @@ type SessionHandle struct {
 // ActivityDeleteSessionPod.
 type PodRequest struct {
 	Session string `json:"session"`
+	// Group, if set, puts the session in the pod of that group, which a
+	// session of the same group already made or which is made for this one,
+	// and not in a pod of its own. Starting adds the session to the pod's
+	// members and deleting removes it: the pod is deleted with its last
+	// member.
+	Group string `json:"group,omitempty"`
 	// Owner is the ID of the workflow that opened the session. It is kept on
 	// the pod, so that a pod nobody owns can be found.
 	Owner string `json:"owner,omitempty"`
