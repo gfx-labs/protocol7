@@ -27,7 +27,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig"
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 
-	"github.com/gfx-labs/protocol7/pkg/egress"
+	"github.com/gfx-labs/protocol7/pkg/transport/egress"
 )
 
 // The gateway here is a stand-in for PDP: it requires a client SVID, answers
