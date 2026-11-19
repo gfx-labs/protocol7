@@ -12,9 +12,18 @@ navi's HTTP API gets one schema that the server, the web UI and other clients ar
 - The Connect protocol is plain HTTP. Unary calls are `POST /<package>.<Service>/<Method>` with a JSON or binary body, so curl, the tailnet ingress and navi's `Tailscale-User-Login` identity keep working unchanged.
 - v2 specifics that matter here: handlers and clients take plain messages (no `connect.Request` wrapper), services register on a `connect.Server` mounted with `connecthttp.Mount`, interceptors are `connect.ServerInterceptor` functions that apply to every service on a server, and `connectinprocess` runs a client against a server with no listener, which is how the handler tests run.
 
+## Temporal payloads
+
+The same protobuf messages are the Temporal contract. Workflow inputs and results, signals, queries, updates and activity inputs and results between navi and app workers are `navi.v1` messages, not hand-written Go structs. The Go SDK's default data converter already encodes proto messages, so this uses Temporal's own mechanism and adds no converter.
+
+- `pkg/domain/navi` keeps the names (workflow types, task queue, signal, query and update names, search attributes, memo keys) and helpers as functions over the generated types. Its Go structs are replaced by aliases to `naviv1` messages, then removed.
+- The ChatService messages and the chat workflow's state are the same message, so the API and the workflow cannot drift apart.
+- `buf breaking` guards the Temporal contract as well as the API.
+- No migration. No workflow history has to be carried over: when the switch lands, running executions are terminated and start again from navi. This was decided on 2026-11-19, when nothing important was running.
+- App flows that stay in their own repo (oku-review's reviewers and releases, protocol7-selfdev's issue and review flows) define their own protobuf packages in their repo the same way, for example `okureview.release.v1`, generated with the same buf setup.
+
 ## What it does not cover
 
-- **The Temporal contract** in `pkg/domain/navi` (workflow, signal, query and update payloads between navi and tenant workers). Changing those payloads to protobuf changes their encoding in workflow history, so running chat, issue and release workflows would fail replay. They stay Go structs with JSON encoding and replay tests.
 - **A2A and MCP.** Fixed external protocols, served with a2a-go and the MCP SDK.
 - **The GitHub and Linear webhooks.** Their payloads are defined upstream.
 - **Byte streams and pages**: artifacts, blobs, the board preview (`/chats/{id}/preview/...`) and static files stay plain HTTP handlers on the same mux.
