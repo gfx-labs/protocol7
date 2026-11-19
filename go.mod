@@ -3,8 +3,10 @@ module github.com/gfx-labs/protocol7
 go 1.27.3
 
 require (
+	connectrpc.com/connect/v2 v2.0.2
 	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/alecthomas/kong v1.17.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gfx-labs/acphost v0.27.0
 	github.com/gfx-labs/go-acp v0.1.1
 	github.com/google/jsonschema-go v0.4.3
@@ -20,6 +22,7 @@ require (
 	go.uber.org/fx v1.24.0
 	go.yaml.in/yaml/v3 v3.0.5
 	google.golang.org/grpc v1.83.2
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -28,7 +31,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
-	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/godbus/dbus/v5 v5.2.4 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
@@ -74,6 +76,10 @@ require (
 	golang.org/x/tools v0.51.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
+)
+
+tool (
+	connectrpc.com/connect/v2/cmd/protoc-gen-connect-go
+	google.golang.org/protobuf/cmd/protoc-gen-go
 )
