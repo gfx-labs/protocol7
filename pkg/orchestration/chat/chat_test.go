@@ -199,7 +199,8 @@ func TestATurnAndAToolTheAppAdds(t *testing.T) {
 		if state := queryState(t, env); state.LastLearning != "chat" || state.Turns != 2 {
 			t.Errorf("state: last learning %q, turns %d, want the tool's record and 2", state.LastLearning, state.Turns)
 		}
-		env.SignalWorkflow(chat.SignalClose, &chat.Action{})
+		// A close with no payload ends the chat too.
+		env.SignalWorkflow(chat.SignalClose, nil)
 	}, 3*time.Minute)
 	env.ExecuteWorkflow(chat.WorkflowName, newChat("first"))
 
