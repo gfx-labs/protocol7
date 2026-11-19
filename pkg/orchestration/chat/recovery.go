@@ -33,7 +33,7 @@ type turnOutcome struct {
 // waits on a workflow timer and starts a new turn that says what happened,
 // up to len(resumeDelays) times. A turn that ctx's cancellation ended, which
 // is what a person's stop and a close do, is never resumed.
-func runTurn(ctx workflow.Context, state *State, message Message, prompt p7.TextPrompt) (turnOutcome, error) {
+func runTurn(ctx workflow.Context, state *State, message *Message, prompt p7.TextPrompt) (turnOutcome, error) {
 	resume := workflow.GetVersion(ctx, versionTurnResume, workflow.DefaultVersion, 1) >= 1
 	state.Resumes = 0
 	original := prompt
@@ -42,7 +42,7 @@ func runTurn(ctx workflow.Context, state *State, message Message, prompt p7.Text
 		if err != nil || turn.StopReason != p7.StopInterrupted || !resume || ctx.Err() != nil {
 			return turnOutcome{Turn: turn}, err
 		}
-		if state.Resumes >= len(resumeDelays) {
+		if int(state.Resumes) >= len(resumeDelays) {
 			return turnOutcome{Turn: turn, GaveUp: true}, nil
 		}
 		if err := workflow.Sleep(ctx, resumeDelays[state.Resumes]); err != nil {
@@ -51,7 +51,7 @@ func runTurn(ctx workflow.Context, state *State, message Message, prompt p7.Text
 			return turnOutcome{Turn: turn}, nil
 		}
 		state.Resumes++
-		prompt = resumePrompt(original, message, state.Resumes)
+		prompt = resumePrompt(original, message, int(state.Resumes))
 	}
 }
 
@@ -59,9 +59,9 @@ func runTurn(ctx workflow.Context, state *State, message Message, prompt p7.Text
 // the request go in the hidden context, so the page shows a short message
 // and not the request again. The request is repeated because the
 // interrupted turn may not have reached the agent.
-func resumePrompt(original p7.TextPrompt, message Message, resumes int) p7.TextPrompt {
+func resumePrompt(original p7.TextPrompt, message *Message, resumes int) p7.TextPrompt {
 	prompt := original
-	prompt.TurnID = fmt.Sprintf("%s-resume%d", message.ID, resumes)
+	prompt.TurnID = fmt.Sprintf("%s-resume%d", message.Id, resumes)
 	note := "Your previous turn was cut off before it ended, because the session's processes stopped (a restart of the machine or pod, or the harness died). No person stopped it. " +
 		"What you did until then is kept, but a command that was running was killed, and work that is not committed may be half done. " +
 		"Before you go on, check the state of each clone with `git status` and `git log --oneline -5`, and whether your branch is on the remote. " +

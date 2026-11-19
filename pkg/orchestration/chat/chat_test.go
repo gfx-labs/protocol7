@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
+	"github.com/gfx-labs/protocol7/pkg/domain/navi"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/chat"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
@@ -115,11 +116,11 @@ func newEnvironment(t *testing.T) (*testsuite.TestWorkflowEnvironment, *session)
 	env.SetOnActivityCanceledListener(func(*activity.Info) { close(fake.release) })
 	err := chat.Register(registry{env}, chat.Options{
 		Tools: func(current *chat.Chat) []p7.Tool { return []p7.Tool{lookup(current)} },
-		Instructions: func(request chat.Request) (string, error) {
-			return "app instructions for " + request.ID, nil
+		Instructions: func(request *chat.Request) (string, error) {
+			return "app instructions for " + request.Id, nil
 		},
-		TurnContext: func(_ workflow.Context, _ *chat.Chat, message chat.Message) string {
-			return "turn context for " + message.ID
+		TurnContext: func(_ workflow.Context, _ *chat.Chat, message *chat.Message) string {
+			return "turn context for " + message.Id
 		},
 		Activities: map[string]any{
 			"Lookup": func(_ context.Context, word string) (string, error) { return word + " means a test", nil },
@@ -135,23 +136,23 @@ func newEnvironment(t *testing.T) (*testsuite.TestWorkflowEnvironment, *session)
 	return env, fake
 }
 
-func newChat(first string) chat.State {
-	return chat.State{
-		Request: chat.Request{
-			ID: "c1", Title: "test", Host: "test",
-			Repositories: []chat.Repository{{Name: "repo", URL: "/remote/repo.git"}},
+func newChat(first string) *navi.ChatState {
+	return &navi.ChatState{
+		Request: &chat.Request{
+			Id: "c1", Title: "test", Host: "test",
+			Repositories: []*chat.Repository{{Name: "repo", Url: "/remote/repo.git"}},
 		},
-		Pending: []chat.Message{{ID: "m1", Text: first}},
+		Pending: []*chat.Message{{Id: "m1", Text: first}},
 	}
 }
 
-func queryState(t *testing.T, env *testsuite.TestWorkflowEnvironment) chat.State {
+func queryState(t *testing.T, env *testsuite.TestWorkflowEnvironment) *navi.ChatState {
 	t.Helper()
 	value, err := env.QueryWorkflow(chat.QueryState)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var state chat.State
+	var state *navi.ChatState
 	if err := value.Get(&state); err != nil {
 		t.Fatal(err)
 	}
@@ -192,13 +193,13 @@ func TestATurnAndAToolTheAppAdds(t *testing.T) {
 		callTool(t, env, fake.sessionID(), "lookup", map[string]string{"word": "chat"}, func(result p7.ToolResult) { looked = result })
 	}, time.Minute)
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(chat.SignalMessage, chat.Message{ID: "m2", Text: "second"})
+		env.SignalWorkflow(chat.SignalMessage, &chat.Message{Id: "m2", Text: "second"})
 	}, 2*time.Minute)
 	env.RegisterDelayedCallback(func() {
 		if state := queryState(t, env); state.LastLearning != "chat" || state.Turns != 2 {
 			t.Errorf("state: last learning %q, turns %d, want the tool's record and 2", state.LastLearning, state.Turns)
 		}
-		env.SignalWorkflow(chat.SignalClose, chat.Action{})
+		env.SignalWorkflow(chat.SignalClose, &chat.Action{})
 	}, 3*time.Minute)
 	env.ExecuteWorkflow(chat.WorkflowName, newChat("first"))
 
@@ -237,10 +238,10 @@ func TestATurnAndAToolTheAppAdds(t *testing.T) {
 func TestStopEndsTheTurnAndKeepsTheQueue(t *testing.T) {
 	env, fake := newEnvironment(t)
 	fake.onSlow = func() {
-		env.SignalWorkflow(chat.SignalMessage, chat.Message{ID: "m2", Text: "second"})
-		env.SignalWorkflow(chat.SignalStop, chat.Action{By: &chat.Person{Login: "alice@example.com"}})
+		env.SignalWorkflow(chat.SignalMessage, &chat.Message{Id: "m2", Text: "second"})
+		env.SignalWorkflow(chat.SignalStop, &chat.Action{By: &chat.Person{Login: "alice@example.com"}})
 	}
-	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, chat.Action{}) }, 2*time.Minute)
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, &chat.Action{}) }, 2*time.Minute)
 	env.ExecuteWorkflow(chat.WorkflowName, newChat("slow"))
 
 	if err := env.GetWorkflowError(); err != nil {
@@ -277,15 +278,15 @@ func TestAnEscalationIsAnsweredByAPerson(t *testing.T) {
 		})
 	// A chat that closes with an escalation waiting withdraws it.
 	env.OnRequestCancelExternalWorkflow(mock.Anything, mock.Anything, "").Return(nil)
-	var waiting chat.State
-	var forwarded chat.EscalationState
+	var waiting *navi.ChatState
+	var forwarded *chat.EscalationState
 	env.RegisterDelayedCallback(func() {
 		waiting = queryState(t, env)
 		if len(waiting.Escalations) != 1 {
 			t.Errorf("escalations %+v, want one", waiting.Escalations)
 			return
 		}
-		id := chat.EscalationWorkflowID(waiting.Escalations[0].ID)
+		id := chat.EscalationWorkflowID(waiting.Escalations[0].Id)
 		value, err := env.QueryWorkflowByID(id, chat.QueryEscalation)
 		if err != nil {
 			t.Error(err)
@@ -303,12 +304,12 @@ func TestAnEscalationIsAnsweredByAPerson(t *testing.T) {
 					t.Errorf("resolve: %v", err)
 				}
 			},
-		}, chat.EscalationAnswer{Text: "use the token in vault", By: &chat.Person{Login: "alice@example.com"}})
+		}, &chat.EscalationAnswer{Text: "use the token in vault", By: &chat.Person{Login: "alice@example.com"}})
 		if err != nil {
 			t.Error(err)
 		}
 	}, time.Minute)
-	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, chat.Action{}) }, 2*time.Minute)
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, &chat.Action{}) }, 2*time.Minute)
 	env.ExecuteWorkflow(chat.WorkflowName, newChat("slow"))
 
 	if err := env.GetWorkflowError(); err != nil {
@@ -350,7 +351,7 @@ func TestAnIdleChatContinuesAsNewOntoANewBuild(t *testing.T) {
 	if continued.WorkflowType.Name != chat.WorkflowName {
 		t.Errorf("continues as %q, want %q", continued.WorkflowType.Name, chat.WorkflowName)
 	}
-	var next chat.State
+	var next *navi.ChatState
 	if err := converter.GetDefaultDataConverter().FromPayloads(continued.Input, &next); err != nil {
 		t.Fatal(err)
 	}

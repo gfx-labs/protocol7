@@ -8,6 +8,7 @@ import (
 
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/gfx-labs/protocol7/pkg/domain/navi"
 	"github.com/gfx-labs/protocol7/pkg/domain/scope"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 	"github.com/gfx-labs/protocol7/pkg/support/prompt"
@@ -32,13 +33,13 @@ type Options struct {
 	Tools func(chat *Chat) []p7.Tool
 	// Instructions is the hidden context of a chat's first turn. Nil uses
 	// DefaultInstructions. An error fails the turn and leaves the chat open.
-	Instructions func(request Request) (string, error)
+	Instructions func(request *Request) (string, error)
 	// Brief is added to the first turn's context after the instructions. It
 	// may run activities. An empty result adds nothing.
 	Brief func(ctx workflow.Context, chat *Chat) string
 	// TurnContext is added to the context of every turn, after the picks and
 	// a person's guidance. An empty result adds nothing.
-	TurnContext func(ctx workflow.Context, chat *Chat, message Message) string
+	TurnContext func(ctx workflow.Context, chat *Chat, message *Message) string
 	// EscalationHandoff names the activity that gives a new escalation to the
 	// app's handler, which then has handlerDeadline to decide before a person
 	// gets it. The activity takes an EscalationRequest and runs on TaskQueue.
@@ -47,7 +48,7 @@ type Options struct {
 	// ValidateDecision, when set, refuses a decision of the app's handler
 	// (UpdateEscalationDecide) that the base accepts. An app may require a
 	// resolution to name a record of its own, for example.
-	ValidateDecision func(decision EscalationDecision) error
+	ValidateDecision func(decision *EscalationDecision) error
 	// Activities are the app's activities, by name. Register registers them
 	// with the workflows.
 	Activities map[string]any
@@ -62,7 +63,7 @@ type Chat struct {
 
 // Escalate raises an escalation for the chat and returns its ID, as the
 // escalate tool does.
-func (c *Chat) Escalate(ctx workflow.Context, request EscalationRequest) (string, error) {
+func (c *Chat) Escalate(ctx workflow.Context, request *EscalationRequest) (string, error) {
 	return raiseEscalation(ctx, c.State, request)
 }
 
@@ -103,17 +104,18 @@ func Register(registry Registry, options Options) error {
 
 // NewWorkflow is the chat workflow with the options. Register registers it
 // under WorkflowName. A replayer registers it the same way.
-func NewWorkflow(options Options) func(workflow.Context, State) (Report, error) {
-	return func(ctx workflow.Context, state State) (Report, error) {
+func NewWorkflow(options Options) func(workflow.Context, *navi.ChatState) (*Report, error) {
+	return func(ctx workflow.Context, start *navi.ChatState) (*Report, error) {
+		state := NewState(start)
 		state.options = &options
-		return run(ctx, state)
+		return run(ctx, *state)
 	}
 }
 
 // NewEscalationWorkflow is the escalation workflow with the options. Register
 // registers it under EscalationWorkflowName.
-func NewEscalationWorkflow(options Options) func(workflow.Context, EscalationState) (EscalationState, error) {
-	return func(ctx workflow.Context, state EscalationState) (EscalationState, error) {
+func NewEscalationWorkflow(options Options) func(workflow.Context, *EscalationState) (*EscalationState, error) {
+	return func(ctx workflow.Context, state *EscalationState) (*EscalationState, error) {
 		return runEscalation(ctx, state, options.EscalationHandoff, options.ValidateDecision)
 	}
 }
@@ -179,17 +181,17 @@ func ScopeInstructions(held *scope.Scope) string {
 	}
 	slices.Sort(permissions)
 	return fmt.Sprintf("\nYour GitHub access is the lower of the project's and your person's. Repositories: %s. Permissions: %s (%s). It cannot be widened from here: do not try to reach any other repository, and say that an admin has to change it if you need more.\n",
-		strings.Join(held.Repositories, ", "), strings.Join(permissions, ", "), held.Level())
+		strings.Join(held.Repositories, ", "), strings.Join(permissions, ", "), scope.LevelOf(held))
 }
 
 // DefaultInstructions are the instructions of a chat whose app gives none:
 // where the clones are, the branch, the scope, and when to escalate.
-func DefaultInstructions(request Request) (string, error) {
+func DefaultInstructions(request *Request) (string, error) {
 	repositories := make([]string, 0, len(request.Repositories))
 	for _, repository := range ScopedRepositories(request.Repositories, request.Scope) {
-		repositories = append(repositories, fmt.Sprintf("%s/ (%s)", repository.Name, repository.URL))
+		repositories = append(repositories, fmt.Sprintf("%s/ (%s)", repository.Name, repository.Url))
 	}
-	text := prompt.New(prompt.Vars{"Branch": Branch(request.ID), "Project": request.Project}).
+	text := prompt.New(prompt.Vars{"Branch": Branch(request.Id), "Project": request.Project}).
 		P("This is a p7 chat. A person talks to you through a web page and sees your messages, tool calls and plan.").
 		P("Your working directory holds a clone of each repository you work on:").
 		List(repositories...).

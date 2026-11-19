@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gfx-labs/protocol7/pkg/domain/scope"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
 
@@ -71,13 +72,13 @@ const poolNameLength = 24
 // with it must never share a pool with one without.
 //
 // An empty scope turns pools off: the chat gets a pod of its own.
-func PoolKey(request Request, scope string) string {
-	if scope == "" {
+func PoolKey(request *Request, poolScope string) string {
+	if poolScope == "" {
 		return ""
 	}
 	repositories := make([][2]string, 0, len(request.Repositories))
 	for _, repository := range request.Repositories {
-		repositories = append(repositories, [2]string{repository.Name, repository.URL})
+		repositories = append(repositories, [2]string{repository.Name, repository.Url})
 	}
 	slices.SortFunc(repositories, func(a, b [2]string) int { return strings.Compare(a[0]+"\x00"+a[1], b[0]+"\x00"+b[1]) })
 	issue := ""
@@ -90,7 +91,7 @@ func PoolKey(request Request, scope string) string {
 	}
 	effective := ""
 	if request.Scope != nil {
-		effective = request.Scope.Key()
+		effective = scope.Key(request.Scope)
 	}
 	// JSON keeps every value apart from its neighbours, so no two sets of
 	// permissions encode alike.
@@ -109,7 +110,7 @@ func PoolKey(request Request, scope string) string {
 		// reach. Left out when none was recorded, so the name of a chat that
 		// started before scopes does not change.
 		Effective string `json:",omitempty"`
-	}{1, request.Project, repositories, request.Restricted, issue, request.Escalation != nil, request.Handler, serves, modelAccounts(request.Models), scope, effective})
+	}{1, request.Project, repositories, request.Restricted, issue, request.Escalation != nil, request.Handler, serves, modelAccounts(request.Models), poolScope, effective})
 	if err != nil {
 		// A struct of strings and booleans always encodes.
 		panic(err)
@@ -143,7 +144,7 @@ func modelAccounts(entries []string) []string {
 // otherwise none. A name that an earlier opening gave is not kept: a chat that
 // opens its session again after the deployment turned pools off, or changed the
 // token's scope, gets the pool its permissions name today, or a pod of its own.
-func withPool(request Request) Request {
+func withPool(request *Request) *Request {
 	request.Pool = ""
 	if request.PoolScope != "" && request.Backend == p7.BackendKubernetes {
 		request.Pool = PoolKey(request, request.PoolScope)
@@ -153,7 +154,7 @@ func withPool(request Request) Request {
 
 // poolSpec is the pool of a request, with the sizes this package chooses. Nil
 // is a pod of the session's own.
-func poolSpec(request Request) *p7.SessionPool {
+func poolSpec(request *Request) *p7.SessionPool {
 	if request.Pool == "" || request.Backend != p7.BackendKubernetes {
 		return nil
 	}

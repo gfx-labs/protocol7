@@ -73,14 +73,14 @@ func coordinationTools(state *State) []p7.Tool {
 				}
 				if len(args.IDs) == 0 {
 					for _, child := range state.Children {
-						args.IDs = append(args.IDs, child.ID)
+						args.IDs = append(args.IDs, child.Id)
 					}
 				}
 				if len(args.IDs) == 0 {
 					return p7.ToolResult{}, fmt.Errorf("no children to await")
 				}
 				for _, id := range args.IDs {
-					if !slices.ContainsFunc(state.Children, func(c Child) bool { return c.ID == id }) {
+					if !slices.ContainsFunc(state.Children, func(c *Child) bool { return c.Id == id }) {
 						return p7.ToolResult{}, fmt.Errorf("%s is not this chat's child", id)
 					}
 				}
@@ -109,7 +109,7 @@ func coordinationTools(state *State) []p7.Tool {
 						return true
 					}
 					for _, child := range state.Children {
-						if slices.Contains(args.IDs, child.ID) && !child.Done && !child.Attention {
+						if slices.Contains(args.IDs, child.Id) && !child.Done && !child.Attention {
 							return false
 						}
 					}
@@ -126,9 +126,9 @@ func coordinationTools(state *State) []p7.Tool {
 						return p7.ToolResult{}, err
 					}
 				}
-				result := []Child{}
+				result := []*Child{}
 				for _, child := range state.Children {
-					if slices.Contains(args.IDs, child.ID) {
+					if slices.Contains(args.IDs, child.Id) {
 						result = append(result, child)
 					}
 				}
@@ -149,7 +149,7 @@ func coordinationTools(state *State) []p7.Tool {
 					return p7.ToolResult{}, fmt.Errorf("message must be nonempty and at most 64 KiB")
 				}
 				for index, child := range state.Children {
-					if child.ID != args.ID || child.Done {
+					if child.Id != args.ID || child.Done {
 						continue
 					}
 					id, err := NewID(ctx)
@@ -158,7 +158,7 @@ func coordinationTools(state *State) []p7.Tool {
 					}
 					state.Children[index].Attention = false
 					state.Children[index].Message = id
-					err = workflow.SignalExternalWorkflow(ctx, WorkflowID(child.ID), "", SignalMessage, Message{ID: id, Text: args.Message, Restricted: state.Request.Restricted}).Get(ctx, nil)
+					err = workflow.SignalExternalWorkflow(ctx, WorkflowID(child.Id), "", SignalMessage, &Message{Id: id, Text: args.Message, Restricted: state.Request.Restricted}).Get(ctx, nil)
 					return p7.TextResult("Guidance sent."), err
 				}
 				return p7.ToolResult{}, fmt.Errorf("not a live child of this chat")
@@ -189,7 +189,7 @@ func spawnChild(ctx workflow.Context, state *State, task, title string, escalati
 		title = "Child task"
 	}
 	request := state.Request
-	request.ID, request.Title, request.Parent, request.Owner = id, title, state.Request.ID, workflow.GetInfo(ctx).WorkflowExecution.ID
+	request.Id, request.Title, request.Parent, request.Owner = id, title, state.Request.Id, workflow.GetInfo(ctx).WorkflowExecution.ID
 	request.Depth++
 	request.Issue, request.Escalation = nil, escalation
 	// A child holds its parent's scope and may only narrow it.
@@ -201,18 +201,18 @@ func spawnChild(ctx workflow.Context, state *State, task, title string, escalati
 	// other permissions and so another pool, never the parent's.
 	request.Pool = ""
 	index := len(state.Children)
-	state.Children = append(state.Children, Child{ID: id, Title: title, Message: id})
+	state.Children = append(state.Children, &Child{Id: id, Title: title, Message: id})
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
 		WorkflowID: WorkflowID(id), TaskQueue: TaskQueue,
 		ParentClosePolicy:     enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
 		TypedSearchAttributes: SearchAttributes(request), Memo: Memo(request),
 		WorkflowExecutionTimeout: 24 * time.Hour,
 	})
-	future := workflow.ExecuteChildWorkflow(childCtx, WorkflowName, State{Request: request, Pending: []Message{{ID: id, Text: task}}})
+	future := workflow.ExecuteChildWorkflow(childCtx, WorkflowName, &navi.ChatState{Request: request, Pending: []*Message{{Id: id, Text: task}}})
 	workflow.Go(ctx, func(ctx workflow.Context) {
-		var result Report
+		var result *Report
 		if err := future.Get(ctx, &result); err != nil {
-			result.Error = Cause(err)
+			result = &Report{Error: Cause(err)}
 		}
 		state.Children[index].Done = true
 		state.Children[index].Attention = false
@@ -246,7 +246,7 @@ func acquireModel(ctx workflow.Context, state *State) error {
 			releaseModel(ctx, state)
 			return err
 		}
-		state.ModelLeases = append(state.ModelLeases, lease)
+		state.ModelLeases = append(state.ModelLeases, navi.LeaseMessage(lease))
 	}
 	return nil
 }
@@ -255,7 +255,7 @@ func releaseModel(ctx workflow.Context, state *State) {
 	leases := state.ModelLeases
 	state.ModelLeases = nil
 	for _, lease := range leases {
-		lease.Release(ctx)
+		navi.LeaseOf(lease).Release(ctx)
 	}
 }
 
@@ -267,19 +267,19 @@ func modelTurn(ctx workflow.Context, state *State, prompt p7.TextPrompt) (p7.Tur
 	// drops it: the providers' own rate limits bound concurrency. Version 1
 	// stays so that histories recorded with leases replay.
 	if workflow.GetVersion(ctx, "chat-model-limit", workflow.DefaultVersion, 2) != 1 {
-		return p7.PromptText(ctx, state.Session, prompt)
+		return p7.PromptText(ctx, state.session, prompt)
 	}
 	if err := acquireModel(ctx, state); err != nil {
 		return p7.Turn{}, err
 	}
 	defer releaseModel(ctx, state)
-	return p7.PromptText(ctx, state.Session, prompt)
+	return p7.PromptText(ctx, state.session, prompt)
 }
 
 func closeChildren(ctx workflow.Context, state *State) {
 	for _, child := range state.Children {
 		if !child.Done {
-			_ = workflow.SignalExternalWorkflow(ctx, WorkflowID(child.ID), "", SignalClose, Action{}).Get(ctx, nil)
+			_ = workflow.SignalExternalWorkflow(ctx, WorkflowID(child.Id), "", SignalClose, &Action{}).Get(ctx, nil)
 		}
 	}
 }

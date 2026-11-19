@@ -22,13 +22,12 @@ func InheritScope(parent, requested *scope.Scope) *scope.Scope {
 	if parent == nil {
 		return nil
 	}
-	narrowed := parent.Narrow(requested)
-	return &narrowed
+	return scope.Narrow(parent, requested)
 }
 
 // ScopedRepositories are the repositories of a chat that its scope reaches. A
 // repository that is not on github.com, or is not in the scope, is not cloned.
 // Without a scope, every repository is kept.
-func ScopedRepositories(repositories []Repository, scope *scope.Scope) []Repository {
+func ScopedRepositories(repositories []*Repository, scope *scope.Scope) []*Repository {
 	return navi.ScopedRepositories(repositories, scope)
 }

@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/gfx-labs/protocol7/pkg/domain/navi"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/upgrade"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
@@ -30,30 +31,30 @@ const upgradeWake = time.Hour
 // run is one run of a chat. It opens a session with a clone of each
 // repository, answers each message with one turn, in the order the messages
 // came, and closes the session when the chat is closed or cancelled.
-func run(ctx workflow.Context, state State) (Report, error) {
-	if err := workflow.SetQueryHandler(ctx, QueryState, func() (State, error) { return state, nil }); err != nil {
-		return Report{}, err
+func run(ctx workflow.Context, state State) (*Report, error) {
+	if err := workflow.SetQueryHandler(ctx, QueryState, func() (*navi.ChatState, error) { return state.ChatState, nil }); err != nil {
+		return &Report{}, err
 	}
 	// The session's agent calls these. A call from any other session is
 	// refused before it enters history.
 	sessions := func() []string {
-		if state.Session == nil {
+		if state.session == nil {
 			return nil
 		}
-		return []string{state.Session.ID}
+		return []string{state.session.ID}
 	}
 	if err := p7.HandleTools(ctx, chatTools(&state), sessions); err != nil {
-		return Report{}, err
+		return &Report{}, err
 	}
 	// The search attribute carries over a continue-as-new by itself.
-	if err := workflow.SetUpdateHandler(ctx, UpdateArchive, func(ctx workflow.Context, archive Archive) error {
+	if err := workflow.SetUpdateHandler(ctx, UpdateArchive, func(ctx workflow.Context, archive *Archive) error {
 		if err := workflow.UpsertTypedSearchAttributes(ctx, AttributeArchived.ValueSet(archive.Archived)); err != nil {
 			return err
 		}
 		state.Archived = archive.Archived
 		return nil
 	}); err != nil {
-		return Report{}, err
+		return &Report{}, err
 	}
 
 	// cancelTurn is set while a turn runs.
@@ -64,19 +65,19 @@ func run(ctx workflow.Context, state State) (Report, error) {
 	closes := workflow.GetSignalChannel(ctx, SignalClose)
 	children := workflow.GetSignalChannel(ctx, SignalReport)
 	escalations := workflow.GetSignalChannel(ctx, SignalEscalation)
-	addMessage := func(message Message) {
-		if message.ID != "" && message.Text != "" {
+	addMessage := func(message *Message) {
+		if message.Id != "" && message.Text != "" {
 			state.Pending = append(state.Pending, message)
 		}
 	}
 	// takeNotice applies what an escalation told the chat. A person's answer
 	// is a message like any other, and the turn it starts continues the chat.
-	takeNotice := func(notice EscalationNotice) {
+	takeNotice := func(notice *EscalationNotice) {
 		if message, ok := takeEscalation(&state, notice); ok {
 			addMessage(message)
 		}
 	}
-	stopTurn := func(ctx workflow.Context, action Action) {
+	stopTurn := func(ctx workflow.Context, action *Action) {
 		state.StoppedBy = action.By
 		// A stop ends the running turn only. The messages that wait are
 		// dropped when the person asks for that.
@@ -87,10 +88,10 @@ func run(ctx workflow.Context, state State) (Report, error) {
 			cancelTurn()
 		}
 	}
-	dequeue := func(request Dequeue) {
-		state.Pending = slices.DeleteFunc(state.Pending, func(message Message) bool { return message.ID == request.ID })
+	dequeue := func(request *Dequeue) {
+		state.Pending = slices.DeleteFunc(state.Pending, func(message *Message) bool { return message.Id == request.Id })
 	}
-	closeChat := func(action Action) {
+	closeChat := func(action *Action) {
 		if !state.Closing {
 			state.ClosedBy = action.By
 		}
@@ -104,37 +105,37 @@ func run(ctx workflow.Context, state State) (Report, error) {
 	workflow.Go(ctx, func(ctx workflow.Context) {
 		selector := workflow.NewSelector(ctx)
 		selector.AddReceive(messages, func(channel workflow.ReceiveChannel, _ bool) {
-			var message Message
+			var message *Message
 			channel.Receive(ctx, &message)
 			addMessage(message)
 		})
 		selector.AddReceive(stops, func(channel workflow.ReceiveChannel, _ bool) {
-			var action Action
+			var action *Action
 			channel.Receive(ctx, &action)
 			stopTurn(ctx, action)
 		})
 		selector.AddReceive(dequeues, func(channel workflow.ReceiveChannel, _ bool) {
-			var request Dequeue
+			var request *Dequeue
 			channel.Receive(ctx, &request)
 			dequeue(request)
 		})
 		selector.AddReceive(children, func(channel workflow.ReceiveChannel, _ bool) {
-			var result Report
+			var result *Report
 			channel.Receive(ctx, &result)
 			for index, child := range state.Children {
-				if child.ID == result.ChatID && child.Message == result.Message && result.Attention && !child.Done {
+				if child.Id == result.ChatId && child.Message == result.Message && result.Attention && !child.Done {
 					state.Children[index].Attention = true
 					state.Children[index].Result = result
 				}
 			}
 		})
 		selector.AddReceive(escalations, func(channel workflow.ReceiveChannel, _ bool) {
-			var notice EscalationNotice
+			var notice *EscalationNotice
 			channel.Receive(ctx, &notice)
 			takeNotice(notice)
 		})
 		selector.AddReceive(closes, func(channel workflow.ReceiveChannel, _ bool) {
-			var action Action
+			var action *Action
 			channel.Receive(ctx, &action)
 			closeChat(action)
 		})
@@ -146,16 +147,17 @@ func run(ctx workflow.Context, state State) (Report, error) {
 		state.Closing = true
 	})
 
-	if state.Session == nil {
+	if state.session == nil {
 		state.Status = StatusOpening
 		state.Request = withPool(state.Request)
 		session, err := p7.OpenSession(ctx, sessionSpec(state.Request, chatTools(&state)))
 		if err != nil {
 			state.Status, state.Error = StatusFailed, Cause(err)
-			report(ctx, state, Report{Error: state.Error, Idle: true, Ended: true})
-			return Report{}, err
+			report(ctx, state, &Report{Error: state.Error, Idle: true, Ended: true})
+			return &Report{}, err
 		}
-		state.Session = session
+		state.session = session
+		state.syncSession()
 	}
 
 	for !state.Closing {
@@ -171,35 +173,35 @@ func run(ctx workflow.Context, state State) (Report, error) {
 			// Each value is decoded into a fresh variable: a payload with a
 			// field left out would otherwise keep the previous value.
 			for {
-				var action Action
+				var action *Action
 				if !stops.ReceiveAsync(&action) {
 					break
 				}
 				stopTurn(ctx, action)
 			}
 			for {
-				var request Dequeue
+				var request *Dequeue
 				if !dequeues.ReceiveAsync(&request) {
 					break
 				}
 				dequeue(request)
 			}
 			for {
-				var message Message
+				var message *Message
 				if !messages.ReceiveAsync(&message) {
 					break
 				}
 				addMessage(message)
 			}
 			for {
-				var notice EscalationNotice
+				var notice *EscalationNotice
 				if !escalations.ReceiveAsync(&notice) {
 					break
 				}
 				takeNotice(notice)
 			}
 			for {
-				var action Action
+				var action *Action
 				if !closes.ReceiveAsync(&action) {
 					break
 				}
@@ -208,7 +210,7 @@ func run(ctx workflow.Context, state State) (Report, error) {
 			if !state.Closing {
 				// Auto-upgrade when a newer build is the target, so that the
 				// next run is on it and this build can drain.
-				return Report{}, upgrade.ContinueAsNew(ctx, WorkflowName, state)
+				return &Report{}, upgrade.ContinueAsNew(ctx, WorkflowName, state.ChatState)
 			}
 			break
 		}
@@ -229,12 +231,12 @@ func run(ctx workflow.Context, state State) (Report, error) {
 
 		message := state.Pending[0]
 		state.Pending = state.Pending[1:]
-		state.Current, state.Status = &message, StatusRunning
+		state.Current, state.Status = message, StatusRunning
 		if message.From != nil {
 			if state.Senders == nil {
 				state.Senders = map[string]string{}
 			}
-			state.Senders[message.ID] = message.From.Login
+			state.Senders[message.Id] = message.From.Login
 		}
 		prompt, err := turnPrompt(ctx, &state, message)
 		var outcome turnOutcome
@@ -243,6 +245,8 @@ func run(ctx workflow.Context, state State) (Report, error) {
 			cancelTurn = cancel
 			state.Attention = false
 			outcome, err = runTurn(turnCtx, &state, message, prompt)
+			// A turn may move the session to another worker of its pool.
+			state.syncSession()
 			cancelTurn = nil
 			cancel()
 		}
@@ -268,7 +272,7 @@ func run(ctx workflow.Context, state State) (Report, error) {
 		if state.Request.Escalation != nil && state.Request.Parent != "" && message.From == nil {
 			state.Attention = true
 		}
-		summary := Report{ChatID: state.Request.ID, Attention: state.Attention, Message: message.ID, StopReason: state.LastStop, Text: turn.Text, Error: state.Error, Idle: len(state.Pending) == 0, GaveUp: outcome.GaveUp, Resumes: state.Resumes}
+		summary := &Report{ChatId: state.Request.Id, Attention: state.Attention, Message: message.Id, StopReason: state.LastStop, Text: turn.Text, Error: state.Error, Idle: len(state.Pending) == 0, GaveUp: outcome.GaveUp, Resumes: state.Resumes}
 		if state.LastStop == p7.StopCancelled && !state.Closing {
 			// Only a person's stop cancels a turn while the chat stays open.
 			summary.Stopped = true
@@ -295,13 +299,13 @@ func run(ctx workflow.Context, state State) (Report, error) {
 	if state.Request.Parent != "" || len(state.Children) > 0 {
 		_, _ = workflow.AwaitWithTimeout(closeCtx, 30*time.Second, func() bool { return workflow.AllHandlersFinished(closeCtx) })
 	}
-	if err := state.Session.Close(closeCtx); err != nil {
+	if err := state.session.Close(closeCtx); err != nil {
 		state.Status, state.Error = StatusFailed, Cause(err)
-		report(closeCtx, state, Report{Error: state.Error, Idle: true, Ended: true})
-		return Report{}, err
+		report(closeCtx, state, &Report{Error: state.Error, Idle: true, Ended: true})
+		return &Report{}, err
 	}
 	state.Status = StatusClosed
-	report(closeCtx, state, Report{Idle: true, Ended: true})
+	report(closeCtx, state, &Report{Idle: true, Ended: true})
 	state.Result.Ended = true
 	state.Result.Idle = true
 	return state.Result, ctx.Err()
@@ -310,8 +314,8 @@ func run(ctx workflow.Context, state State) (Report, error) {
 // turnPrompt is the prompt of the turn that answers message: its text, and a
 // hidden context of the instructions and brief on the first turn, the picks,
 // a person's guidance and the app's turn context.
-func turnPrompt(ctx workflow.Context, state *State, message Message) (p7.TextPrompt, error) {
-	prompt := p7.TextPrompt{Text: message.Text, TurnID: message.ID, Retry: turnRetry}
+func turnPrompt(ctx workflow.Context, state *State, message *Message) (p7.TextPrompt, error) {
+	prompt := p7.TextPrompt{Text: message.Text, TurnID: message.Id, Retry: turnRetry}
 	if !state.Briefed {
 		first, err := firstContext(ctx, state)
 		if err != nil {
@@ -335,14 +339,14 @@ func turnPrompt(ctx workflow.Context, state *State, message Message) (p7.TextPro
 
 // report tells the chat's owner, if it has one, what happened. An owner that
 // has ended is not an error of the chat.
-func report(ctx workflow.Context, state State, value Report) {
+func report(ctx workflow.Context, state State, value *Report) {
 	if state.Request.Owner == "" {
 		return
 	}
-	if value.ChatID == "" {
+	if value.ChatId == "" {
 		// The reports of a chat that failed to open or that closed name it
 		// too: an owner that runs several chats tells them apart by it.
-		value.ChatID = state.Request.ID
+		value.ChatId = state.Request.Id
 	}
 	_ = workflow.SignalExternalWorkflow(ctx, state.Request.Owner, "", SignalReport, value).Get(ctx, nil)
 }
@@ -374,7 +378,7 @@ func Placement(backend, host string) p7.Placement {
 	return p7.Placement{Backend: p7.BackendHost, Host: host}
 }
 
-func sessionSpec(request Request, tools []p7.Tool) p7.SessionSpec {
+func sessionSpec(request *Request, tools []p7.Tool) p7.SessionSpec {
 	spec := p7.SessionSpec{
 		Models:    request.Models,
 		Placement: Placement(request.Backend, request.Host),
@@ -391,7 +395,7 @@ func sessionSpec(request Request, tools []p7.Tool) p7.SessionSpec {
 	// Only what the scope reaches is cloned, whatever the request lists.
 	for _, repository := range ScopedRepositories(request.Repositories, request.Scope) {
 		spec.Inputs = append(spec.Inputs, p7.Input{
-			Source:      p7.GitClone{Repository: repository.URL, Branch: Branch(request.ID)},
+			Source:      p7.GitClone{Repository: repository.Url, Branch: Branch(request.Id)},
 			Destination: "/" + repository.Name,
 		})
 	}
