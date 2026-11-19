@@ -301,10 +301,10 @@ Each PR merges alone and leaves every deployment working.
 
 | # | Repo | Change | Test that proves it |
 | --- | --- | --- | --- |
-| 1 | protocol7 | Add `pkg/domain/navi` (constants, attribute keys, memo keys, wire types, `ContractVersion`). | `go test ./pkg/domain/navi`: a test decodes a recorded `State` JSON from a live chat query into the new type. |
+| 1 | protocol7 | Add `pkg/domain/navi` (constants, attribute keys, memo keys, wire types, `ContractVersion`) and `pkg/domain/scope` (the scope part of `acl`), since the wire types carry a `Scope`. | `go test ./pkg/domain/navi`: a test decodes a recorded `State` JSON from a live chat query into the new type. |
 | 2 | protocol7-selfdev | Bump protocol7. Make `chat`, `issue`, `review`, `learning` constants aliases of `navi` ones (`const WorkflowName = navi.ChatWorkflow`). Set the `contract` memo. | `go test ./...`. Existing workflow replay tests pass unchanged, which shows the wire strings did not move. |
 | 3 | protocol7-selfdev | Switch `pkg/web` and `cmd/webhooks` to import `navi` only, not workflow packages (coordinate with a2a-chats-2 on `pkg/web`). | `go list -deps ./pkg/web` shows no `pkg/workflow/` package. Web tests pass. |
-| 4 | protocol7 | Move `upgrade`, `rollout`, `linear`, `githubapi`, `githubapp`, `scope` (from `acl`), and `artifact`. These have no selfdev imports besides each other. | Their moved tests pass in protocol7 CI. |
+| 4 | protocol7 | Move `upgrade`, `rollout`, `linear`, `githubapi`, `githubapp` and `artifact`. These have no selfdev imports besides each other. | Their moved tests pass in protocol7 CI. |
 | 5 | protocol7-selfdev | Import the packages from PR 4 and delete the local copies. | `go test ./...` and a deploy of the selfdev image in protocol7-selfdev, with one chat run end to end on the dev namespace. |
 | 6 | protocol7 | Move `design`, the kubeop `Writer`, and the files command (`p7-worker files`). | `go test ./pkg/execution/...`. A test starts the files server on a temp state dir and fetches a board. |
 | 7 | protocol7 | Move `learning`, `review`, `issue`, `probe`, `chat` to `pkg/orchestration`, with `Options` and `Register` from section 2 and 3. Copy the workflow replay tests and add replay of a recorded history from each oku namespace. | Replay tests in protocol7 CI pass against histories exported from `oku` and `oku-review` (`temporal workflow show --output json`). |
