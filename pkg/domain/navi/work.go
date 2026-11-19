@@ -24,18 +24,18 @@ type IntakeInput struct {
 // Template is how the scanner starts each issue's workflow. It is the
 // payload of SignalScannerTemplate.
 type Template struct {
-	Repos        []string     `json:"repos"`
-	Label        string       `json:"label"`
-	Limit        int          `json:"limit"`
-	Host         string       `json:"host"`
-	Backend      string       `json:"backend,omitempty"`
-	PoolScope    string       `json:"pool_scope,omitempty"`
-	Models       []string     `json:"models,omitempty"`
-	ModelName    string       `json:"model_name,omitempty"`
-	Repositories []Repository `json:"repositories"`
-	PullRepos    []string     `json:"pull_repos"`
-	PageURL      string       `json:"page_url,omitempty"`
-	Scope        *scope.Scope `json:"scope,omitempty"`
+	Repos        []string      `json:"repos"`
+	Label        string        `json:"label"`
+	Limit        int           `json:"limit"`
+	Host         string        `json:"host"`
+	Backend      string        `json:"backend,omitempty"`
+	PoolScope    string        `json:"pool_scope,omitempty"`
+	Models       []string      `json:"models,omitempty"`
+	ModelName    string        `json:"model_name,omitempty"`
+	Repositories []*Repository `json:"repositories"`
+	PullRepos    []string      `json:"pull_repos"`
+	PageURL      string        `json:"page_url,omitempty"`
+	Scope        *scope.Scope  `json:"scope,omitempty"`
 }
 
 // IssueRequest is the input of IssueWorkflow.
@@ -82,7 +82,7 @@ type IssueState struct {
 	LastSent    string       `json:"last_sent,omitempty"`
 	Answered    bool         `json:"answered,omitempty"`
 	ChatEnded   bool         `json:"chat_ended,omitempty"`
-	Reports     []Report     `json:"reports,omitempty"`
+	Reports     []*Report    `json:"reports,omitempty"`
 	LastComment int64        `json:"last_comment,omitempty"`
 	Pulls       []IssuePull  `json:"pulls,omitempty"`
 	Error       string       `json:"error,omitempty"`

@@ -8,9 +8,9 @@ import (
 )
 
 func TestScopeIntersect(t *testing.T) {
-	a := scope.NewScope("oku", []string{"o/a", "o/b"}, map[string]string{"contents": "write", "issues": "write", "checks": "read"})
-	b := scope.NewScope("oku", []string{"O/B", "o/c"}, map[string]string{"contents": "read", "checks": "write", "metadata": "read"})
-	got := a.Intersect(b)
+	a := scope.New("oku", []string{"o/a", "o/b"}, map[string]string{"contents": "write", "issues": "write", "checks": "read"})
+	b := scope.New("oku", []string{"O/B", "o/c"}, map[string]string{"contents": "read", "checks": "write", "metadata": "read"})
+	got := scope.Intersect(a, b)
 	if !slices.Equal(got.Repositories, []string{"o/b"}) {
 		t.Errorf("repositories = %v", got.Repositories)
 	}
@@ -19,50 +19,50 @@ func TestScopeIntersect(t *testing.T) {
 	if len(got.Permissions) != len(want) || got.Permissions["contents"] != "read" || got.Permissions["checks"] != "read" {
 		t.Errorf("permissions = %v, want %v", got.Permissions, want)
 	}
-	if !got.Within(a) || !got.Within(b) {
+	if !scope.Within(got, a) || !scope.Within(got, b) {
 		t.Error("an intersection is not within both")
 	}
-	if got.Equal(a) || a.Within(got) {
+	if scope.Equal(got, a) || scope.Within(a, got) {
 		t.Error("the wider scope is within the narrower")
 	}
-	if got.Key() != b.Intersect(a).Key() {
+	if scope.Key(got) != scope.Key(scope.Intersect(b, a)) {
 		t.Error("the intersection depends on the order")
 	}
 	// Another project has nothing in common, and nil narrows nothing.
-	if other := a.Intersect(scope.NewScope("website", []string{"o/a"}, a.Permissions)); !other.Empty() || other.Level() != scope.LevelNone {
-		t.Errorf("another project's scope intersects: %s", other.Key())
+	if other := scope.Intersect(a, scope.New("website", []string{"o/a"}, a.Permissions)); !scope.Empty(other) || scope.LevelOf(other) != scope.LevelNone {
+		t.Errorf("another project's scope intersects: %s", scope.Key(other))
 	}
-	if !a.Narrow(nil).Equal(a) {
+	if !scope.Equal(scope.Narrow(a, nil), a) {
 		t.Error("Narrow(nil) changed the scope")
 	}
-	if wider := a.Narrow(&scope.Scope{Project: "oku", Repositories: []string{"o/a", "o/z"}, Permissions: map[string]string{"contents": "admin"}}); wider.Allows("contents", "admin") || wider.HasRepository("o/z") || wider.Allows("issues", "read") {
-		t.Errorf("a wider request widened the scope: %s", wider.Key())
+	if wider := scope.Narrow(a, &scope.Scope{Project: "oku", Repositories: []string{"o/a", "o/z"}, Permissions: map[string]string{"contents": "admin"}}); scope.Allows(wider, "contents", "admin") || scope.HasRepository(wider, "o/z") || scope.Allows(wider, "issues", "read") {
+		t.Errorf("a wider request widened the scope: %s", scope.Key(wider))
 	}
 	// Permission values that are no permission are dropped.
-	if dropped := scope.NewScope("oku", nil, map[string]string{"contents": "none", "issues": "banana"}); len(dropped.Permissions) != 0 || dropped.Level() != scope.LevelNone {
+	if dropped := scope.New("oku", nil, map[string]string{"contents": "none", "issues": "banana"}); len(dropped.Permissions) != 0 || scope.LevelOf(dropped) != scope.LevelNone {
 		t.Errorf("unknown values kept: %v", dropped.Permissions)
 	}
 }
 
 func TestScopeLevelAndKey(t *testing.T) {
-	if got := scope.NewScope("p", nil, map[string]string{"contents": "write"}).Level(); got != scope.LevelWrite {
+	if got := scope.LevelOf(scope.New("p", nil, map[string]string{"contents": "write"})); got != scope.LevelWrite {
 		t.Errorf("level = %s", got)
 	}
-	if got := scope.NewScope("p", nil, map[string]string{"contents": "read"}).Level(); got != scope.LevelRead {
+	if got := scope.LevelOf(scope.New("p", nil, map[string]string{"contents": "read"})); got != scope.LevelRead {
 		t.Errorf("level = %s", got)
 	}
-	x := scope.NewScope("p", []string{"o/a", "o/b"}, map[string]string{"contents": "read", "issues": "write"})
-	y := scope.NewScope("p", []string{"o/b", "o/a"}, map[string]string{"issues": "write", "contents": "read"})
-	if x.Key() != y.Key() {
+	x := scope.New("p", []string{"o/a", "o/b"}, map[string]string{"contents": "read", "issues": "write"})
+	y := scope.New("p", []string{"o/b", "o/a"}, map[string]string{"issues": "write", "contents": "read"})
+	if scope.Key(x) != scope.Key(y) {
 		t.Error("scopes that allow the same have different keys")
 	}
-	for _, other := range []scope.Scope{
-		scope.NewScope("q", []string{"o/a", "o/b"}, x.Permissions),
-		scope.NewScope("p", []string{"o/a"}, x.Permissions),
-		scope.NewScope("p", []string{"o/a", "o/b"}, map[string]string{"contents": "write", "issues": "write"}),
+	for _, other := range []*scope.Scope{
+		scope.New("q", []string{"o/a", "o/b"}, x.Permissions),
+		scope.New("p", []string{"o/a"}, x.Permissions),
+		scope.New("p", []string{"o/a", "o/b"}, map[string]string{"contents": "write", "issues": "write"}),
 	} {
-		if other.Key() == x.Key() {
-			t.Errorf("%s has the key of %s", other.Key(), x.Key())
+		if scope.Key(other) == scope.Key(x) {
+			t.Errorf("%s has the key of %s", scope.Key(other), scope.Key(x))
 		}
 	}
 }

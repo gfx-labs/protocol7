@@ -7,14 +7,20 @@
 // The wire strings equal those of the workflows that already run in the
 // Temporal namespaces. Renaming one orphans those workflows: a change that
 // renames or removes a name raises ContractVersion.
+//
+// The chat, escalation and handler payloads are navi.v1 protobuf messages
+// (proto/navi/v1), which buf breaking guards. The issue, review and learning
+// types are still Go structs here until those flows define their own
+// protobuf packages in their app.
 package navi
 
 import "github.com/gfx-labs/protocol7/pkg/transport/stream"
 
 // ContractVersion is the version of this contract. A worker writes it to
 // MemoContractVersion of each workflow it starts. Adding a name or a field
-// keeps it, renaming or removing one raises it.
-const ContractVersion = 1
+// keeps it, renaming or removing one raises it. Version 2 made the chat,
+// escalation and handler payloads navi.v1 messages.
+const ContractVersion = 2
 
 // Workflow types.
 const (

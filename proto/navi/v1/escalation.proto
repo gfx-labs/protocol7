@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package navi.v1;
+
+import "google/protobuf/timestamp.proto";
+import "navi/v1/chat.proto";
+import "navi/v1/common.proto";
+
+option go_package = "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1;naviv1";
+
+// The escalation workflow's payloads. A chat raises an escalation for
+// something outside its reach, the escalation handler or a person answers
+// it, and the escalation tells the chat. Message names are those of the Go
+// types in pkg/domain/navi.
+
+// EscalationRequest is what a chat asks for.
+message EscalationRequest {
+  string id = 1;
+  // chat is the id of the chat that asks.
+  string chat = 2;
+  string need = 3;
+  string why = 4;
+  string tried = 5;
+  string next = 6;
+  Issue issue = 7;
+  string project = 8;
+  Person started_by = 9;
+  string title = 10;
+  EscalationSession session = 11;
+}
+
+// EscalationSession is what the handler's chat takes from the chat it serves.
+message EscalationSession {
+  string host = 1;
+  string backend = 2;
+  string model = 3;
+  repeated string models = 4;
+  repeated Repository repositories = 5;
+  bool restricted = 6;
+  Scope scope = 7;
+}
+
+// EscalationState is the escalation workflow's input and result, and what it
+// answers the escalation query with.
+message EscalationState {
+  EscalationRequest request = 1;
+  // status is an EscalationStatus: open, handling, forwarded, resolved or
+  // declined.
+  string status = 2;
+  google.protobuf.Timestamp raised = 3;
+  google.protobuf.Timestamp changed = 4;
+  string handler = 5;
+  string note = 6;
+  EscalationDecision decision = 7;
+  EscalationReview review = 8;
+  EscalationAnswer answer = 9;
+  bool withdrawn = 10;
+  bool delivered = 11;
+}
+
+// EscalationDecision is the payload of the escalation-decide update: what
+// the handler decided and why.
+message EscalationDecision {
+  // outcome is resolved, forwarded or declined.
+  string outcome = 1;
+  string text = 2;
+  string reasoning = 3;
+  string handler = 4;
+  string learning = 5;
+  google.protobuf.Timestamp at = 6;
+}
+
+// EscalationReview is the payload of the escalation-review update: a
+// person's review of the handler's decision.
+message EscalationReview {
+  string text = 1;
+  Person by = 2;
+  bool restricted = 3;
+  google.protobuf.Timestamp at = 4;
+}
+
+// EscalationAnswer is the payload of the escalation-resolve update.
+message EscalationAnswer {
+  string text = 1;
+  Person by = 2;
+  bool restricted = 3;
+}
+
+// EscalationClaim is the payload of the escalation-handling signal.
+message EscalationClaim {
+  string handler = 1;
+}
+
+// EscalationForward is the payload of the escalation-forward signal.
+message EscalationForward {
+  string note = 1;
+  string reasoning = 2;
+}
+
+// EscalationNotice is the payload of the escalation signal an escalation
+// sends the chat that raised it on each change.
+message EscalationNotice {
+  string id = 1;
+  // status is an EscalationStatus.
+  string status = 2;
+  EscalationAnswer answer = 3;
+  bool override = 4;
+}
+
+// HandlerIntake is the payload of the escalation-intake signal: one
+// escalation for the handler workflow to take.
+message HandlerIntake {
+  EscalationRequest request = 1;
+  // models is the handler's own model choice, and model its name. Empty uses
+  // the models of the chat it serves.
+  repeated string models = 2;
+  string model = 3;
+}
+
+// ResolvedRecord is what the handler remembers of an escalation it resolved
+// or declined, for its loop guard.
+message ResolvedRecord {
+  string chat = 1;
+  string escalation = 2;
+  // outcome is resolved or declined.
+  string outcome = 3;
+  repeated string words = 4;
+  google.protobuf.Timestamp at = 5;
+}
+
+// HandlerState is the handler workflow's input and state. It is also what
+// one run hands to the next.
+message HandlerState {
+  // queue holds the escalations that wait for a handler chat.
+  repeated HandlerIntake queue = 1;
+  // seen holds the ids of the escalations taken, so that a hand-off that came
+  // twice is handled once.
+  repeated string seen = 2;
+  repeated ResolvedRecord resolved = 3;
+  // active counts the handler chats that run.
+  int32 active = 4;
+  // handled counts the escalations the handler took in all.
+  int32 handled = 5;
+}

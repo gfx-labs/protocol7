@@ -3,9 +3,16 @@ package navi
 import (
 	"time"
 
-	"github.com/gfx-labs/protocol7/pkg/domain/scope"
+	naviv1 "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
+
+// The chat workflow's payloads are the navi.v1 messages, the same ones
+// ChatService serves, so the API and the workflow cannot drift apart.
+// Temporal's default data converter encodes them as protobuf JSON.
 
 // Kind says what a chat is to the page. AttributeKind holds it.
 type Kind string
@@ -23,102 +30,53 @@ const (
 	KindLearning Kind = "learning"
 )
 
-// Person is someone who acted through the page, as the tailnet named them.
-type Person struct {
-	// Login is the Tailscale login name, such as alice@example.com.
-	Login string `json:"login"`
-	// Name is the display name.
-	Name string `json:"name,omitempty"`
-}
+// Person is someone who acted through the page, as the tailnet named them:
+// Login is the Tailscale login name, such as alice@example.com, and Name the
+// display name.
+type Person = naviv1.Person
 
-// Repository is one repository cloned into a chat's session.
-type Repository struct {
-	// Name is the directory the clone is placed in.
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
+// Repository is one repository cloned into a chat's session. Name is the
+// directory the clone is placed in.
+type Repository = naviv1.Repository
 
-// Action is the payload of SignalStop and SignalClose.
-type Action struct {
-	By *Person `json:"by,omitempty"`
-	// Discard makes a stop drop the waiting messages as well.
-	Discard bool `json:"discard,omitempty"`
-}
+// Action is the payload of SignalStop and SignalClose. Discard makes a stop
+// drop the waiting messages as well.
+type Action = naviv1.Action
 
 // Dequeue is the payload of SignalDequeue.
-type Dequeue struct {
-	ID string  `json:"id"`
-	By *Person `json:"by,omitempty"`
-}
+type Dequeue = naviv1.Dequeue
 
 // Archive is the payload of UpdateArchive.
-type Archive struct {
-	Archived bool    `json:"archived"`
-	By       *Person `json:"by,omitempty"`
-}
+type Archive = naviv1.Archive
 
-// Board is a design board shown beside a chat.
-type Board struct {
-	// Dir is the board's directory, relative to the session's workspace.
-	Dir string `json:"dir"`
-}
+// Board is a design board shown beside a chat. Dir is the board's directory,
+// relative to the session's workspace.
+type Board = naviv1.Board
 
 // Escalation is set on an older chat the system opened to ask a person
 // something.
-type Escalation struct {
-	Reason string `json:"reason"`
-}
+type Escalation = naviv1.Escalation
 
 // Serving names what an escalation handler's chat serves.
-type Serving struct {
-	Escalation string `json:"escalation"`
-	Chat       string `json:"chat"`
-}
+type Serving = naviv1.Serving
 
-// Issue names a GitHub issue.
-type Issue struct {
-	// Repo is owner/name.
-	Repo   string `json:"repo"`
-	Number int    `json:"number"`
-}
+// Issue names a GitHub issue. Repo is owner/name.
+type Issue = naviv1.Issue
 
 // ChatRequest describes a new chat. It is what navi starts a chat with.
-type ChatRequest struct {
-	ID        string  `json:"id"`
-	Title     string  `json:"title"`
-	StartedBy *Person `json:"started_by,omitempty"`
-	// Host names the machine whose core worker runs the session.
-	Host string `json:"host"`
-	// Backend is "kubernetes" for a pod of its own, anything else the host
-	// backend on Host.
-	Backend      string       `json:"backend,omitempty"`
-	Model        string       `json:"model,omitempty"`
-	Models       []string     `json:"models,omitempty"`
-	Repositories []Repository `json:"repositories"`
-	Issue        *Issue       `json:"issue,omitempty"`
-	// Owner is the ID of a workflow that gets a Report after each turn.
-	Owner      string      `json:"owner,omitempty"`
-	Escalation *Escalation `json:"escalation,omitempty"`
-	// Project is the navi project. Empty is the core project.
-	Project    string `json:"project,omitempty"`
-	Restricted bool   `json:"restricted,omitempty"`
-	// Scope is the chat's effective GitHub authority, resolved once by navi.
-	Scope      *scope.Scope `json:"scope,omitempty"`
-	Parent     string       `json:"parent,omitempty"`
-	Depth      int          `json:"depth,omitempty"`
-	Handler    bool         `json:"handler,omitempty"`
-	PoolScope  string       `json:"pool_scope,omitempty"`
-	Pool       string       `json:"pool,omitempty"`
-	Serves     *Serving     `json:"serves,omitempty"`
-	ReviewHint string       `json:"review_hint,omitempty"`
-}
+// Host names the machine whose core worker runs the session. Backend is
+// "kubernetes" for a pod of its own, anything else the host backend on Host.
+// Owner is the ID of a workflow that gets a Report after each turn. Project
+// is the navi project, empty for the core project. Scope is the chat's
+// effective GitHub authority, resolved once by navi.
+type ChatRequest = naviv1.ChatRequest
 
-// Kind is what the chat is to the page.
-func (r ChatRequest) Kind() Kind {
+// KindOf is what the chat the request starts is to the page.
+func KindOf(request *ChatRequest) Kind {
 	switch {
-	case r.Escalation != nil:
+	case request.GetEscalation() != nil:
 		return KindEscalation
-	case r.Owner != "":
+	case request.GetOwner() != "":
 		return KindSession
 	default:
 		return KindChat
@@ -126,128 +84,157 @@ func (r ChatRequest) Kind() Kind {
 }
 
 // Pick is one element the person picked on a design board.
-type Pick struct {
-	Artboard string `json:"artboard"`
-	Page     string `json:"page"`
-	Selector string `json:"selector"`
-	Tag      string `json:"tag"`
-	Text     string `json:"text,omitempty"`
-	HTML     string `json:"html,omitempty"`
-	Box      struct {
-		X      int `json:"x"`
-		Y      int `json:"y"`
-		Width  int `json:"width"`
-		Height int `json:"height"`
-	} `json:"box"`
-	Styles map[string]string `json:"styles,omitempty"`
-}
+type Pick = naviv1.Pick
+
+// PickBox is where a picked element is on its artboard.
+type PickBox = naviv1.Pick_Box
 
 // Message is the payload of SignalMessage. Its ID is that of the turn that
 // answers it.
-type Message struct {
-	ID         string  `json:"id"`
-	Text       string  `json:"text"`
-	From       *Person `json:"from,omitempty"`
-	Restricted bool    `json:"restricted,omitempty"`
-	Picks      []Pick  `json:"picks,omitempty"`
-}
+type Message = naviv1.Message
 
 // Report is the payload of SignalReport, and a chat's last result.
-type Report struct {
-	ChatID     string         `json:"chat_id,omitempty"`
-	Attention  bool           `json:"attention,omitempty"`
-	Message    string         `json:"message,omitempty"`
-	StopReason string         `json:"stop_reason,omitempty"`
-	Text       string         `json:"text,omitempty"`
-	Error      string         `json:"error,omitempty"`
-	Stopped    bool           `json:"stopped,omitempty"`
-	StoppedBy  string         `json:"stopped_by,omitempty"`
-	Resumes    int            `json:"resumes,omitempty"`
-	GaveUp     bool           `json:"gave_up,omitempty"`
-	Idle       bool           `json:"idle"`
-	Ended      bool           `json:"ended,omitempty"`
-	Escalation *EscalationRef `json:"escalation,omitempty"`
-}
+type Report = naviv1.Report
 
-// ChatStatus says what a chat is doing.
-type ChatStatus string
+// ChatStatus says what a chat is doing. ChatState.Status holds it.
+type ChatStatus = string
 
 // Statuses of a chat.
 const (
-	ChatOpening   ChatStatus = "opening"
-	ChatIdle      ChatStatus = "idle"
-	ChatRunning   ChatStatus = "running"
-	ChatEscalated ChatStatus = "escalated"
-	ChatClosing   ChatStatus = "closing"
-	ChatClosed    ChatStatus = "closed"
-	ChatFailed    ChatStatus = "failed"
+	ChatOpening   = "opening"
+	ChatIdle      = "idle"
+	ChatRunning   = "running"
+	ChatEscalated = "escalated"
+	ChatClosing   = "closing"
+	ChatClosed    = "closed"
+	ChatFailed    = "failed"
 )
 
 // Probe is a probe a chat deployed.
-type Probe struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-}
+type Probe = naviv1.Probe
 
 // Child is a child chat owned by a chat.
-type Child struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Message   string `json:"message,omitempty"`
-	Done      bool   `json:"done"`
-	Attention bool   `json:"attention,omitempty"`
-	Result    Report `json:"result"`
-}
+type Child = naviv1.Child
 
-// OperatorBasis is why an operator token was issued.
-type OperatorBasis string
+// OperatorBasis is why an operator token was issued. OperatorIssued.Basis
+// holds it.
+type OperatorBasis = string
 
 const (
 	// OperatorBasisStarted is a chat that an admin started in the page.
-	OperatorBasisStarted OperatorBasis = "started"
+	OperatorBasisStarted = "started"
 	// OperatorBasisIssue is the chat of an issue that an admin labelled.
-	OperatorBasisIssue OperatorBasis = "issue"
+	OperatorBasisIssue = "issue"
 )
 
 // OperatorIssued is one operator token grant. It holds no token.
-type OperatorIssued struct {
-	At      time.Time     `json:"at"`
-	Expires time.Time     `json:"expires"`
-	By      string        `json:"by"`
-	Basis   OperatorBasis `json:"basis"`
-}
+type OperatorIssued = naviv1.OperatorIssued
 
 // OperatorAccess is the record of a chat's operator grants that navi shows.
-type OperatorAccess struct {
-	Count int              `json:"count"`
-	Last  []OperatorIssued `json:"last,omitempty"`
+type OperatorAccess = naviv1.OperatorAccess
+
+// ChatState is the chat workflow's input and state, and what QueryState
+// returns. A new chat starts from a ChatState that holds only its Request
+// and its first message in Pending.
+type ChatState = naviv1.ChatState
+
+// Lease is a place a session or a model turn holds in a limit.
+type Lease = naviv1.Lease
+
+// Session is the chat's open session, as its state keeps it.
+type Session = naviv1.Session
+
+// LeaseMessage is the state's record of a p7 lease. Nil stays nil.
+func LeaseMessage(lease *p7.Lease) *Lease {
+	if lease == nil {
+		return nil
+	}
+	return &Lease{Limit: lease.Limit, Id: lease.ID}
 }
 
-// ChatState is what QueryState returns from a chat.
-type ChatState struct {
-	Probes       []Probe           `json:"probes,omitempty"`
-	Operator     *OperatorAccess   `json:"operator,omitempty"`
-	Children     []Child           `json:"children,omitempty"`
-	Escalations  []EscalationRef   `json:"escalations,omitempty"`
-	Attention    bool              `json:"attention,omitempty"`
-	Result       Report            `json:"result"`
-	ModelLeases  []*p7.Lease       `json:"model_leases,omitempty"`
-	Request      ChatRequest       `json:"request"`
-	Status       ChatStatus        `json:"status"`
-	Session      *p7.Session       `json:"session,omitempty"`
-	Pending      []Message         `json:"pending,omitempty"`
-	Current      *Message          `json:"current,omitempty"`
-	Turns        int               `json:"turns"`
-	Closing      bool              `json:"closing,omitempty"`
-	Resumes      int               `json:"resumes,omitempty"`
-	Senders      map[string]string `json:"senders,omitempty"`
-	StoppedBy    *Person           `json:"stopped_by,omitempty"`
-	ClosedBy     *Person           `json:"closed_by,omitempty"`
-	Briefed      bool              `json:"briefed,omitempty"`
-	Learnings    int               `json:"learnings,omitempty"`
-	LastLearning string            `json:"last_learning,omitempty"`
-	Archived     bool              `json:"archived,omitempty"`
-	Board        *Board            `json:"board,omitempty"`
-	LastStop     string            `json:"last_stop,omitempty"`
-	Error        string            `json:"error,omitempty"`
+// LeaseOf is the p7 lease the state records. Nil stays nil.
+func LeaseOf(lease *Lease) *p7.Lease {
+	if lease == nil {
+		return nil
+	}
+	return &p7.Lease{Limit: lease.GetLimit(), ID: lease.GetId()}
+}
+
+// SessionMessage is the state's record of a p7 session. Nil stays nil.
+func SessionMessage(session *p7.Session) *Session {
+	if session == nil {
+		return nil
+	}
+	message := &Session{
+		Id:        session.ID,
+		TaskQueue: session.TaskQueue,
+		Lease:     LeaseMessage(session.Lease),
+		Reports:   session.Reports,
+		Pod:       session.Pod,
+	}
+	for _, input := range session.Inputs {
+		message.Inputs = append(message.Inputs, &naviv1.ResolvedInput{
+			Destination: input.Destination, Repository: input.Repository, Ref: input.Ref, Commit: input.Commit,
+		})
+	}
+	if pool := session.Pool; pool != nil {
+		message.Pool = &naviv1.SessionPool{
+			Name:              pool.Name,
+			MaxWorkers:        int32(pool.MaxWorkers),
+			SessionsPerWorker: int32(pool.SessionsPerWorker),
+			Pod:               &naviv1.PodSpec{Image: pool.Pod.Image, Requests: pool.Pod.Requests, Limits: pool.Pod.Limits},
+		}
+		if pool.IdleTimeout != 0 {
+			message.Pool.IdleTimeout = durationpb.New(pool.IdleTimeout)
+		}
+	}
+	return message
+}
+
+// SessionOf is the p7 session the state records, to run turns on and close.
+// Nil stays nil.
+func SessionOf(message *Session) *p7.Session {
+	if message == nil {
+		return nil
+	}
+	session := &p7.Session{
+		ID:        message.GetId(),
+		TaskQueue: message.GetTaskQueue(),
+		Lease:     LeaseOf(message.GetLease()),
+		Reports:   message.GetReports(),
+		Pod:       message.GetPod(),
+	}
+	for _, input := range message.GetInputs() {
+		session.Inputs = append(session.Inputs, p7.ResolvedInput{
+			Destination: input.GetDestination(), Repository: input.GetRepository(), Ref: input.GetRef(), Commit: input.GetCommit(),
+		})
+	}
+	if pool := message.GetPool(); pool != nil {
+		session.Pool = &p7.SessionPool{
+			Name:              pool.GetName(),
+			MaxWorkers:        int(pool.GetMaxWorkers()),
+			SessionsPerWorker: int(pool.GetSessionsPerWorker()),
+			IdleTimeout:       pool.GetIdleTimeout().AsDuration(),
+		}
+		session.Pool.Pod.Image = pool.GetPod().GetImage()
+		session.Pool.Pod.Requests = pool.GetPod().GetRequests()
+		session.Pool.Pod.Limits = pool.GetPod().GetLimits()
+	}
+	return session
+}
+
+// Timestamp is t as a message field. The zero time is unset.
+func Timestamp(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
+}
+
+// TimeOf is the time a message field holds. Unset is the zero time.
+func TimeOf(t *timestamppb.Timestamp) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return t.AsTime()
 }
