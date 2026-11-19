@@ -37,13 +37,13 @@ func escalationTools(state *State) []p7.Tool {
 			if err != nil {
 				return p7.ToolResult{}, err
 			}
-			return p7.TextResult(escalatedText(id)), nil
+			return p7.TextResult(EscalatedText(id)), nil
 		},
 	}}
 }
 
-// escalatedText is what the agent is told after it escalated.
-func escalatedText(id string) string {
+// EscalatedText is what the agent is told after it escalated.
+func EscalatedText(id string) string {
 	return fmt.Sprintf("Escalation %s is raised and a person will see it. End your turn now. The answer arrives in this chat as a message, and you go on from it. Do not poll or wait for it.", id)
 }
 
