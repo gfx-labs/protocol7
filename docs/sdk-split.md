@@ -38,7 +38,7 @@ navi reads and drives the tenant's workflows by name. Today those names live in 
 
 `github.com/gfx-labs/protocol7/pkg/domain/navi`. It holds constants, search attribute keys, memo keys and the JSON types that cross the wire. It imports only `go.temporal.io/sdk/temporal` and the standard library.
 
-It carries `const ContractVersion = 1`. A tenant's worker sets it as a memo field (`MemoContractVersion = "contract"`) on every workflow it starts. navi reads that field and refuses actions it cannot express for a version it does not know, rather than sending signals the workflow would drop. A change that adds a signal or a field keeps the version. A change that renames or removes one raises it, and navi supports the old and new versions for one release. The wire strings below do not change in the split: running workflows are named `selfdev.Chat`, and renaming would orphan them.
+It carries `const ContractVersion = 2`. Version 2 (#48) made the chat, escalation and handler payloads navi.v1 protobuf messages. A tenant's worker sets it as a memo field (`MemoContractVersion = "contract"`) on every workflow it starts. navi reads that field and refuses actions it cannot express for a version it does not know, rather than sending signals the workflow would drop. A change that adds a signal or a field keeps the version. A change that renames or removes one raises it, and navi supports the old and new versions for one release. The wire strings below do not change in the split: running workflows are named `selfdev.Chat`, and renaming would orphan them.
 
 ### Workflow types and task queue
 
