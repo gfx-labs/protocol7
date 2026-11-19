@@ -17,6 +17,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.55.0
 	github.com/spiffe/go-spiffe/v2 v2.7.0
+	github.com/stretchr/testify v1.12.1
 	go.temporal.io/api v1.64.3
 	go.temporal.io/sdk v1.51.0
 	go.uber.org/fx v1.24.0
@@ -56,7 +57,6 @@ require (
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
