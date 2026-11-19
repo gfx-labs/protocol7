@@ -151,7 +151,7 @@ type EscalationNotice = navi.EscalationNotice
 
 // EscalationSearchAttributes are the search attributes an escalation
 // workflow is started with. The state changes with the workflow.
-func EscalationSearchAttributes(request EscalationRequest) temporal.SearchAttributes {
+func EscalationSearchAttributes(request *EscalationRequest) temporal.SearchAttributes {
 	updates := []temporal.SearchAttributeUpdate{
 		AttributeKind.ValueSet(string(KindEscalation)),
 		AttributeParent.ValueSet(request.Chat),
@@ -171,7 +171,7 @@ func EscalationSearchAttributes(request EscalationRequest) temporal.SearchAttrib
 
 // EscalationMemo is the memo an escalation workflow is started with: what
 // the page lists it by.
-func EscalationMemo(request EscalationRequest) map[string]any {
+func EscalationMemo(request *EscalationRequest) map[string]any {
 	return map[string]any{MemoTitle: request.Title, MemoReason: oneLine(request.Why, 200)}
 }
 
@@ -184,7 +184,7 @@ var handoffOptions = workflow.ActivityOptions{
 }
 
 // Validate refuses a request that lacks what a person needs to act on it.
-func validateEscalation(r EscalationRequest) error {
+func validateEscalation(r *EscalationRequest) error {
 	for name, text := range map[string]string{"need": r.Need, "why": r.Why, "tried": r.Tried, "next": r.Next} {
 		if len(text) > EscalationFieldLimit {
 			return fmt.Errorf("%s is longer than %d bytes", name, EscalationFieldLimit)
@@ -222,22 +222,25 @@ func oneLine(text string, limit int) string {
 // handoff names the activity that gives the escalation to the app's handler.
 // Empty forwards it to a person at once. validateDecision, when set, refuses a
 // decision of the handler the app does not accept.
-func runEscalation(ctx workflow.Context, state EscalationState, handoff string, validateDecision func(EscalationDecision) error) (EscalationState, error) {
-	if err := workflow.SetQueryHandler(ctx, QueryEscalation, func() (EscalationState, error) { return state, nil }); err != nil {
+func runEscalation(ctx workflow.Context, state *EscalationState, handoff string, validateDecision func(*EscalationDecision) error) (*EscalationState, error) {
+	if state == nil {
+		state = &EscalationState{}
+	}
+	if err := workflow.SetQueryHandler(ctx, QueryEscalation, func() (*EscalationState, error) { return state, nil }); err != nil {
 		return state, err
 	}
 	if state.Status == "" {
-		state.Status, state.Raised, state.Changed = EscalationOpen, workflow.Now(ctx), workflow.Now(ctx)
+		state.Status, state.Raised, state.Changed = EscalationOpen, navi.Timestamp(workflow.Now(ctx)), navi.Timestamp(workflow.Now(ctx))
 	}
 	chatID := WorkflowID(state.Request.Chat)
 	// tell sends the chat what changed. The chat having ended is no concern of
 	// the escalation.
-	tell := func(ctx workflow.Context, notice EscalationNotice) error {
+	tell := func(ctx workflow.Context, notice *EscalationNotice) error {
 		return workflow.SignalExternalWorkflow(ctx, chatID, "", SignalEscalation, notice).Get(ctx, nil)
 	}
 	// setState records the state in the search attribute, which navi lists by.
 	setState := func(ctx workflow.Context, status EscalationStatus) error {
-		state.Status, state.Changed = status, workflow.Now(ctx)
+		state.Status, state.Changed = status, navi.Timestamp(workflow.Now(ctx))
 		return workflow.UpsertTypedSearchAttributes(ctx, AttributeEscalationState.ValueSet(string(status)))
 	}
 	// move changes the state, in the search attribute and in the chat.
@@ -245,7 +248,7 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 		if err := setState(ctx, status); err != nil {
 			return err
 		}
-		err := tell(ctx, EscalationNotice{ID: state.Request.ID, Status: status, Answer: answer})
+		err := tell(ctx, &EscalationNotice{Id: state.Request.Id, Status: status, Answer: answer})
 		if status == EscalationResolved || status == EscalationDeclined {
 			state.Delivered = err == nil
 		}
@@ -257,22 +260,22 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 			return nil
 		}
 		outcome := string(state.Decision.Outcome)
-		if reviewed(&state) {
+		if reviewed(state) {
 			outcome += " (reviewed)"
 		}
 		return workflow.UpsertMemo(ctx, map[string]any{MemoOutcome: outcome})
 	}
 
-	if err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateEscalationResolve, func(ctx workflow.Context, answer EscalationAnswer) (EscalationState, error) {
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateEscalationResolve, func(ctx workflow.Context, answer *EscalationAnswer) (*EscalationState, error) {
 		answer.Text = strings.TrimSpace(answer.Text)
-		state.Answer = &answer
+		state.Answer = answer
 		// The state is set before the chat is told, so that a second answer
 		// that comes while this one waits for the chat is refused.
-		if err := move(ctx, EscalationResolved, &answer); err != nil {
+		if err := move(ctx, EscalationResolved, answer); err != nil {
 			return state, err
 		}
 		return state, nil
-	}, workflow.UpdateHandlerOptions{Validator: func(_ workflow.Context, answer EscalationAnswer) error {
+	}, workflow.UpdateHandlerOptions{Validator: func(_ workflow.Context, answer *EscalationAnswer) error {
 		switch {
 		case state.Status == EscalationResolved:
 			return fmt.Errorf("this escalation is resolved already")
@@ -288,23 +291,23 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 		return state, err
 	}
 
-	if err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateEscalationDecide, func(ctx workflow.Context, decision EscalationDecision) (EscalationState, error) {
-		decision.At = workflow.Now(ctx)
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateEscalationDecide, func(ctx workflow.Context, decision *EscalationDecision) (*EscalationState, error) {
+		decision.At = navi.Timestamp(workflow.Now(ctx))
 		decision.Text, decision.Reasoning = strings.TrimSpace(decision.Text), strings.TrimSpace(decision.Reasoning)
-		state.Decision = &decision
+		state.Decision = decision
 		if state.Handler == "" {
 			state.Handler = decision.Handler
 		}
 		var err error
 		switch decision.Outcome {
 		case OutcomeResolved, OutcomeDeclined:
-			answer := EscalationAnswer{Text: decision.Text, By: &Person{Login: HandlerLogin}, Restricted: state.Request.Session != nil && state.Request.Session.Restricted}
-			state.Answer = &answer
+			answer := &EscalationAnswer{Text: decision.Text, By: &Person{Login: HandlerLogin}, Restricted: state.Request.Session != nil && state.Request.Session.Restricted}
+			state.Answer = answer
 			status := EscalationResolved
 			if decision.Outcome == OutcomeDeclined {
 				status = EscalationDeclined
 			}
-			err = move(ctx, status, &answer)
+			err = move(ctx, status, answer)
 		default:
 			state.Note = decision.Text
 			err = move(ctx, EscalationForwarded, nil)
@@ -313,7 +316,7 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 			return state, err
 		}
 		return state, remember(ctx)
-	}, workflow.UpdateHandlerOptions{Validator: func(_ workflow.Context, decision EscalationDecision) error {
+	}, workflow.UpdateHandlerOptions{Validator: func(_ workflow.Context, decision *EscalationDecision) error {
 		switch {
 		case state.Status != EscalationOpen && state.Status != EscalationHandling:
 			return fmt.Errorf("this escalation is %s already", state.Status)
@@ -334,9 +337,9 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 		return state, err
 	}
 
-	if err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateEscalationReview, func(ctx workflow.Context, review EscalationReview) (EscalationState, error) {
-		review.Text, review.At = strings.TrimSpace(review.Text), workflow.Now(ctx)
-		state.Review = &review
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateEscalationReview, func(ctx workflow.Context, review *EscalationReview) (*EscalationState, error) {
+		review.Text, review.At = strings.TrimSpace(review.Text), navi.Timestamp(workflow.Now(ctx))
+		state.Review = review
 		if state.Status == EscalationDeclined {
 			if err := setState(ctx, EscalationResolved); err != nil {
 				return state, err
@@ -344,16 +347,16 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 		}
 		if review.Text != "" {
 			// The person's answer replaces the handler's for the chat.
-			answer := EscalationAnswer{Text: review.Text, By: review.By, Restricted: review.Restricted}
-			err := tell(ctx, EscalationNotice{ID: state.Request.ID, Status: EscalationResolved, Answer: &answer, Override: true})
+			answer := &EscalationAnswer{Text: review.Text, By: review.By, Restricted: review.Restricted}
+			err := tell(ctx, &EscalationNotice{Id: state.Request.Id, Status: EscalationResolved, Answer: answer, Override: true})
 			state.Delivered = err == nil
 		}
 		return state, remember(ctx)
-	}, workflow.UpdateHandlerOptions{Validator: func(_ workflow.Context, review EscalationReview) error {
+	}, workflow.UpdateHandlerOptions{Validator: func(_ workflow.Context, review *EscalationReview) error {
 		switch {
 		case !reviewable(state.Decision) || state.Status != EscalationResolved && state.Status != EscalationDeclined:
 			return fmt.Errorf("the handler resolved or declined nothing here, so there is nothing to review")
-		case reviewed(&state):
+		case reviewed(state):
 			return fmt.Errorf("a person reviewed this escalation already")
 		case strings.TrimSpace(review.Text) == "" && state.Status == EscalationResolved:
 			return fmt.Errorf("say what the chat should do instead: the handler's answer reached it already")
@@ -373,8 +376,8 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 		if state.Status != EscalationOpen && state.Status != EscalationHandling {
 			return
 		}
-		state.Decision = &EscalationDecision{Outcome: OutcomeForwarded, Text: note, Reasoning: reasoning, Handler: state.Handler, At: workflow.Now(ctx)}
-		_ = forward(ctx, &state, note, move)
+		state.Decision = &EscalationDecision{Outcome: OutcomeForwarded, Text: note, Reasoning: reasoning, Handler: state.Handler, At: navi.Timestamp(workflow.Now(ctx))}
+		_ = forward(ctx, state, note, move)
 		_ = remember(ctx)
 	}
 	workflow.Go(ctx, func(ctx workflow.Context) {
@@ -404,7 +407,7 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 		if workflow.GetVersion(ctx, versionEscalationHandler, workflow.DefaultVersion, 1) == workflow.DefaultVersion || handoff == "" {
 			// Before the handler, and in an app that has none, an escalation
 			// goes straight to a person.
-			if err := forward(ctx, &state, "", move); err != nil {
+			if err := forward(ctx, state, "", move); err != nil {
 				return state, err
 			}
 		} else {
@@ -435,8 +438,8 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string, 
 		return state, nil
 	}
 	// A resolution or a refusal of the handler waits for a person's review.
-	if reviewable(state.Decision) && !reviewed(&state) {
-		if _, err := workflow.AwaitWithTimeout(ctx, reviewWindow, func() bool { return reviewed(&state) }); err != nil {
+	if reviewable(state.Decision) && !reviewed(state) {
+		if _, err := workflow.AwaitWithTimeout(ctx, reviewWindow, func() bool { return reviewed(state) }); err != nil {
 			return state, nil
 		}
 	}
@@ -458,39 +461,39 @@ func forward(ctx workflow.Context, state *EscalationState, note string, move fun
 
 // answerMessage is the message that carries an answer to the chat. Its ID
 // is the escalation's, so that a signal that came twice is taken once.
-func answerMessage(ref EscalationRef, answer EscalationAnswer) Message {
+func answerMessage(ref *EscalationRef, answer *EscalationAnswer) *Message {
 	who := "a person"
 	if answer.By != nil && answer.By.Login == HandlerLogin {
 		who = "the escalation handler (an agent, not a person)"
 	} else if answer.By != nil && answer.By.Login != "" {
 		who = answer.By.Login
 	}
-	text := fmt.Sprintf("Answer to your escalation %s (%q), from %s:\n\n%s\n\nGo on with what you said you would do once unblocked.", ref.ID, ref.Title, who, answer.Text)
-	return Message{ID: "escalation-" + ref.ID, Text: text, Restricted: answer.Restricted}
+	text := fmt.Sprintf("Answer to your escalation %s (%q), from %s:\n\n%s\n\nGo on with what you said you would do once unblocked.", ref.Id, ref.Title, who, answer.Text)
+	return &Message{Id: "escalation-" + ref.Id, Text: text, Restricted: answer.Restricted}
 }
 
 // declinedMessage tells the chat that its escalation was declined. It gives
 // the chat no new permission and no way round the refusal.
-func declinedMessage(ref EscalationRef, answer EscalationAnswer) Message {
-	text := fmt.Sprintf("Your escalation %s (%q) was declined by the escalation handler, because the request should not be done:\n\n%s\n\nDo not do what it asked for, and do not escalate the same request again. A person has been told. Go on with what you can do within your own reach, and say in your last message of the turn what is left undone.", ref.ID, ref.Title, answer.Text)
-	return Message{ID: "escalation-" + ref.ID, Text: text, Restricted: answer.Restricted}
+func declinedMessage(ref *EscalationRef, answer *EscalationAnswer) *Message {
+	text := fmt.Sprintf("Your escalation %s (%q) was declined by the escalation handler, because the request should not be done:\n\n%s\n\nDo not do what it asked for, and do not escalate the same request again. A person has been told. Go on with what you can do within your own reach, and say in your last message of the turn what is left undone.", ref.Id, ref.Title, answer.Text)
+	return &Message{Id: "escalation-" + ref.Id, Text: text, Restricted: answer.Restricted}
 }
 
 // overrideMessage tells the chat that a person replaced the handler's decision.
-func overrideMessage(ref EscalationRef, answer EscalationAnswer) Message {
+func overrideMessage(ref *EscalationRef, answer *EscalationAnswer) *Message {
 	who := "a person"
 	if answer.By != nil && answer.By.Login != "" {
 		who = answer.By.Login
 	}
-	text := fmt.Sprintf("%s reviewed the escalation handler's decision on your escalation %s (%q) and overrides it. What they say replaces the handler's answer:\n\n%s\n\nGo on from that.", who, ref.ID, ref.Title, answer.Text)
-	return Message{ID: "escalation-" + ref.ID + "-override", Text: text, Restricted: answer.Restricted}
+	text := fmt.Sprintf("%s reviewed the escalation handler's decision on your escalation %s (%q) and overrides it. What they say replaces the handler's answer:\n\n%s\n\nGo on from that.", who, ref.Id, ref.Title, answer.Text)
+	return &Message{Id: "escalation-" + ref.Id + "-override", Text: text, Restricted: answer.Restricted}
 }
 
 // openEscalations counts the escalations of the chat that wait.
 func openEscalations(state *State) int {
 	count := 0
 	for _, ref := range state.Escalations {
-		if ref.Status.Waiting() {
+		if navi.EscalationWaiting(ref.Status) {
 			count++
 		}
 	}
@@ -509,38 +512,38 @@ func idleStatus(state *State) Status {
 // takeEscalation applies what an escalation told the chat. The answer comes
 // as a message, which the chat takes like any other. It returns the message
 // to queue, if any.
-func takeEscalation(state *State, notice EscalationNotice) (Message, bool) {
+func takeEscalation(state *State, notice *EscalationNotice) (*Message, bool) {
 	for index, ref := range state.Escalations {
-		if ref.ID != notice.ID {
+		if ref.Id != notice.Id {
 			continue
 		}
 		if notice.Override {
 			// A person's review of the handler's decision. It reaches the chat
 			// once, whatever the chat does meanwhile.
-			if ref.Overridden || ref.Status.Waiting() || notice.Answer == nil {
-				return Message{}, false
+			if ref.Overridden || navi.EscalationWaiting(ref.Status) || notice.Answer == nil {
+				return nil, false
 			}
 			state.Escalations[index].Overridden = true
-			return overrideMessage(state.Escalations[index], *notice.Answer), true
+			return overrideMessage(state.Escalations[index], notice.Answer), true
 		}
-		if !ref.Status.Waiting() {
+		if !navi.EscalationWaiting(ref.Status) {
 			// A signal that came again.
-			return Message{}, false
+			return nil, false
 		}
 		state.Escalations[index].Status = notice.Status
 		if state.Status == StatusIdle || state.Status == StatusEscalated {
 			state.Status = idleStatus(state)
 		}
 		if notice.Answer == nil {
-			return Message{}, false
+			return nil, false
 		}
 		switch notice.Status {
 		case EscalationResolved:
-			return answerMessage(state.Escalations[index], *notice.Answer), true
+			return answerMessage(state.Escalations[index], notice.Answer), true
 		case EscalationDeclined:
-			return declinedMessage(state.Escalations[index], *notice.Answer), true
+			return declinedMessage(state.Escalations[index], notice.Answer), true
 		}
-		return Message{}, false
+		return nil, false
 	}
-	return Message{}, false
+	return nil, false
 }

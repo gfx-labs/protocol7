@@ -9,6 +9,7 @@ import (
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/gfx-labs/protocol7/pkg/domain/navi"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
 
@@ -33,7 +34,7 @@ func escalationTools(state *State) []p7.Tool {
 			if err := json.Unmarshal(call.Arguments, &args); err != nil {
 				return p7.ToolResult{}, err
 			}
-			id, err := raiseEscalation(ctx, state, EscalationRequest{Need: args.Need, Why: args.Why, Tried: args.Tried, Next: args.Next})
+			id, err := raiseEscalation(ctx, state, &EscalationRequest{Need: args.Need, Why: args.Why, Tried: args.Tried, Next: args.Next})
 			if err != nil {
 				return p7.ToolResult{}, err
 			}
@@ -50,7 +51,7 @@ func EscalatedText(id string) string {
 // raiseEscalation starts the escalation's workflow for the chat and returns
 // its ID. The escalation is a workflow of its own: it outlives a turn, and a
 // continue-as-new of the chat, and tells the chat by signal.
-func raiseEscalation(ctx workflow.Context, state *State, request EscalationRequest) (string, error) {
+func raiseEscalation(ctx workflow.Context, state *State, request *EscalationRequest) (string, error) {
 	request.Need, request.Why = strings.TrimSpace(request.Need), strings.TrimSpace(request.Why)
 	request.Tried, request.Next = strings.TrimSpace(request.Tried), strings.TrimSpace(request.Next)
 	if err := validateEscalation(request); err != nil {
@@ -66,7 +67,7 @@ func raiseEscalation(ctx workflow.Context, state *State, request EscalationReque
 	if err != nil {
 		return "", err
 	}
-	request.ID, request.Chat = id, state.Request.ID
+	request.Id, request.Chat = id, state.Request.Id
 	request.Issue, request.Project, request.StartedBy = state.Request.Issue, state.Request.Project, state.Request.StartedBy
 	request.Session = &EscalationSession{
 		Host: state.Request.Host, Backend: state.Request.Backend, Model: state.Request.Model, Models: state.Request.Models,
@@ -85,18 +86,18 @@ func raiseEscalation(ctx workflow.Context, state *State, request EscalationReque
 		Memo:                     EscalationMemo(request),
 		WorkflowExecutionTimeout: escalationExpiry,
 	})
-	future := workflow.ExecuteChildWorkflow(childCtx, EscalationWorkflowName, EscalationState{Request: request})
+	future := workflow.ExecuteChildWorkflow(childCtx, EscalationWorkflowName, &EscalationState{Request: request})
 	if err := future.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
 		return "", err
 	}
-	ref := EscalationRef{ID: id, Title: request.Title, Status: EscalationOpen}
+	ref := &EscalationRef{Id: id, Title: request.Title, Status: EscalationOpen}
 	state.Escalations = append(state.Escalations, ref)
 	if state.Status == StatusIdle {
 		state.Status = StatusEscalated
 	}
 	// An owner that works for the chat, such as an issue's workflow, hears of
 	// it at once and not when the turn ends.
-	report(ctx, *state, Report{ChatID: state.Request.ID, Escalation: &ref})
+	report(ctx, *state, &Report{ChatId: state.Request.Id, Escalation: ref})
 	return id, nil
 }
 
@@ -104,8 +105,8 @@ func raiseEscalation(ctx workflow.Context, state *State, request EscalationReque
 // the chat does.
 func withdrawEscalations(ctx workflow.Context, state *State) {
 	for _, ref := range state.Escalations {
-		if ref.Status.Waiting() {
-			_ = workflow.RequestCancelExternalWorkflow(ctx, EscalationWorkflowID(ref.ID), "").Get(ctx, nil)
+		if navi.EscalationWaiting(ref.Status) {
+			_ = workflow.RequestCancelExternalWorkflow(ctx, EscalationWorkflowID(ref.Id), "").Get(ctx, nil)
 		}
 	}
 }

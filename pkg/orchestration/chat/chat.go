@@ -79,11 +79,11 @@ var (
 
 // Memo is the memo a chat's workflow is started with. It holds what the
 // page shows and never searches, and the contract version.
-func Memo(request Request) map[string]any { return navi.ChatMemo(request) }
+func Memo(request *Request) map[string]any { return navi.ChatMemo(request) }
 
 // SearchAttributes are the search attributes a chat's workflow is started
 // with.
-func SearchAttributes(request Request) temporal.SearchAttributes {
+func SearchAttributes(request *Request) temporal.SearchAttributes {
 	return navi.ChatSearchAttributes(request)
 }
 
@@ -157,7 +157,7 @@ const MaxPicks = navi.MaxPicks
 // pick script described it.
 type Pick = navi.Pick
 
-func pickContext(picks []Pick) string {
+func pickContext(picks []*Pick) string {
 	if len(picks) == 0 {
 		return ""
 	}
@@ -169,8 +169,8 @@ func pickContext(picks []Pick) string {
 		if pick.Text != "" {
 			fmt.Fprintf(&text, "   text: %q\n", pick.Text)
 		}
-		if pick.HTML != "" {
-			fmt.Fprintf(&text, "   html: %s\n", pick.HTML)
+		if pick.Html != "" {
+			fmt.Fprintf(&text, "   html: %s\n", pick.Html)
 		}
 		if len(pick.Styles) > 0 {
 			names := make([]string, 0, len(pick.Styles))
@@ -204,72 +204,55 @@ const (
 	StatusFailed    = navi.ChatFailed
 )
 
-// State is everything the chat workflow keeps. It is the workflow's input,
-// so it is also what one run hands to the next on Continue-As-New. A new
-// chat starts from a State that holds only its Request. Its exported fields
-// are those of navi.ChatState, which is what navi decodes from QueryState.
+// State is one run of the chat workflow. Its navi.ChatState is the
+// workflow's input, so it is also what one run hands to the next on
+// Continue-As-New, and what QueryState returns. A new chat starts from a
+// ChatState that holds only its Request and first message. Probes,
+// Operator, Learnings, LastLearning and Board are kept for the app's
+// extensions, which set them from their tools. The base only carries them
+// over a Continue-As-New and shows them in the state.
 type State struct {
+	*navi.ChatState
 	// options are the worker's (NewWorkflow), not the chat's, so they are
 	// not carried over a Continue-As-New.
 	options         *Options
 	modelTurnNumber int
 	modelActive     bool
 	awaiting        bool
-	// Probes, Operator, Learnings, LastLearning and Board are kept for the
-	// app's extensions, which set them from their tools. The base only
-	// carries them over a Continue-As-New and shows them in the state.
-	Probes []Probe `json:"probes,omitempty"`
-	// Operator records the operator tokens the chat was given, for navi. It
-	// holds no token.
-	Operator *navi.OperatorAccess `json:"operator,omitempty"`
-	Children []Child              `json:"children,omitempty"`
-	// Escalations are the escalations this chat raised, newest last.
-	Escalations []EscalationRef `json:"escalations,omitempty"`
-	Attention   bool            `json:"attention,omitempty"`
-	Result      Report          `json:"result"`
-	ModelLeases []*p7.Lease     `json:"model_leases,omitempty"`
-	Request     Request         `json:"request"`
-	Status      Status          `json:"status"`
-	Session     *p7.Session     `json:"session,omitempty"`
-	Pending     []Message       `json:"pending,omitempty"`
-	Current     *Message        `json:"current,omitempty"`
-	Turns       int             `json:"turns"`
-	Closing     bool            `json:"closing,omitempty"`
-	// Resumes counts the turns that continued the current message's turn
-	// after the session's processes stopped.
-	Resumes int `json:"resumes,omitempty"`
-	// Senders maps the ID of each message that was taken, which is also its
-	// turn's ID, to the login of who sent it. A message with no tailnet
-	// identity is not listed.
-	Senders map[string]string `json:"senders,omitempty"`
-	// StoppedBy is who stopped a turn last. ClosedBy is who closed the chat.
-	StoppedBy *Person `json:"stopped_by,omitempty"`
-	ClosedBy  *Person `json:"closed_by,omitempty"`
-	// Briefed is set once a turn carried the instructions to the agent.
-	Briefed bool `json:"briefed,omitempty"`
-	// Learnings counts the learnings this chat recorded, and LastLearning is
-	// the ID of the last.
-	Learnings    int    `json:"learnings,omitempty"`
-	LastLearning string `json:"last_learning,omitempty"`
-	// Archived mirrors AttributeArchived.
-	Archived bool `json:"archived,omitempty"`
-	// Board is the design board the agent showed last. Nil until it shows
-	// one.
-	Board *Board `json:"board,omitempty"`
-	// LastStop is the stop reason of the last turn.
-	LastStop string `json:"last_stop,omitempty"`
-	// Error is what went wrong last: a turn that could not be run, or the
-	// reason the chat failed.
-	Error string `json:"error,omitempty"`
+	// session is the open session that turns run on. ChatState.Session
+	// records it, and syncSession copies it there after each step that can
+	// move it to another worker.
+	session *p7.Session
 }
+
+// NewState is the state of a run that starts from start. A nil start, or
+// one without a request or result, gets empty ones.
+func NewState(start *navi.ChatState) *State {
+	if start == nil {
+		start = &navi.ChatState{}
+	}
+	if start.Request == nil {
+		start.Request = &Request{}
+	}
+	if start.Result == nil {
+		start.Result = &Report{}
+	}
+	return &State{ChatState: start, session: navi.SessionOf(start.Session)}
+}
+
+// OpenSession is the run's open session, nil before it opens.
+func (s *State) OpenSession() *p7.Session { return s.session }
+
+// syncSession records the open session in the ChatState.
+func (s *State) syncSession() { s.Session = navi.SessionMessage(s.session) }
 
 // Probe is a probe a chat deployed, which an app's extension records.
 type Probe = navi.Probe
 
 // guidanceContext introduces a message a person sent to a session that a
 // workflow runs, so that the agent tells it from the workflow's messages.
-func guidanceContext(request Request, message Message) string {
-	if request.Kind() != KindSession || message.From == nil {
+func guidanceContext(request *Request, message *Message) string {
+	if navi.KindOf(request) != KindSession || message.From == nil {
 		return ""
 	}
 	context := fmt.Sprintf("The next message is guidance from %s, a person watching this session in navi, not from the workflow that runs it. Weigh it with the task you were given.", message.From.Login)
