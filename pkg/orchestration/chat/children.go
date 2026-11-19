@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gfx-labs/protocol7/pkg/domain/navi"
+	"google.golang.org/protobuf/proto"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/workflow"
@@ -188,7 +189,8 @@ func spawnChild(ctx workflow.Context, state *State, task, title string, escalati
 	if title == "" {
 		title = "Child task"
 	}
-	request := state.Request
+	// The child's request starts as a copy of its parent's, which it must not change.
+	request := proto.CloneOf(state.Request)
 	request.Id, request.Title, request.Parent, request.Owner = id, title, state.Request.Id, workflow.GetInfo(ctx).WorkflowExecution.ID
 	request.Depth++
 	request.Issue, request.Escalation = nil, escalation
