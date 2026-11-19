@@ -67,7 +67,7 @@ type Image struct {
 	Package string
 	// Digest is "sha256:" followed by 64 lowercase hexadecimal characters.
 	Digest string
-	// Tag is the tag the build pushed, "main-<commit12>" or "pr-<number>-<commit12>".
+	// Tag is the tag the build pushed, "main-<commit12>-<name>" or "pr-<number>-<commit12>-<name>".
 	Tag string
 }
 

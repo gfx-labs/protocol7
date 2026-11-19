@@ -145,25 +145,25 @@ func (a *Activities) FindByInputs(ctx context.Context, request FindRequest) (Fin
 		if err := a.allowed(a.Repository, spec.Package); err != nil {
 			return FindResult{}, err
 		}
-		digest, err := a.Registry.Digest(ctx, spec.Package, InputsTag(request.Inputs))
+		digest, err := a.Registry.Digest(ctx, spec.Package, InputsTag(request.Inputs, spec.Name))
 		if err != nil {
 			return FindResult{}, err
 		}
 		if digest == "" {
 			return FindResult{}, nil
 		}
-		images = append(images, Image{Name: spec.Name, Package: spec.Package, Digest: digest, Tag: InputsTag(request.Inputs)})
+		images = append(images, Image{Name: spec.Name, Package: spec.Package, Digest: digest, Tag: InputsTag(request.Inputs, spec.Name)})
 	}
 	return FindResult{Images: images}, nil
 }
 
-// Tag adds a tag to images found by FindByInputs.
+// Tag adds each image's Tag to images found by FindByInputs.
 func (a *Activities) Tag(ctx context.Context, request TagRequest) error {
 	for _, image := range request.Images {
 		if err := a.allowed(a.Repository, image.Package); err != nil {
 			return err
 		}
-		if err := a.Registry.Tag(ctx, image.Package, image.Digest, request.Tag); err != nil {
+		if err := a.Registry.Tag(ctx, image.Package, image.Digest, image.Tag); err != nil {
 			return err
 		}
 	}

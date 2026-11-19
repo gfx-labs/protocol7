@@ -91,10 +91,10 @@ type FindResult struct {
 	Images []Image
 }
 
-// TagRequest asks ActivityTag to add a tag to images that exist.
+// TagRequest asks ActivityTag to add each image's Tag to it. The images
+// exist already.
 type TagRequest struct {
 	Images []Image
-	Tag    string
 }
 
 // SolveRequest asks ActivitySolve to build one image at a commit and push it
@@ -106,22 +106,24 @@ type SolveRequest struct {
 	Tags       []string
 }
 
-// InputsTag is the zot tag that marks images built from an inputs key.
-func InputsTag(inputs string) string {
+// InputsTag is the zot tag that marks an image built from an inputs key:
+// inputs-<key16>-<name>. The name keeps apart images that share a package.
+func InputsTag(inputs, name string) string {
 	if len(inputs) > 16 {
 		inputs = inputs[:16]
 	}
-	return "inputs-" + inputs
+	return "inputs-" + inputs + "-" + name
 }
 
-// RequestTag is the tag a request's images get: main-<commit12> or
-// pr-<number>-<commit12>.
-func RequestTag(request Request) string {
+// RequestTag is the tag a request's image gets: main-<commit12>-<name> or
+// pr-<number>-<commit12>-<name>. The prefix comes first for zot's retention
+// patterns, and the name keeps apart images that share a package.
+func RequestTag(request Request, name string) string {
 	short := request.Commit[:12]
 	if request.Trigger == TriggerMain {
-		return "main-" + short
+		return "main-" + short + "-" + name
 	}
-	return fmt.Sprintf("pr-%d-%s", request.PullRequest, short)
+	return fmt.Sprintf("pr-%d-%s-%s", request.PullRequest, short, name)
 }
 
 // Workflow is the workflow registered as WorkflowName.
@@ -145,7 +147,6 @@ func (b *Builder) Workflow(ctx workflow.Context, request Request) (Result, error
 	if err := workflow.ExecuteActivity(quick, ActivityResolveInputs, InputsRequest{Repository: request.Repository, Commit: request.Commit}).Get(ctx, &inputs); err != nil {
 		return Result{}, err
 	}
-	tag := RequestTag(request)
 	result := Result{Commit: request.Commit, Inputs: inputs}
 
 	var found FindResult
@@ -153,12 +154,12 @@ func (b *Builder) Workflow(ctx workflow.Context, request Request) (Result, error
 		return Result{}, err
 	}
 	if len(found.Images) == len(b.Images) {
-		if err := workflow.ExecuteActivity(quick, ActivityTag, TagRequest{Images: found.Images, Tag: tag}).Get(ctx, nil); err != nil {
-			return Result{}, err
-		}
 		for _, image := range found.Images {
-			image.Tag = tag
+			image.Tag = RequestTag(request, image.Name)
 			result.Images = append(result.Images, image)
+		}
+		if err := workflow.ExecuteActivity(quick, ActivityTag, TagRequest{Images: result.Images}).Get(ctx, nil); err != nil {
+			return Result{}, err
 		}
 		result.Reused = true
 		result.Duration = workflow.Now(ctx).Sub(started)
@@ -178,7 +179,7 @@ func (b *Builder) Workflow(ctx workflow.Context, request Request) (Result, error
 	})
 	for _, spec := range b.Images {
 		var image Image
-		request := SolveRequest{Repository: request.Repository, Commit: request.Commit, Image: spec, Tags: []string{tag, InputsTag(inputs)}}
+		request := SolveRequest{Repository: request.Repository, Commit: request.Commit, Image: spec, Tags: []string{RequestTag(request, spec.Name), InputsTag(inputs, spec.Name)}}
 		if err := workflow.ExecuteActivity(solve, ActivitySolve, request).Get(ctx, &image); err != nil {
 			return Result{}, err
 		}
