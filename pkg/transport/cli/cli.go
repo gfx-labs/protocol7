@@ -180,6 +180,7 @@ type root struct {
 	Pods    podsCommand    `cmd:"" help:"Create and delete session pods for the kubernetes backend."`
 	Dev     devCommand     `cmd:"" help:"Run a Temporal development server, an embedded NATS server and the core worker in one process."`
 	Files   filesCommand   `cmd:"" help:"Serve the sessions' workspaces for design boards, render their screenshots, and serve the artifact and operator credential activities. Runs beside the core worker."`
+	Chat    chatCommand    `cmd:"" help:"Drive navi chats over A2A: shell commands, and an MCP server for a local agent."`
 }
 
 // sessionCommand is the worker inside a session's pod. It is the host
