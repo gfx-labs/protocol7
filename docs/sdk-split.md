@@ -1,29 +1,34 @@
 # SDK split: each p7 app builds and runs its own selfdev
 
-Status: design. No code moves in this PR.
+Status: design, revised 2026-11-19. Section 1 and PRs 1 to 6 are merged. Sections 2, 3 and 5 from PR 7 on describe the revised direction: protocol7 gives an extendable base chat, and every other workflow stays in the app that runs it.
 
 ## Goal
 
 A tenant (oku-trade/oku-selfdev, oku-trade/oku-review) builds and deploys only its own images, compiled against a pinned `github.com/gfx-labs/protocol7` module. It never runs a `ghcr.io/gfx-labs/protocol7-selfdev` image. The tenant's selfdev, meaning the chat workflow worker, its session `p7-worker` and the files server, lives in the tenant's repo, binary, image and manifests. oku-review, for example, does selfdev on its own Deployment, with prompts and reviewer code from `oku-trade/oku-review/kubernetes`.
 
-protocol7-selfdev stays the platform: navi web UI, PDP, grants, network, identity, the webhooks receiver and the navi project entry for its own repo. Toward a tenant it only sends messages: Temporal signals, queries and updates, NATS reads, and forwarded webhook events.
+Each namespace provides its own chat. The tenant's binary registers the SDK's base chat with its own extensions (tools, instructions, per-turn hooks, activities) on its own worker. protocol7 does not ship issue work, reviews, learnings, probes, the operator broker or a replay harness. An app that wants one writes it in its own repository, reusing the code of another app by copying it, not by depending on it.
+
+protocol7-selfdev stays the platform: navi web UI, PDP, grants, network, identity, the webhooks receiver and the navi project entry for its own repo. Toward a tenant it only sends messages: Temporal signals, queries and updates, NATS reads, and forwarded webhook events. A project whose namespace has no chat worker has no chat: navi says so and does not start one (section 5, PR 7b).
 
 ## What was read
 
-Checked, at these revisions:
+For the first version of this design, at these revisions:
 
 - protocol7 `origin/master` (pkg groups `domain`, `execution`, `orchestration`, `p7`, `support`, `transport`, and `pkg/support/config`).
-- protocol7-selfdev `origin/master` at `e0e2bb9` ("selfdev, navi: read settings from a YAML ConfigMap, not args"). It pins protocol7 `v0.0.0-20261119011845-fa6fd39f51ce`.
-- `pkg/workflow/chat/{chat,escalation,handler,integrationtools}.go`, the names `pkg/web` uses from `chat`, `issue`, `review`, `learning`, `artifact` and `design` (counted by grep), `pkg/cli/{cli,wire,files}.go`, the package docs of `kubeop`, `acl`, `githubapp`, `upgrade`, `rollout`, `artifact` and `design`, and `containers/selfdev/Dockerfile`.
-- oku-review `origin/main`: `kubernetes/{selfdev,p7-worker}.yaml`, `Dockerfile`. oku-selfdev `origin/main`: file list of `kubernetes/` and `images/`, the image and namespace lines of `kubernetes/selfdev.yaml`.
+- protocol7-selfdev `origin/master` at `e0e2bb9`, `pkg/workflow/chat/{chat,escalation,handler,integrationtools}.go`, the names `pkg/web` uses from the workflow packages, `pkg/cli/{cli,wire,files}.go`, and `containers/selfdev/Dockerfile`.
+- oku-review `origin/main`: `kubernetes/{selfdev,p7-worker}.yaml`, `Dockerfile`. oku-selfdev `origin/main`: file list of `kubernetes/` and `images/`.
+
+For this revision, at protocol7 `3b13cac` and protocol7-selfdev `6382237`:
+
+- Every file of protocol7-selfdev `pkg/workflow/chat` that is not a test: `chat.go`, `workflow.go`, `children.go`, `escalate.go`, `escalation.go`, `handler.go`, `handleractivities.go`, `handlertools.go`, `pool.go`, `recovery.go`, `scope.go`, and the tool files (`issuetools.go`, `pulltools.go`, `learningtools.go`, `integrationtools.go`, `design.go`, `artifacts.go`, `operator.go`, `probes.go`). The chat tests `workflow_test.go` and `escalation_test.go`, and `replay_test.go`.
+- `pkg/cli/wire.go` (what the worker registers), `pkg/web/health.go` (the poller count navi already reads), the Worker Versioning section of `kubernetes/README.md` and `workerVersioning` in `kubernetes/cdk8s/src/shared.ts`.
+- protocol7 `pkg/domain/navi`, `pkg/p7/{session,tool,worker}.go`, `pkg/orchestration/upgrade`, `pkg/support/prompt`.
 
 Not checked:
 
-- `pkg/integration/a2a` is not on protocol7-selfdev `origin/master` yet (worker a2a-chats-2 is adding it). Its plan below follows the pattern of `linear` and must be confirmed when it lands.
-- The frontend (`pkg/web/ts`) beyond a grep that shows it names `kubeop`. Every Temporal call in `pkg/web` (16 Signal, Update, Execute and Query call sites) was counted, not read one by one.
-- The full oku-selfdev manifests and `images/Dockerfile`. The cutover assumes they match oku-review's shape, which the image line and namespace (`oku`) agree with.
-- Whether the oku Temporal namespaces already run versioned workers. The flags exist (`--worker-deployment`, `--worker-build-id`, `--worker-promote`), but the oku-review `selfdev` args read here do not pass them.
-- No build, test or Temporal command was run for this design.
+- The frontend (`pkg/web/ts`) beyond a grep.
+- Whether the oku Temporal namespaces run versioned workers. The core namespace does not: `workerVersioning` is `false` in `shared.ts`, so a deploy replaces the worker and running core chats replay on the new code.
+- No build, test or Temporal command was run for this document. The PRs in section 5 list the tests that prove each step.
 
 ## 1. The navi to app contract
 
@@ -89,65 +94,141 @@ navi reads session output on `p7.session.<id>.out` (`stream.Subject` in protocol
 
 The receiver in protocol7-selfdev signals `github-event` on the issue workflow and starts or signals reviews. It does not change, but it stops importing `issue` and `review` and uses the contract names instead.
 
-## 2. Package-by-package plan
+
+## 2. What protocol7 gives and what stays in the apps
 
 Placement in protocol7 follows its groups: `domain` for types, `orchestration` for Temporal workflows, `execution` for what runs beside a session, `transport` for external APIs and CLIs.
 
-| Package (protocol7-selfdev) | Decision | Destination |
+### Already in the SDK (PRs 1 to 6, merged)
+
+| Package | From protocol7-selfdev |
+| --- | --- |
+| `pkg/domain/navi`, `pkg/domain/scope` | the wire names and types, the scope part of `acl` |
+| `pkg/orchestration/upgrade`, `pkg/orchestration/rollout` | `pkg/workflow/upgrade`, `pkg/workflow/rollout` |
+| `pkg/transport/linear`, `githubapi`, `githubapp` | `pkg/integration/*` |
+| `pkg/execution/artifact`, `pkg/execution/design` | `pkg/workspace/*` |
+| `pkg/execution/kubeop` | the `Writer` and its request types |
+| `pkg/transport/cli` `p7-worker files` | the files command |
+
+These stay. They are libraries an app calls, not workflows it must run.
+
+### The base chat (PR 7)
+
+`pkg/orchestration/chat` is drawn from protocol7-selfdev `pkg/workflow/chat`. The base is what navi's contract (`pkg/domain/navi`) needs, plus the turn loop that serves it:
+
+| Base part | From (protocol7-selfdev `pkg/workflow/chat`) |
+| --- | --- |
+| `State`, the query `state` (navi `ChatState`), the contract memo and search attributes at start | `chat.go` |
+| messages queued in order, one turn each on a p7 session, the hidden context of the first turn, a person's guidance on a session | `workflow.go`, `chat.go` |
+| stop (keeps the queue unless `Discard`), dequeue, close, cancel, the update `archive` | `workflow.go` |
+| reports to an owner workflow (`chat-report`) | `workflow.go` |
+| resume of a turn whose session processes stopped | `recovery.go` |
+| continue-as-new when Temporal suggests it or the target build changed, the hourly wake of an idle chat | `workflow.go` with `pkg/orchestration/upgrade` |
+| the escalate tool, the escalation workflow, delivery of a person's answer as a message | `escalate.go`, `escalation.go` |
+| child chats (`chat_spawn`, `chat_await`, `chat_message`, `chat_attention`) | `children.go` |
+| session pools named from permissions, placement, effective scope | `pool.go`, `workflow.go`, `scope.go` |
+
+The base keeps every `workflow.GetVersion` change ID it takes over (`upgrade-wake`, `stop-keeps-queue`, `turn-resume`, `chat-model-limit`, `escalation-handler`), with the same branches, so a history written by protocol7-selfdev's chat replays on the base when the app passes the same extensions.
+
+Everything else is an extension the app passes in, and stays in the app's repository:
+
+| Extension | Today in protocol7-selfdev | Who keeps it |
 | --- | --- | --- |
-| `pkg/workflow/chat` | split | `pkg/orchestration/chat` (workflow, activities, tools). Wire names and types to `pkg/domain/navi`. |
-| `pkg/workflow/issue` | move | `pkg/orchestration/issue` |
-| `pkg/workflow/review` | move | `pkg/orchestration/review` |
-| `pkg/workflow/learning` | move | `pkg/orchestration/learning` (with `learningtest`) |
-| `pkg/workflow/upgrade` | move | `pkg/orchestration/upgrade` |
-| `pkg/workflow/rollout` | move | `pkg/orchestration/rollout` |
-| `pkg/workspace/artifact` | move | `pkg/execution/artifact` |
-| `pkg/workspace/design` | move | `pkg/execution/design` |
-| `pkg/integration/linear` | move | `pkg/transport/linear` |
-| `pkg/integration/githubapi` | move | `pkg/transport/githubapi` |
-| `pkg/integration/githubapp` | move | `pkg/transport/githubapp` |
-| `pkg/integration/a2a` | move once merged (not checked) | `pkg/transport/a2a` |
-| `pkg/cluster/kubeop` | split | `Writer` and the request types to `pkg/execution/kubeop`. `Broker` stays. |
-| `pkg/access/acl` | split | `scope.go` (Scope, Level, Intersect) to `pkg/domain/scope`. Policy, roles and Store stay. |
-| `pkg/cli` files command | move | `pkg/transport/cli` as `p7-worker files`, built on `pkg/execution/{design,artifact,kubeop}` |
-| `pkg/cluster/probe` | move with chat | `pkg/orchestration/probe` |
-| `pkg/integration/webhooks`, `pkg/web`, `cmd/webhooks` | stay | platform |
+| issue tools (`issue_*`) and their activities | `issuetools.go`, `issueactivities.go` | each app that wants them |
+| pull request tools (`pr_*`) | `pulltools.go`, `pullactivities.go` | each app that wants them |
+| learning tools and the first-turn brief | `learningtools.go`, `pkg/workflow/learning` | each app that wants them |
+| the escalation handler (an agent that decides before a person) | `handler.go`, `handleractivities.go`, `handlertools.go` | each app that wants one. Without it an escalation goes to a person at once |
+| operator credentials | `operator.go`, `pkg/cluster/kubeop` `Broker` | protocol7-selfdev only |
+| probes | `probes.go`, `pkg/cluster/probe` | protocol7-selfdev only |
+| design board and picks | `design.go` | each app that wants it, on `pkg/execution/design` |
+| artifacts | `artifacts.go` | each app that wants it, on `pkg/execution/artifact` |
+| Linear and web tools | `integrationtools.go`, `linearactivities.go`, `webactivities.go` | each app that wants them, on `pkg/transport/linear` |
+| the instructions of a chat (repositories, review rules, issue rules) | `chat.go` `instructions` | each app. The base has a short default |
+| issue, review and learning workflows | `pkg/workflow/{issue,review,learning}` | each app that wants them |
 
-Why each:
+protocol7 ships no replay harness. Each app keeps replay tests of its own histories with its own extensions, as protocol7-selfdev does in `pkg/workflow/chat/replay_test.go`.
 
-- **chat** imports `acl`, `kubeop`, `probe`, `githubapi`, `linear`, `learning`, `upgrade`, `artifact` and `design`. Each of those moves or splits first, so chat moves last among the workflows. `probe` is used by chat's probe tools. It is small (391 lines) and has no selfdev imports, so it moves to `pkg/orchestration/probe` with chat. navi does not import it.
-- **issue** and **review** import `chat`, `githubapi`, `acl` and `upgrade`. They move after chat's contract types do. A tenant that does not want issue scanning simply does not register those workflows.
-- **upgrade** and **rollout** are generic Worker Versioning helpers with no selfdev imports. They move first.
-- **artifact** has no selfdev imports. navi reads artifacts through `artifact.Store` (`Server.Artifacts`). After the move navi imports `pkg/execution/artifact` from the SDK, which is a read of shared storage, not tenant code.
-- **design**: navi uses `design.FilesClient` to proxy board files. That client moves with design. The file server (`design.Files`) is tenant side.
-- **kubeop**: `NewBroker returns nil outside the core namespace`. The broker holds the selfdev pod's projected token to issue the operator credential. That is platform only and stays in protocol7-selfdev. The `Writer`, which places the credential in a session workspace beside the core worker, moves, because a tenant's files server would run it. A tenant gets operator credentials only if the platform issues them to it, which is out of scope here.
-- **acl**: navi decides access (platform). The chat only needs the scope arithmetic ("A scope never grows: Intersect is how a child chat, a handler or an ... narrows it"). That part moves so the workflow can compute effective scope without the policy store.
-- **githubapp** mints installation tokens from a key. Tenants today get GitHub through PDP (`GH_TOKEN: pdp-proxied-github-oku-review`), so most will not use it, but the code is generic.
+### The extension API
 
-### Core-specific behavior becomes options
+```go
+package chat
 
-Where the chat now branches on "the core project" (empty `Project`, `NewBroker` returning nil, `--review-repo`, Linear teams), the SDK takes a config struct from the app instead:
+// Registry is where Register puts the workflows and activities. *p7.Worker
+// is one.
+type Registry interface {
+	RegisterWorkflow(name string, function any)
+	RegisterActivity(name string, function any)
+}
 
-- `chat.Options.Tools []p7.Tool`: tools the app adds, served by `p7.HandleTools`.
-- `chat.Options.Integrations` (today's `Integrations{Linear, LinearTeams, Web}`), set from config, not detected.
-- `chat.Options.OperatorCredentials bool`: off for tenants. The core worker in protocol7-selfdev turns it on and registers the broker activity itself.
-- `chat.Options.Project string`: the navi project name the worker serves. Empty keeps the core meaning for protocol7-selfdev.
-- `chat.Options.Prompts fs.FS`: system and tool prompts read from the app's files, so oku-review keeps its prompts under its own repo.
-- `review.Options.Repository` and `MergeMethod`, replacing `--review-repo` and `--merge-method`.
+// Options are what an app adds to the base chat. The zero value is a chat
+// with the base tools, the default instructions and escalations that go to
+// a person at once.
+type Options struct {
+	// Tools returns the app's tools for one run of a chat. It is called at
+	// the start of each run, after Continue-As-New too, and must return the
+	// same tools for the same State, because a session keeps the tools it
+	// was opened with. The base adds escalate and the child chat tools to
+	// every chat that is not an escalation handler's.
+	Tools func(chat *Chat) []p7.Tool
+	// Instructions is the hidden context of a chat's first turn. Nil uses
+	// DefaultInstructions. An error fails the turn and leaves the chat open.
+	Instructions func(request Request) (string, error)
+	// Brief is added to the first turn's context after the instructions.
+	// It may run activities. An empty result adds nothing.
+	Brief func(ctx workflow.Context, chat *Chat) string
+	// TurnContext is added to the context of every turn, after the brief.
+	TurnContext func(ctx workflow.Context, chat *Chat, message Message) string
+	// EscalationHandoff names the activity that gives a new escalation to
+	// the app's handler, which then has handlerDeadline to decide before a
+	// person gets it. Empty sends every escalation to a person at once.
+	EscalationHandoff string
+	// Activities are the app's activities, by name, registered with the
+	// workflows.
+	Activities map[string]any
+}
+
+// Chat is one run of a chat workflow, as the app's tools and hooks see it.
+type Chat struct {
+	// State is the run's state. Tools may change the fields the contract
+	// gives extensions (Board, Probes, Operator, Learnings, LastLearning).
+	State *State
+}
+
+// Escalate raises an escalation for the chat and returns its ID, as the
+// escalate tool does.
+func (c *Chat) Escalate(ctx workflow.Context, request EscalationRequest) (string, error)
+
+// Spawn starts a child chat with a task and returns its ID, as chat_spawn
+// does.
+func (c *Chat) Spawn(ctx workflow.Context, task, title string, escalation *Escalation) (string, error)
+
+// Register registers the chat workflow (navi.ChatWorkflow) and the
+// escalation workflow (navi.EscalationWorkflow) with the options, and the
+// options' activities.
+func Register(registry Registry, options Options) error
+
+// NewWorkflow is the chat workflow with the options, for a replayer.
+func NewWorkflow(options Options) func(workflow.Context, State) (Report, error)
+
+// NewEscalationWorkflow is the escalation workflow with the options.
+func NewEscalationWorkflow(options Options) func(workflow.Context, EscalationState) (EscalationState, error)
+```
+
+`State` has the exported fields of `navi.ChatState`, so the query result navi decodes is unchanged. The app's handler workflow, issue workflow and review workflow start chats by the contract names and the base `Request`, `State` and `Report` types.
+
+A tool of the app runs in the chat's workflow, as a Temporal update. Its activities run on the app's worker, on `navi.TaskQueue`. An app that drops a tool, a hook or a `GetVersion` its running chats used must let those chats drain on the old build first (section 4), because a replayed tool call or activity that the new code does not make fails the replay.
 
 ## 3. How an app assembles its worker
 
-The app writes a `main` package. Settings come from `--config` (protocol7 `pkg/support/config`: each YAML key is a flag name, command line wins over the file, the file wins over environment). There is no plan file or rule language. The registration helpers (`chat.Register`, `review.Register`) are new SDK functions that wrap the `RegisterWorkflow` and `RegisterActivities` calls `pkg/cli/wire.go` makes today.
+The app writes a `main` package. Settings come from `--config` (protocol7 `pkg/support/config`: each YAML key is a flag name). There is no plan file or rule language. The app's tools, instructions and workflows are its own Go code. The sample is oku-review's worker, with a review tool of its own and the Linear tools built on `pkg/transport/linear`.
 
 ```go
 package main
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -157,34 +238,29 @@ import (
 
 	"github.com/gfx-labs/protocol7/pkg/domain/navi"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/chat"
-	"github.com/gfx-labs/protocol7/pkg/orchestration/review"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/rollout"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 	"github.com/gfx-labs/protocol7/pkg/support/config"
+	"github.com/gfx-labs/protocol7/pkg/support/prompt"
 
 	"github.com/oku-trade/oku-review/pkg/reviewer"
 )
 
-//go:embed prompts
-var promptFiles embed.FS
-
-// SelfdevWorkerSettings are the flags of `oku-review selfdev-worker`. Each one
-// can be set as a key of the --config YAML file.
+// SelfdevWorkerSettings are the settings of `oku-review selfdev-worker`. Each
+// one is a key of the --config YAML file.
 type SelfdevWorkerSettings struct {
-	Config config.Flag `embed:""`
+	config.Flag `embed:""`
 
-	TemporalAddress      string `name:"temporal-address" required:""`
-	TemporalNamespace    string `name:"temporal-namespace" required:""`
-	TemporalServerSPIFFE string `name:"temporal-server-spiffe-id"`
-	TemporalSPIFFESocket string `name:"temporal-spiffe-socket"`
-	FilesURL             string `name:"files-url"`
-	GitHubTokenFile      string `name:"github-token-file" required:""`
-	ReviewRepository     string `name:"review-repo"`
-	MergeMethod          string `name:"merge-method" default:"squash"`
+	TemporalAddress      string   `name:"temporal-address" required:""`
+	TemporalNamespace    string   `name:"temporal-namespace" required:""`
+	TemporalServerSPIFFE string   `name:"temporal-server-spiffe-id"`
+	TemporalSPIFFESocket string   `name:"temporal-spiffe-socket"`
+	GitHubTokenFile      string   `name:"github-token-file" required:""`
+	ReviewRepository     string   `name:"review-repo" required:""`
 	LinearTeams          []string `name:"linear-team"`
-	WorkerDeployment     string `name:"worker-deployment"`
-	WorkerBuildID        string `name:"worker-build-id"`
-	WorkerPromote        bool   `name:"worker-promote"`
+	WorkerDeployment     string   `name:"worker-deployment"`
+	WorkerBuildID        string   `name:"worker-build-id"`
+	WorkerPromote        bool     `name:"worker-promote"`
 }
 
 func main() {
@@ -199,13 +275,24 @@ func main() {
 	}
 }
 
-// RunSelfdevWorker serves the chat and review workflows of the oku-review
-// project until ctx ends.
-func RunSelfdevWorker(ctx context.Context, logger *slog.Logger, settings SelfdevWorkerSettings) error {
-	prompts, err := fs.Sub(promptFiles, "prompts")
-	if err != nil {
-		return fmt.Errorf("open embedded prompts: %w", err)
+// ReviewInstructions are the hidden context of an oku-review chat's first
+// turn.
+func ReviewInstructions(request chat.Request) (string, error) {
+	text := prompt.New(prompt.Vars{"Branch": chat.Branch(request.ID), "Repositories": request.Repositories}).
+		P("This is an oku-review selfdev chat. A person talks to you through navi.").
+		Bullets(`
+			Each repository is cloned on the branch {{.Branch}}.
+			Run the repository's checks before you say a change works.
+			File a review of a pull request you opened with review_file.
+		`)
+	if err := text.Err(); err != nil {
+		return "", fmt.Errorf("build the instructions: %w", err)
 	}
+	return text.String(), nil
+}
+
+// RunSelfdevWorker serves the chat of the oku-review project until ctx ends.
+func RunSelfdevWorker(ctx context.Context, logger *slog.Logger, settings SelfdevWorkerSettings) error {
 	worker, err := p7.NewWorker(p7.WorkerConfig{
 		TaskQueue:         navi.TaskQueue,
 		TemporalAddress:   settings.TemporalAddress,
@@ -224,40 +311,32 @@ func RunSelfdevWorker(ctx context.Context, logger *slog.Logger, settings Selfdev
 	if err := navi.EnsureSearchAttributes(ctx, worker.Temporal(), settings.TemporalNamespace); err != nil {
 		return fmt.Errorf("register search attributes: %w", err)
 	}
-	reviewTools, err := reviewer.Tools(reviewer.Config{TokenFile: settings.GitHubTokenFile})
-	if err != nil {
-		return fmt.Errorf("build reviewer tools: %w", err)
-	}
-	err = chat.Register(worker, chat.Options{
-		Project:  "oku-review",
-		Prompts:  prompts,
-		Tools:    reviewTools,
-		FilesURL: settings.FilesURL,
-		Integrations: chat.Integrations{
-			Linear:      len(settings.LinearTeams) > 0,
-			LinearTeams: settings.LinearTeams,
-		},
-		GitHubTokenFile: settings.GitHubTokenFile,
+	reviews, err := reviewer.NewActivities(reviewer.Config{
+		TokenFile:  settings.GitHubTokenFile,
+		Repository: settings.ReviewRepository,
 	})
 	if err != nil {
-		return fmt.Errorf("register chat workflow: %w", err)
+		return fmt.Errorf("configure the reviewer: %w", err)
 	}
-	if settings.ReviewRepository != "" {
-		err = review.Register(worker, review.Options{
-			Repository:      settings.ReviewRepository,
-			MergeMethod:     settings.MergeMethod,
-			GitHubTokenFile: settings.GitHubTokenFile,
-		})
-		if err != nil {
-			return fmt.Errorf("register review workflow: %w", err)
-		}
+	err = chat.Register(worker, chat.Options{
+		Tools: func(current *chat.Chat) []p7.Tool {
+			return []p7.Tool{reviewer.FileTool(current.State.Request)}
+		},
+		Instructions: ReviewInstructions,
+		Activities: map[string]any{
+			reviewer.ActivityFile: reviews.File,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("register the chat: %w", err)
 	}
 	if err := worker.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
 	}
 	defer worker.Stop()
 	if settings.WorkerPromote {
-		if err := rollout.Promote(ctx, worker.Temporal(), settings.WorkerDeployment, settings.WorkerBuildID); err != nil {
+		promoter := rollout.FromClient(worker.Temporal(), logger)
+		if err := promoter.Promote(ctx, settings.WorkerDeployment, settings.WorkerBuildID); err != nil {
 			return fmt.Errorf("promote build %s: %w", settings.WorkerBuildID, err)
 		}
 	}
@@ -266,9 +345,9 @@ func RunSelfdevWorker(ctx context.Context, logger *slog.Logger, settings Selfdev
 }
 ```
 
-The exact `rollout.Promote` and `TemporalSPIFFE` field names are read from the current code at move time. The shape (config struct in, error out, no global state) is the requirement.
+`reviewer.FileTool` returns a `p7.Tool` whose `Run` is a workflow function that runs `reviewer.ActivityFile`. The `reviewer` names are the app's to choose. The requirement is the shape: settings in a config struct, tools and instructions as Go functions passed to `chat.Register`, errors returned, no global state.
 
-The session worker and files server are not app code: the app's image builds `github.com/gfx-labs/protocol7/cmd/p7-worker` at the pinned version, and runs `p7-worker files` (moved in section 2) beside it.
+The session worker and files server are not app code: the app's image builds `github.com/gfx-labs/protocol7/cmd/p7-worker` at the pinned version, and runs `p7-worker files` beside it.
 
 ## 4. Image and deploy
 
@@ -283,35 +362,46 @@ The session worker and files server are not app code: the app's image builds `gi
 - `kubernetes/p7-worker.yaml`: both containers use the tenant image. `p7-worker --config /etc/p7-worker/config.yaml` and `p7-worker files --config /etc/p7-worker/files.yaml`. The env block of PDP placeholders and git config stays, since it is credential plumbing, not settings.
 - The PDP sidecar keeps `ghcr.io/gfx-labs/pdp`. It is the platform's egress gateway client, not selfdev, and is outside this goal's "never run protocol7-selfdev images" line.
 
-### Cutover order (per namespace, oku-review first, then oku)
+### Cutover order for a tenant (per namespace, oku-review first, then oku)
 
 Running chats are long-lived workflows on queue `selfdev` in namespaces `oku` and `oku-review`. They must keep replaying.
 
-1. **Turn on Worker Versioning with the current image.** Set `worker-deployment: selfdev-oku-review` and a build ID on the existing protocol7-selfdev image, and promote it. Running unversioned workflows keep running. From then on, new workflows are pinned to that build. The `upgrade` package already makes chat, issue and review continue as new onto the target build when it changes (`GetTargetWorkerDeploymentVersionChanged`).
-2. **Build the tenant image at the same protocol7 code.** The first tenant build registers the same workflow names on the same queue with workflow code from the SDK version that equals the running build, so history replays. Deploy it as a second Deployment (`selfdev-next`) with a new build ID in the same Worker Deployment, not promoted.
-3. **Promote the tenant build.** New workflows start on it. Pinned workflows of the old build stay there until their next continue-as-new, which `upgrade` triggers. Watch the old build's pinned count with `temporal worker deployment describe-version` until it is zero, and the old Deployment idles.
-4. **Session worker.** The `p7-worker` StatefulSet's queue is per host (`--host oku-review`). Sessions are child work started by the chat. Swap its image to the tenant's in a rolling update after step 3, when no chat is pinned to the old build. A session that is mid-turn is resumed by the chat's recovery path on restart, as it is on any pod restart today.
+1. **Turn on Worker Versioning with the current image.** Set `worker-deployment: selfdev-oku-review` and a build ID on the existing protocol7-selfdev image, and promote it. Running unversioned workflows keep running. From then on, new workflows are pinned to that build. The chat already continues as new onto the target build when it changes (`pkg/orchestration/upgrade`).
+2. **Build the tenant image.** Its chat is the SDK base with the tenant's own extensions, which are not the protocol7-selfdev tools the running chats were opened with. So it does not replay those histories, and must not be given them: deploy it as a second Deployment (`selfdev-next`) with a new build ID in the same Worker Deployment, not promoted. The tenant's own replay test covers histories its new build writes, not the old ones.
+3. **Promote the tenant build.** New workflows start on it. Pinned workflows of the old build stay there until their next continue-as-new, which starts on the tenant build with the tenant's tools. Watch the old build's pinned count with `temporal worker deployment describe-version` until it is zero, and the old Deployment idles. The issue and review workflows of the old build drain the same way, or the tenant keeps the old Deployment until they end, if it does not write its own.
+4. **Session worker.** The `p7-worker` StatefulSet's queue is per host (`--host oku-review`). Swap its image to the tenant's in a rolling update after step 3. A session that is mid-turn is resumed by the chat's recovery path on restart, as it is on any pod restart today.
 5. **Remove the old Deployment** and the protocol7-selfdev image references. A CI check in each tenant repo greps `kubernetes/` for `ghcr.io/gfx-labs/protocol7-selfdev` and fails.
 
-Rollback at step 3 is promoting the old build ID again. Workflows that already moved to the new build stay there, so the new build must not change history-affecting code until step 5 is done.
+Rollback at step 3 is promoting the old build ID again. Workflows that already moved to the new build stay there.
+
+### Cutover of the core project
+
+protocol7-selfdev's core chat runs unversioned (`workerVersioning` is `false`), so a deploy replaces the worker and every running core chat replays on the new code. Its switch to the base therefore keeps its histories replaying: it passes today's tools, instructions, learning brief, picks and guidance as extensions, keeps every `GetVersion` ID, and its replay test runs histories recorded from the core namespace before the switch (PR 8).
+
+## 4a. A project with no chat worker
+
+A project whose Temporal namespace has no poller on `navi.TaskQueue` (`DescribeTaskQueue`, as `pkg/web/health.go` reads it) has no chat. navi says the chat is not set up for that project, and refuses to start or message a chat there, in the web API, on the project page and over A2A, instead of starting a workflow that never runs. Temporal lists a poller for some minutes after its last poll, so a worker that has just stopped still counts for a while.
 
 ## 5. Sequenced PRs
 
 Each PR merges alone and leaves every deployment working.
 
-| # | Repo | Change | Test that proves it |
-| --- | --- | --- | --- |
-| 1 | protocol7 | Add `pkg/domain/navi` (constants, attribute keys, memo keys, wire types, `ContractVersion`) and `pkg/domain/scope` (the scope part of `acl`), since the wire types carry a `Scope`. | `go test ./pkg/domain/navi`: a test decodes a recorded `State` JSON from a live chat query into the new type. |
-| 2 | protocol7-selfdev | Bump protocol7. Make `chat`, `issue`, `review`, `learning` constants aliases of `navi` ones (`const WorkflowName = navi.ChatWorkflow`). Set the `contract` memo. | `go test ./...`. Existing workflow replay tests pass unchanged, which shows the wire strings did not move. |
-| 3 | protocol7-selfdev | Switch `pkg/web` and `cmd/webhooks` to import `navi` only, not workflow packages (coordinate with a2a-chats-2 on `pkg/web`). | `go list -deps ./pkg/web` shows no `pkg/workflow/` package. Web tests pass. |
-| 4 | protocol7 | Move `upgrade`, `rollout`, `linear`, `githubapi`, `githubapp` and `artifact`. These have no selfdev imports besides each other. | Their moved tests pass in protocol7 CI. |
-| 5 | protocol7-selfdev | Import the packages from PR 4 and delete the local copies. | `go test ./...` and a deploy of the selfdev image in protocol7-selfdev, with one chat run end to end on the dev namespace. |
-| 6 | protocol7 | Move `design`, the kubeop `Writer`, and the files command (`p7-worker files`). | `go test ./pkg/execution/...`. A test starts the files server on a temp state dir and fetches a board. |
-| 7 | protocol7 | Move `learning`, `review`, `issue`, `probe`, `chat` to `pkg/orchestration`, with `Options` and `Register` from section 2 and 3. Copy the workflow replay tests and add replay of a recorded history from each oku namespace. | Replay tests in protocol7 CI pass against histories exported from `oku` and `oku-review` (`temporal workflow show --output json`). |
-| 8 | protocol7-selfdev | Import the SDK workflows and delete the local packages. Keep `Broker`, policy, web, webhooks. `selfdev worker` becomes a thin `main` like section 3 with `OperatorCredentials` on. | Same replay histories pass. Deploy to protocol7-selfdev, and an existing chat continues as new onto the new build and answers a message. |
-| 9 | oku-review | Turn on Worker Versioning on the current image (cutover step 1). Settings move into a ConfigMap read by `--config`. | `temporal worker deployment describe` lists the build. A new chat starts pinned. |
-| 10 | oku-review | Add `selfdev-worker` subcommand, p7-worker and session tools to the Dockerfile, and the `selfdev-next` Deployment, not promoted (cutover step 2). | Image builds. The pod polls (`describe-version` shows it polling). Replay test in oku-review CI against an exported oku-review history. |
-| 11 | oku-review | Promote the tenant build, then swap `p7-worker` and `files` images, then delete the old Deployment and add the image grep check (steps 3 to 5). | Old build's pinned workflow count reaches zero. A chat opened in navi on oku-review runs a turn and a review. The grep check passes. |
-| 12 | oku-selfdev | PRs 9 to 11 for namespace `oku`. | Same checks on namespace `oku`, plus one chat on each of the trade, retail and backend workers. |
+| # | Repo | Change | Test that proves it | State |
+| --- | --- | --- | --- | --- |
+| 1 | protocol7 | Add `pkg/domain/navi` and `pkg/domain/scope`. | `go test ./pkg/domain/navi` decodes a recorded `State`. | merged (#34) |
+| 2 | protocol7-selfdev | Workflow constants become aliases of `navi`. Set the `contract` memo. | Existing replay tests pass unchanged. | merged |
+| 3 | protocol7-selfdev | `pkg/web` and `cmd/webhooks` import `navi`, not workflow packages. | `go list -deps ./pkg/web` shows no `pkg/workflow/`. | merged |
+| 4 | protocol7 | Move `upgrade`, `rollout`, `linear`, `githubapi`, `githubapp`, `artifact`. | Moved tests pass in CI. | merged (#35) |
+| 5 | protocol7-selfdev | Import PR 4's packages, delete the copies. | `go test ./...` and a deploy. | merged |
+| 6 | protocol7 | Move `design`, the kubeop `Writer` and `p7-worker files`. | `go test ./pkg/execution/...`. | merged (#41) |
+| 7 | protocol7 | Add `pkg/orchestration/chat`: the base chat of section 2 with `Options`, `Register` and `NewWorkflow`. No issue, review, learning, probe or operator code, no replay harness. | A test on Temporal's test environment: a turn, a tool an extension adds, stop, an escalation answered by a person, continue-as-new onto a changed target build. | |
+| 7b | protocol7-selfdev | navi's "chat not set up" state (section 4a) in the web API, the project page and A2A. | A web test with a project whose namespace has no poller: start and message are refused with that message. | |
+| 8 | protocol7-selfdev | The core chat registers the SDK base with today's tools, instructions and hooks as extensions. `pkg/workflow/chat` keeps the extensions, the handler and the replay tests. Issue, review, learning and probe stay in this repo. | `go test ./...`. The replay test runs the oku and oku-review histories already in `testdata` and a core history recorded before the switch. Deploy, and a running core chat answers a message on the new build. | |
+| 9 | oku-review | Turn on Worker Versioning on the current image (tenant cutover step 1). Settings in a ConfigMap read by `--config`. | `temporal worker deployment describe` lists the build. A new chat starts pinned. | |
+| 10 | oku-review | A `selfdev-worker` subcommand that registers the base chat with oku-review's extensions, p7-worker and session tools in the Dockerfile, and the `selfdev-next` Deployment, not promoted (step 2). | Image builds. The pod polls. A replay test in oku-review of a history its new build wrote. | |
+| 11 | oku-review | Promote the tenant build, swap `p7-worker` and `files` images, delete the old Deployment, add the image grep check (steps 3 to 5). | Old build's pinned count reaches zero. A chat opened in navi on oku-review runs a turn. The grep check passes. | |
+| 12 | oku-selfdev | PRs 9 to 11 for namespace `oku`. | Same checks on namespace `oku`. | |
 
-PRs 1 to 3 change no behavior and can merge while tenants still run protocol7-selfdev images. PRs 4 to 8 make protocol7-selfdev itself the first consumer of the SDK, which tests the SDK before any tenant depends on it. PRs 9 to 12 cut each tenant over one namespace at a time.
+PRs 1 to 6 changed no behavior. PR 7 adds code no one runs yet. PR 8 makes protocol7-selfdev the first consumer of the base chat, which tests it before a tenant depends on it. PRs 9 to 12 cut each tenant over one namespace at a time, each with its own extensions written in its own repository.
+
+The first version of this plan moved `learning`, `review`, `issue`, `probe` and the whole chat into protocol7 (protocol7 PR #43). That PR was closed: those workflows are app code, and each app reimplements the ones it needs.
