@@ -30,7 +30,10 @@ func (s fakeSource) Tree(context.Context, string, string) (map[string]string, er
 	return s.tree, nil
 }
 func (s fakeSource) Checkout(_ context.Context, _, _, directory string) error {
-	return os.WriteFile(filepath.Join(directory, "Dockerfile"), []byte("FROM scratch\n"), 0o600)
+	if err := os.WriteFile(filepath.Join(directory, "Dockerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(directory, "worker.Dockerfile"), []byte("FROM scratch\n"), 0o600)
 }
 
 type fakeRegistry struct {
@@ -63,10 +66,13 @@ func (s *fakeSolver) Solve(_ context.Context, job build.SolveJob, _ func(string)
 	if s.fail {
 		return "", &build.StepError{Log: "RUN go build: exit 1", Err: errors.New("process did not complete")}
 	}
-	if _, err := os.Stat(filepath.Join(job.Context, "Dockerfile")); err != nil {
+	if _, err := os.Stat(filepath.Join(job.Context, job.Dockerfile)); err != nil {
 		return "", err
 	}
 	digest := "sha256:" + strings.Repeat("b", 64)
+	if job.Dockerfile != "Dockerfile" {
+		digest = "sha256:" + strings.Repeat("c", 64)
+	}
 	for _, ref := range job.Refs {
 		host, rest, _ := strings.Cut(ref, "/")
 		if host != "zot.registry.svc:5000" {
@@ -111,7 +117,10 @@ func (h *harness) run(t *testing.T, request build.Request) (build.Result, error)
 	t.Helper()
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
-	builder := &build.Builder{Repository: repository, Images: []build.ImageSpec{{Name: "reviewer", Package: pkg, Dockerfile: "Dockerfile"}}}
+	builder := &build.Builder{Repository: repository, Images: []build.ImageSpec{
+		{Name: "reviewer", Package: pkg, Dockerfile: "Dockerfile"},
+		{Name: "worker", Package: pkg, Dockerfile: "worker.Dockerfile"},
+	}}
 	activities := &build.Activities{
 		Repository: repository, Inputs: []string{"cmd", "Dockerfile"}, RegistryHost: "zot.registry.svc:5000",
 		Packages: []string{pkg}, WorkDir: t.TempDir(),
@@ -147,8 +156,9 @@ func errorType(err error) string {
 	return ""
 }
 
-// A PR maker gets the pushed digest back. A second request with the same
-// inputs is answered from zot without building.
+// A PR maker gets the pushed digests back. A second request with the same
+// inputs is answered from zot without building. Two images share a package,
+// as oku-review's reviewer and worker do, and keep their own digests.
 func TestBuildPushesAndReuses(t *testing.T) {
 	h := newHarness()
 	commit := strings.Repeat("1", 40)
@@ -156,24 +166,26 @@ func TestBuildPushesAndReuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Images) != 1 || result.Images[0].Digest != "sha256:"+strings.Repeat("b", 64) || result.Reused {
+	reviewer, worker := "sha256:"+strings.Repeat("b", 64), "sha256:"+strings.Repeat("c", 64)
+	if len(result.Images) != 2 || result.Images[0].Digest != reviewer || result.Images[1].Digest != worker || result.Reused {
 		t.Fatalf("first build %+v", result)
 	}
-	if got := result.Images[0].Tag; got != "pr-7-111111111111" {
-		t.Fatalf("tag %q", got)
-	}
-	if h.registry.tags[pkg+":"+build.InputsTag(result.Inputs)] == "" {
-		t.Fatal("no inputs tag pushed")
+	for _, image := range result.Images {
+		if h.registry.tags[pkg+":"+image.Tag] != image.Digest || h.registry.tags[pkg+":"+build.InputsTag(result.Inputs, image.Name)] != image.Digest {
+			t.Fatalf("zot does not hold %s under its own tags", image.Name)
+		}
 	}
 	again, err := h.run(t, pullRequest(strings.Repeat("2", 40)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !again.Reused || h.solver.solves != 1 || again.Images[0].Digest != result.Images[0].Digest {
+	if !again.Reused || h.solver.solves != 2 || again.Images[0].Digest != reviewer || again.Images[1].Digest != worker {
 		t.Fatalf("second build %+v after %d solves", again, h.solver.solves)
 	}
-	if h.registry.tags[pkg+":pr-7-222222222222"] == "" {
-		t.Fatal("reused images did not get the request's tag")
+	for _, image := range again.Images {
+		if h.registry.tags[pkg+":"+image.Tag] != image.Digest || !strings.HasPrefix(image.Tag, "pr-7-222222222222-") {
+			t.Fatalf("reused %s did not get the request's tag: %q", image.Name, image.Tag)
+		}
 	}
 }
 
