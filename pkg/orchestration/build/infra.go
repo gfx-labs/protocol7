@@ -329,6 +329,13 @@ func (s *Scaler) Wake(ctx context.Context) error {
 // Run scales buildkitd to zero once it has been idle for IdleAfter. busy says
 // whether a solve is running.
 func (s *Scaler) Run(ctx context.Context, busy func() bool) error {
+	// buildkitd may already be up when the builder starts, so the idle time
+	// counts from now and an unused buildkitd still scales to zero.
+	s.mu.Lock()
+	if s.lastUsed.IsZero() {
+		s.lastUsed = time.Now()
+	}
+	s.mu.Unlock()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
