@@ -1,6 +1,6 @@
 # API schemas with Connect
 
-Status: design. Nothing here is built.
+Status: pilot steps 1, 2 and 4 are built (protocol7 #39, protocol7-selfdev #136). Step 3, the React chat pages calling `ChatService`, is not.
 
 ## Goal
 
@@ -80,4 +80,53 @@ After the pilot, one PR per service, then remove the old routes and `types.d.ts`
 ## Not checked yet
 
 - That the tailnet ingress keeps Connect server streams open as long as SSE today.
-- Whether `buf` runs in protocol7's CI image without a network fetch of plugins. Pinned local plugins (`protoc-gen-go`, `protoc-gen-connect-go` v2, `protoc-gen-es`) avoid the Buf Schema Registry.
+
+## Pilot measurements
+
+navi before is image `8d2e3ed4b687-3b13cace5472` (protocol7-selfdev 8d2e3ed). navi after is image `57b8a46407fd-29e6a57333e2` (protocol7-selfdev #136, merge 57b8a46, on protocol7 29e6a57). Image `5f204613489d-29e6a57333e2` rolled out about four minutes later and holds #136 and #137 (the Vite UI) together, so its numbers are not the API change alone. All numbers are from 2026-11-19 (UTC).
+
+### What was run
+
+Binary size of navi (`selfdev`), built locally as the Dockerfile builds it (`CGO_ENABLED=0 go build -trimpath ./cmd/selfdev`):
+
+| Build | Bytes |
+|---|---|
+| master 7a17ea4, before | 50,444,659 |
+| connect-chat branch, after | 51,356,758 |
+| Difference | +912,099 (+1.8%) |
+
+navi pod memory, `kubectl top pod` in namespace `navi` (limit 256Mi, request 48Mi):
+
+| Time | Image | Pod age | CPU | Memory |
+|---|---|---|---|---|
+| 03:48 | `8d2e3ed4b687` (before) | 23 min | 4m | 38Mi |
+| 03:54 | `57b8a46407fd` (after) | under 1 min | 57m | 30Mi |
+| 03:55 | `57b8a46407fd` (after) | 2 min | 4m | 32Mi |
+| 03:56 | `57b8a46407fd` (after) | 3 min | 4m | 32Mi |
+| 03:58 | `5f204613489d` (after, with #137) | 1 min | 5m | 26Mi |
+| 04:00 | `5f204613489d` (after, with #137) | 3 min | 4m | 30Mi |
+| 04:01 | `5f204613489d` (after, with #137) | 4 min | 4m | 29Mi |
+
+Memory did not rise. The samples are single readings of young pods, so they show no regression, not a saving.
+
+Live calls through `kubectl port-forward svc/navi 18788:8787`:
+
+| Call | Before | After |
+|---|---|---|
+| `ListChats` `{"project":"selfdev"}` as eddy@gfxlabs.io | 405 (no such route) | 200, 27 chats, 5,400 bytes, 0.35 s |
+| `GET /api/projects/selfdev/chats` as eddy@gfxlabs.io | 200, 27 chats, 5,283 bytes, 0.30 s | 200, 27 chats, 5,283 bytes, 0.41 s |
+| `ListChats` as nobody@example.com | | 403 `permission_denied`, "has no access to navi" |
+| `ListChats` with no login header | | 403 `permission_denied` |
+| `CreateChat` as nobody@example.com | | 403 `permission_denied` |
+| `ListChats` `{"project":"nope"}` as eddy@gfxlabs.io | | 404 `not_found` |
+| `WatchChat` (Connect streaming, JSON) as eddy@gfxlabs.io | | first message is the chat's state (curl stopped after 4 s) |
+
+Tests: `TestEveryMethodHasAnAccessLevel`, `TestAMethodWithoutAnAccessLevelIsRefused`, and `TestChatService`, which runs `ChatService` through `connectinprocess` against the chat workflow on a Temporal dev server with an embedded NATS for session events. It covers an unknown login, no login and a member of another project refused, a viewer refused on `CreateChat`, `SendMessage` and `Stop`, then create, send, watch (state and session events) and stop. The protocol7 `proto` CI job ran `buf lint`, skipped `buf breaking` because master had no `proto/` yet, and found `buf generate` output identical to the committed code, with no Buf Schema Registry fetch.
+
+### What was not run
+
+- A viewer-only login against the live navi. The live access policy has no users besides the two bootstrap admins, and the policy was not changed to make one. The viewer refusals are covered by `TestChatService` only.
+- UI load time. Step 3 is not built, so the page does not call `ChatService` yet.
+- A server stream through the tailnet ingress. `WatchChat` was checked through a port forward only, for 4 seconds.
+- Memory over hours or under load, and CPU beyond single `kubectl top` readings.
+- Binary size from the CI image build. The image build log does not print the binary's size, so the sizes above are local builds of the same commands.
