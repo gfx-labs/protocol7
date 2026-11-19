@@ -44,6 +44,10 @@ type Options struct {
 	// gets it. The activity takes an EscalationRequest and runs on TaskQueue.
 	// Empty sends every escalation to a person at once.
 	EscalationHandoff string
+	// ValidateDecision, when set, refuses a decision of the app's handler
+	// (UpdateEscalationDecide) that the base accepts. An app may require a
+	// resolution to name a record of its own, for example.
+	ValidateDecision func(decision EscalationDecision) error
 	// Activities are the app's activities, by name. Register registers them
 	// with the workflows.
 	Activities map[string]any
@@ -110,7 +114,7 @@ func NewWorkflow(options Options) func(workflow.Context, State) (Report, error) 
 // registers it under EscalationWorkflowName.
 func NewEscalationWorkflow(options Options) func(workflow.Context, EscalationState) (EscalationState, error) {
 	return func(ctx workflow.Context, state EscalationState) (EscalationState, error) {
-		return runEscalation(ctx, state, options.EscalationHandoff)
+		return runEscalation(ctx, state, options.EscalationHandoff, options.ValidateDecision)
 	}
 }
 

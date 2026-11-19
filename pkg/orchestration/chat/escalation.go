@@ -220,8 +220,9 @@ func oneLine(text string, limit int) string {
 // handler stays open for reviewWindow, so that a person can override it.
 //
 // handoff names the activity that gives the escalation to the app's handler.
-// Empty forwards it to a person at once.
-func runEscalation(ctx workflow.Context, state EscalationState, handoff string) (EscalationState, error) {
+// Empty forwards it to a person at once. validateDecision, when set, refuses a
+// decision of the handler the app does not accept.
+func runEscalation(ctx workflow.Context, state EscalationState, handoff string, validateDecision func(EscalationDecision) error) (EscalationState, error) {
 	if err := workflow.SetQueryHandler(ctx, QueryEscalation, func() (EscalationState, error) { return state, nil }); err != nil {
 		return state, err
 	}
@@ -324,6 +325,9 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string) 
 			return fmt.Errorf("a decision gives its reasoning, which a person reads")
 		case len(decision.Text) > EscalationFieldLimit || len(decision.Reasoning) > EscalationFieldLimit:
 			return fmt.Errorf("the decision is longer than %d bytes", EscalationFieldLimit)
+		}
+		if validateDecision != nil {
+			return validateDecision(decision)
 		}
 		return nil
 	}}); err != nil {
