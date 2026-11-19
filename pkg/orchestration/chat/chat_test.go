@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -159,6 +160,9 @@ func queryState(t *testing.T, env *testsuite.TestWorkflowEnvironment) *navi.Chat
 	return state
 }
 
+// toolCalls numbers the tool calls of the tests, for their update IDs.
+var toolCalls int
+
 // callTool calls a tool as the session's agent would, and hands the result to
 // complete.
 func callTool(t *testing.T, env *testsuite.TestWorkflowEnvironment, session, tool string, arguments any, complete func(p7.ToolResult)) {
@@ -169,7 +173,8 @@ func callTool(t *testing.T, env *testsuite.TestWorkflowEnvironment, session, too
 	}
 	// The test environment takes a second update with an ID it has seen, in
 	// any workflow, as the first one again, so each update has its own ID.
-	env.UpdateWorkflow(domain.UpdateToolCall, session+"-"+tool, &testsuite.TestUpdateCallback{
+	toolCalls++
+	env.UpdateWorkflow(domain.UpdateToolCall, fmt.Sprintf("%s-%s-%d", session, tool, toolCalls), &testsuite.TestUpdateCallback{
 		OnAccept: func() {},
 		OnReject: func(err error) { t.Errorf("%s rejected: %v", tool, err) },
 		OnComplete: func(value any, err error) {
@@ -193,7 +198,8 @@ func TestATurnAndAToolTheAppAdds(t *testing.T) {
 		callTool(t, env, fake.sessionID(), "lookup", map[string]string{"word": "chat"}, func(result p7.ToolResult) { looked = result })
 	}, time.Minute)
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow(chat.SignalMessage, &chat.Message{Id: "m2", Text: "second"})
+		// A pick may come without a box.
+		env.SignalWorkflow(chat.SignalMessage, &chat.Message{Id: "m2", Text: "second", Picks: []*chat.Pick{{Artboard: "desktop", Page: "index.html", Selector: "main > button", Tag: "button"}}})
 	}, 2*time.Minute)
 	env.RegisterDelayedCallback(func() {
 		if state := queryState(t, env); state.LastLearning != "chat" || state.Turns != 2 {
@@ -226,8 +232,8 @@ func TestATurnAndAToolTheAppAdds(t *testing.T) {
 	if first := fake.turns[0].Context; !strings.HasPrefix(first, "app instructions for c1") || !strings.HasSuffix(first, "turn context for m1") {
 		t.Errorf("first turn's context %q, want the app's instructions and turn context", first)
 	}
-	if second := fake.turns[1].Context; second != "turn context for m2" {
-		t.Errorf("second turn's context %q, want only the turn context", second)
+	if second := fake.turns[1].Context; !strings.Contains(second, "artboard desktop, page index.html, main > button (button) at 0,0 size 0x0") || !strings.HasSuffix(second, "turn context for m2") {
+		t.Errorf("second turn's context %q, want the pick and the turn context", second)
 	}
 	if fake.closed != 1 || queryState(t, env).Status != chat.StatusClosed {
 		t.Errorf("closed %d times, want the session closed once and the chat closed", fake.closed)
@@ -358,5 +364,55 @@ func TestAnIdleChatContinuesAsNewOntoANewBuild(t *testing.T) {
 	}
 	if fake.closed != 0 || next.Session == nil || next.Turns != 1 || !next.Briefed {
 		t.Errorf("closed %d times, next state %+v, want the session open, one turn and briefed", fake.closed, next)
+	}
+}
+
+// Each child's request is a copy of its parent's. Spawning a second child
+// does not start it from the first child's request, and the parent keeps its
+// own.
+func TestChildrenStartFromTheParentsRequest(t *testing.T) {
+	env, fake := newEnvironment(t)
+	var started []*chat.Request
+	env.SetOnChildWorkflowStartedListener(func(_ *workflow.Info, _ workflow.Context, args converter.EncodedValues) {
+		var state *navi.ChatState
+		if err := args.Get(&state); err != nil {
+			t.Error(err)
+		}
+		started = append(started, state.Request)
+	})
+	fake.onSlow = func() {
+		spawned := 0
+		for _, task := range []string{"first", "second"} {
+			callTool(t, env, fake.sessionID(), "chat_spawn", map[string]string{"task": task, "title": task}, func(result p7.ToolResult) {
+				if result.IsError {
+					t.Errorf("chat_spawn %s: %+v", task, result)
+					return
+				}
+				if spawned++; spawned < 2 {
+					return
+				}
+				// Closing with children still running is not what this checks,
+				// so the chat waits for them first.
+				callTool(t, env, fake.sessionID(), "chat_await", map[string]any{}, func(p7.ToolResult) {
+					env.SignalWorkflow(chat.SignalClose, &chat.Action{})
+				})
+			})
+		}
+	}
+	env.ExecuteWorkflow(chat.WorkflowName, newChat("slow"))
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 2 {
+		t.Fatalf("%d children started, want 2", len(started))
+	}
+	for _, request := range started {
+		if request.Parent != "c1" || request.Depth != 1 {
+			t.Errorf("child %s has parent %q and depth %d, want c1 and 1", request.Id, request.Parent, request.Depth)
+		}
+	}
+	if state := queryState(t, env); state.Request.Id != "c1" || state.Request.Depth != 0 || state.Request.Parent != "" {
+		t.Errorf("the parent's request became %+v", state.Request)
 	}
 }
