@@ -16,6 +16,7 @@ require (
 	go.temporal.io/api v1.64.3
 	go.temporal.io/sdk v1.51.0
 	go.uber.org/fx v1.24.0
+	go.yaml.in/yaml/v3 v3.0.5
 	google.golang.org/grpc v1.83.2
 )
 
@@ -56,7 +57,6 @@ require (
 	go.uber.org/dig v1.19.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

@@ -27,6 +27,7 @@ import (
 	"github.com/gfx-labs/protocol7/pkg/orchestration/kubernetes"
 	"github.com/gfx-labs/protocol7/pkg/p7"
 	"github.com/gfx-labs/protocol7/pkg/p7/p7fx"
+	"github.com/gfx-labs/protocol7/pkg/support/config"
 )
 
 // harnessFlags say how the agent harness is started.
@@ -172,6 +173,8 @@ func (c *workerCommand) Run(ctx context.Context, logger *slog.Logger) error {
 }
 
 type root struct {
+	config.Flag `embed:""`
+
 	Worker  workerCommand  `cmd:"" help:"Run the core worker of this machine: agent sessions on the host backend."`
 	Session sessionCommand `cmd:"" help:"Run one session in its own pod on the kubernetes backend."`
 	Pods    podsCommand    `cmd:"" help:"Create and delete session pods for the kubernetes backend."`
@@ -288,12 +291,15 @@ func Main(args []string) int {
 
 // WorkerMain runs the p7-worker command, which is p7 worker.
 func WorkerMain(args []string) int {
-	var command workerCommand
+	var command struct {
+		config.Flag   `embed:""`
+		workerCommand `embed:""`
+	}
 	return run("p7-worker", "The protocol7 core worker of this machine.", &command, args)
 }
 
 func run(name, description string, grammar any, args []string) int {
-	parser, err := kong.New(grammar, kong.Name(name), kong.Description(description), kong.UsageOnError())
+	parser, err := kong.New(grammar, kong.Name(name), kong.Description(description), kong.UsageOnError(), config.Option())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, name+":", err)
 		return 2
