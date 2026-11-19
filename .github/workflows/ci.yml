@@ -61,3 +61,52 @@ jobs:
           go test -json -race ./... > test.json || rc=$?
           jq -j 'select(.Action == "output") | .Output' test.json
           exit "${rc:-0}"
+
+  # navi's API schemas: lint, no breaking change against the base, and the
+  # committed generated code matches proto/. The plugins are pinned locally
+  # (go.mod's tool block, web/naviapi/package-lock.json), so buf fetches
+  # nothing from the Buf Schema Registry.
+  proto:
+    runs-on: talos-metal-gfx-public
+    env:
+      BUF_VERSION: 1.73.0
+      BUF_SHA256: f8092c1be08d5606a8d22b4ae0e4079dd690154cebb4894dc5e24a5046093aff
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: buf
+        run: |
+          curl -fsSL -o buf.tgz "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-x86_64.tar.gz"
+          echo "${BUF_SHA256}  buf.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/buf"
+          tar -xzf buf.tgz -C "$RUNNER_TEMP/buf" --strip-components 1
+          rm buf.tgz
+          echo "$RUNNER_TEMP/buf/bin" >> "$GITHUB_PATH"
+      - name: protoc-gen-es
+        working-directory: web/naviapi
+        run: npm ci --no-audit --no-fund
+      - run: buf lint
+      # A pull request is checked against its base, a push to master against
+      # the commit before it. A base with no schemas has nothing to break.
+      - name: buf breaking
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git cat-file -e "$BASE:proto" 2>/dev/null; then
+            echo "the base $BASE has no proto directory, nothing to compare"
+            exit 0
+          fi
+          buf breaking --against ".git#ref=$BASE"
+      - name: buf generate
+        run: |
+          buf generate
+          git status --porcelain -- pkg/transport/naviapi web/naviapi/src
+          test -z "$(git status --porcelain -- pkg/transport/naviapi web/naviapi/src)"

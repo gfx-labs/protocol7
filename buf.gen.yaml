@@ -1,0 +1,17 @@
+# Generates navi's Go and TypeScript API from proto/. The plugins are local
+# and pinned: protoc-gen-go and protoc-gen-connect-go by go.mod's tool block,
+# protoc-gen-es by web/naviapi/package-lock.json (npm ci in web/naviapi
+# installs it). Nothing is fetched from the Buf Schema Registry.
+version: v2
+clean: true
+plugins:
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: pkg/transport/naviapi
+    opt: paths=source_relative
+  - local: ["go", "tool", "protoc-gen-connect-go"]
+    out: pkg/transport/naviapi
+    opt: paths=source_relative
+  - local: web/naviapi/node_modules/.bin/protoc-gen-es
+    out: web/naviapi/src
+    opt: target=ts
+    include_imports: false

@@ -1,0 +1,12 @@
+# navi's API schemas. buf lint and buf breaking read this, and buf generate
+# reads buf.gen.yaml. Only the well-known types are imported, which buf
+# carries, so nothing is fetched from the Buf Schema Registry.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

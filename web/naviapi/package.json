@@ -1,0 +1,16 @@
+{
+  "name": "@gfx-labs/naviapi",
+  "version": "0.0.0",
+  "private": true,
+  "description": "navi's API, generated from proto/navi by protoc-gen-es. Do not edit src.",
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.17.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "2.17.0"
+  }
+}

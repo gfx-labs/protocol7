@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package navi.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1;naviv1";
+
+// Access is what a caller needs on the request's project to call a method.
+enum Access {
+  // ACCESS_UNSPECIFIED marks a method with no access level. navi refuses it.
+  ACCESS_UNSPECIFIED = 0;
+  // ACCESS_VIEW reads the project.
+  ACCESS_VIEW = 1;
+  // ACCESS_MODIFY changes the project: starts, messages, stops and archives
+  // its chats.
+  ACCESS_MODIFY = 2;
+  // ACCESS_ADMIN is for navi's admins only.
+  ACCESS_ADMIN = 3;
+}
+
+extend google.protobuf.MethodOptions {
+  // access is the access level of a method. Every method of navi's services
+  // sets it, and navi's server interceptor checks it on every call.
+  Access access = 50700;
+}
+
+// Person is someone who acted through navi, as the tailnet named them.
+message Person {
+  // login is the Tailscale login name, such as alice@example.com.
+  string login = 1;
+  // name is the display name.
+  string name = 2;
+}
