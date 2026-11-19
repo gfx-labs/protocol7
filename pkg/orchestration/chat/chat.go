@@ -165,7 +165,7 @@ func pickContext(picks []*Pick) string {
 	text.WriteString("The person picked these elements on the design board for this message:\n")
 	for index, pick := range picks {
 		fmt.Fprintf(&text, "%d. artboard %s, page %s, %s (%s) at %d,%d size %dx%d\n", index+1,
-			pick.Artboard, pick.Page, pick.Selector, pick.Tag, pick.Box.X, pick.Box.Y, pick.Box.Width, pick.Box.Height)
+			pick.Artboard, pick.Page, pick.Selector, pick.Tag, pick.Box.GetX(), pick.Box.GetY(), pick.Box.GetWidth(), pick.Box.GetHeight())
 		if pick.Text != "" {
 			fmt.Fprintf(&text, "   text: %q\n", pick.Text)
 		}

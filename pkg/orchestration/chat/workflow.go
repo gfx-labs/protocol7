@@ -309,6 +309,10 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	}
 	state.Status = StatusClosed
 	report(closeCtx, state, &Report{Idle: true, Ended: true})
+	// A chat closed before its first turn has no result yet.
+	if state.Result == nil {
+		state.Result = &Report{ChatId: state.Request.Id}
+	}
 	state.Result.Ended = true
 	state.Result.Idle = true
 	return state.Result, ctx.Err()
