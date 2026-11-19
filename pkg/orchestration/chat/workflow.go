@@ -66,22 +66,25 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	children := workflow.GetSignalChannel(ctx, SignalReport)
 	escalations := workflow.GetSignalChannel(ctx, SignalEscalation)
 	addMessage := func(message *Message) {
-		if message.Id != "" && message.Text != "" {
+		if message.GetId() != "" && message.GetText() != "" {
 			state.Pending = append(state.Pending, message)
 		}
 	}
 	// takeNotice applies what an escalation told the chat. A person's answer
 	// is a message like any other, and the turn it starts continues the chat.
 	takeNotice := func(notice *EscalationNotice) {
+		if notice == nil {
+			return
+		}
 		if message, ok := takeEscalation(&state, notice); ok {
 			addMessage(message)
 		}
 	}
 	stopTurn := func(ctx workflow.Context, action *Action) {
-		state.StoppedBy = action.By
+		state.StoppedBy = action.GetBy()
 		// A stop ends the running turn only. The messages that wait are
 		// dropped when the person asks for that.
-		if action.Discard || workflow.GetVersion(ctx, versionStopKeepsQueue, workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		if action.GetDiscard() || workflow.GetVersion(ctx, versionStopKeepsQueue, workflow.DefaultVersion, 1) == workflow.DefaultVersion {
 			state.Pending = nil
 		}
 		if cancelTurn != nil {
@@ -89,11 +92,11 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		}
 	}
 	dequeue := func(request *Dequeue) {
-		state.Pending = slices.DeleteFunc(state.Pending, func(message *Message) bool { return message.Id == request.Id })
+		state.Pending = slices.DeleteFunc(state.Pending, func(message *Message) bool { return message.Id == request.GetId() })
 	}
 	closeChat := func(action *Action) {
 		if !state.Closing {
-			state.ClosedBy = action.By
+			state.ClosedBy = action.GetBy()
 		}
 		state.Closing = true
 		if cancelTurn != nil {
@@ -123,7 +126,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 			var result *Report
 			channel.Receive(ctx, &result)
 			for index, child := range state.Children {
-				if child.Id == result.ChatId && child.Message == result.Message && result.Attention && !child.Done {
+				if child.Id == result.GetChatId() && child.Message == result.GetMessage() && result.GetAttention() && !child.Done {
 					state.Children[index].Attention = true
 					state.Children[index].Result = result
 				}

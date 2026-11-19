@@ -383,18 +383,18 @@ func runEscalation(ctx workflow.Context, state *EscalationState, handoff string,
 	workflow.Go(ctx, func(ctx workflow.Context) {
 		selector := workflow.NewSelector(ctx)
 		selector.AddReceive(handling, func(channel workflow.ReceiveChannel, _ bool) {
-			var taken EscalationClaim
+			var taken *EscalationClaim
 			channel.Receive(ctx, &taken)
 			// Only an open escalation can be taken.
 			if state.Status == EscalationOpen {
-				state.Handler = taken.Handler
+				state.Handler = taken.GetHandler()
 				_ = move(ctx, EscalationHandling, nil)
 			}
 		})
 		selector.AddReceive(forwards, func(channel workflow.ReceiveChannel, _ bool) {
-			var given EscalationForward
+			var given *EscalationForward
 			channel.Receive(ctx, &given)
-			giveUp(ctx, given.Note, given.Reasoning)
+			giveUp(ctx, given.GetNote(), given.GetReasoning())
 		})
 		cancelled := false
 		selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) { cancelled = true })
