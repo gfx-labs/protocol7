@@ -182,6 +182,10 @@ type Options struct {
 	// the app's handler, which then has handlerDeadline to decide before a
 	// person gets it. Empty sends every escalation to a person at once.
 	EscalationHandoff string
+	// ValidateDecision, when set, refuses a decision of the app's handler
+	// that the base accepts, such as a resolution that names no record of
+	// the app's.
+	ValidateDecision func(decision EscalationDecision) error
 	// Activities are the app's activities, by name, registered with the
 	// workflows.
 	Activities map[string]any
@@ -394,9 +398,9 @@ Each PR merges alone and leaves every deployment working.
 | 4 | protocol7 | Move `upgrade`, `rollout`, `linear`, `githubapi`, `githubapp`, `artifact`. | Moved tests pass in CI. | merged (#35) |
 | 5 | protocol7-selfdev | Import PR 4's packages, delete the copies. | `go test ./...` and a deploy. | merged |
 | 6 | protocol7 | Move `design`, the kubeop `Writer` and `p7-worker files`. | `go test ./pkg/execution/...`. | merged (#41) |
-| 7 | protocol7 | Add `pkg/orchestration/chat`: the base chat of section 2 with `Options`, `Register` and `NewWorkflow`. No issue, review, learning, probe or operator code, no replay harness. | A test on Temporal's test environment: a turn, a tool an extension adds, stop, an escalation answered by a person, continue-as-new onto a changed target build. | |
-| 7b | protocol7-selfdev | navi's "chat not set up" state (section 4a) in the web API, the project page and A2A. | A web test with a project whose namespace has no poller: start and message are refused with that message. | |
-| 8 | protocol7-selfdev | The core chat registers the SDK base with today's tools, instructions and hooks as extensions. `pkg/workflow/chat` keeps the extensions, the handler and the replay tests. Issue, review, learning and probe stay in this repo. | `go test ./...`. The replay test runs the oku and oku-review histories already in `testdata` and a core history recorded before the switch. Deploy, and a running core chat answers a message on the new build. | |
+| 7 | protocol7 | Add `pkg/orchestration/chat`: the base chat of section 2 with `Options`, `Register` and `NewWorkflow`. No issue, review, learning, probe or operator code, no replay harness. | A test on Temporal's test environment: a turn, a tool an extension adds, stop, an escalation answered by a person, continue-as-new onto a changed target build. | merged (#47, `1399d50`) |
+| 7b | protocol7-selfdev | navi's "chat not set up" state (section 4a) in the web API, the project page and A2A. | A web test with a project whose namespace has no poller: start and message are refused with that message. | merged (#138) |
+| 8 | protocol7-selfdev | The core chat registers the SDK base with today's tools, instructions and hooks as extensions. `pkg/workflow/chat` keeps the extensions, the handler and the replay tests. Issue, review, learning and probe stay in this repo. | `go test ./...`. The replay test runs the oku and oku-review histories already in `testdata` and a core history recorded before the switch. Deploy, and a running core chat answers a message on the new build. | merged (#139, `3b757f9`), deployed, a chat started before the switch answered on the new build |
 | 9 | oku-review | Turn on Worker Versioning on the current image (tenant cutover step 1). Settings in a ConfigMap read by `--config`. | `temporal worker deployment describe` lists the build. A new chat starts pinned. | |
 | 10 | oku-review | A `selfdev-worker` subcommand that registers the base chat with oku-review's extensions, p7-worker and session tools in the Dockerfile, and the `selfdev-next` Deployment, not promoted (step 2). | Image builds. The pod polls. A replay test in oku-review of a history its new build wrote. | |
 | 11 | oku-review | Promote the tenant build, swap `p7-worker` and `files` images, delete the old Deployment, add the image grep check (steps 3 to 5). | Old build's pinned count reaches zero. A chat opened in navi on oku-review runs a turn. The grep check passes. | |
