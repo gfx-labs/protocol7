@@ -30,8 +30,8 @@ const (
 	ActivityResolveInputs = "build.ResolveInputs"
 	// ActivityFindByInputs looks for images tagged with an inputs key in zot.
 	ActivityFindByInputs = "build.FindByInputs"
-	// ActivityFetch fetches the commit through PDP.
-	ActivityFetch = "build.Fetch"
+	// ActivityTag adds a tag to images that already exist in zot.
+	ActivityTag = "build.Tag"
 	// ActivitySolve builds one image on buildkitd and pushes it to zot.
 	ActivitySolve = "build.Solve"
 )
