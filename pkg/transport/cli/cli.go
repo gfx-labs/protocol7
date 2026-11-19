@@ -181,6 +181,7 @@ type root struct {
 	Dev     devCommand     `cmd:"" help:"Run a Temporal development server, an embedded NATS server and the core worker in one process."`
 	Files   filesCommand   `cmd:"" help:"Serve the sessions' workspaces for design boards, render their screenshots, and serve the artifact and operator credential activities. Runs beside the core worker."`
 	Chat    chatCommand    `cmd:"" help:"Drive navi chats over A2A: shell commands, and an MCP server for a local agent."`
+	Builder builderCommand `cmd:"" help:"Run a tenant's image builder: build.Build on the build queue and main builds for pushes."`
 }
 
 // sessionCommand is the worker inside a session's pod. It is the host
