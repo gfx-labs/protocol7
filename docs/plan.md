@@ -23,10 +23,11 @@ Decided 2026-11-13 (user). Packages live in `pkg/` and commands in `cmd/`, group
 | Path | Holds |
 |---|---|
 | `pkg/p7` | The public library: worker, sessions, client. Everything a consumer imports |
+| `pkg/domain` | The plain types that cross a process boundary, which `pkg/p7` re-exports |
 | `pkg/execution/...` | Backends and what runs in them: the shim client, session activities, the journal decoder |
 | `pkg/orchestration/...` | Core workflows and activities |
 | `pkg/storage/...` | The ticket store and artifact storage |
-| `pkg/transport/...` | The API server, the CLI commands and the live output stream |
+| `pkg/transport/...` | The API server, the CLI commands, the live output stream and `egress`, a process's own HTTP through PDP |
 | `pkg/support/...` | Small shared helpers |
 | `cmd/p7`, `cmd/p7-worker`, `cmd/p7acpshim` | Thin entry points. Each calls into `pkg/` |
 
