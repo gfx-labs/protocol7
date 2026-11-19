@@ -31,14 +31,14 @@ const IssueIntakeRunTimeout = 6*time.Minute + 30*time.Second
 const LearningListLimit = 500
 
 // ChatMemo is the memo a chat's workflow starts with.
-func ChatMemo(request ChatRequest) map[string]any {
-	return map[string]any{MemoTitle: request.Title, MemoContractVersion: ContractVersion}
+func ChatMemo(request *ChatRequest) map[string]any {
+	return map[string]any{MemoTitle: request.GetTitle(), MemoContractVersion: ContractVersion}
 }
 
 // ChatSearchAttributes are the search attributes a chat's workflow starts
 // with.
-func ChatSearchAttributes(request ChatRequest) temporal.SearchAttributes {
-	updates := []temporal.SearchAttributeUpdate{AttributeKind.ValueSet(string(request.Kind()))}
+func ChatSearchAttributes(request *ChatRequest) temporal.SearchAttributes {
+	updates := []temporal.SearchAttributeUpdate{AttributeKind.ValueSet(string(KindOf(request)))}
 	if request.StartedBy != nil {
 		updates = append(updates, AttributeStartedBy.ValueSet(request.StartedBy.Login))
 	}
@@ -77,13 +77,13 @@ func GitHubRepo(cloneURL string) (string, bool) {
 // ScopedRepositories are the repositories of a chat that its scope reaches. A
 // repository that is not on github.com, or is not in the scope, is not
 // cloned. Without a scope, every repository is kept.
-func ScopedRepositories(repositories []Repository, held *scope.Scope) []Repository {
+func ScopedRepositories(repositories []*Repository, held *scope.Scope) []*Repository {
 	if held == nil {
 		return repositories
 	}
-	kept := make([]Repository, 0, len(repositories))
+	kept := make([]*Repository, 0, len(repositories))
 	for _, repository := range repositories {
-		if repo, ok := GitHubRepo(repository.URL); ok && held.HasRepository(repo) {
+		if repo, ok := GitHubRepo(repository.GetUrl()); ok && scope.HasRepository(held, repo) {
 			kept = append(kept, repository)
 		}
 	}
@@ -95,7 +95,7 @@ func ScopedRepositories(repositories []Repository, held *scope.Scope) []Reposito
 // without a scope may.
 func ReviewCanMerge(request ReviewRequest) bool {
 	held := request.Scope
-	return held == nil || (held.HasRepository(request.Repo) && held.Allows("pull_requests", "write") && held.Allows("contents", "write"))
+	return held == nil || (scope.HasRepository(held, request.Repo) && scope.Allows(held, "pull_requests", "write") && scope.Allows(held, "contents", "write"))
 }
 
 // ParseReviewURL reads a pull request's address,

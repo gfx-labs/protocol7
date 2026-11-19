@@ -1,133 +1,83 @@
 package navi
 
 import (
-	"time"
-
-	"github.com/gfx-labs/protocol7/pkg/domain/scope"
+	naviv1 "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1"
 )
 
-// EscalationStatus is the state of an escalation. AttributeEscalationState
-// holds it.
-type EscalationStatus string
+// EscalationStatus is the state of an escalation. EscalationState.Status and
+// AttributeEscalationState hold it.
+type EscalationStatus = string
 
 const (
-	EscalationOpen      EscalationStatus = "open"
-	EscalationHandling  EscalationStatus = "handling"
-	EscalationForwarded EscalationStatus = "forwarded"
-	EscalationResolved  EscalationStatus = "resolved"
-	EscalationDeclined  EscalationStatus = "declined"
+	EscalationOpen      = "open"
+	EscalationHandling  = "handling"
+	EscalationForwarded = "forwarded"
+	EscalationResolved  = "resolved"
+	EscalationDeclined  = "declined"
 )
 
-// Waiting says whether the escalation still waits for an answer.
-func (s EscalationStatus) Waiting() bool {
-	switch s {
+// EscalationWaiting says whether an escalation in status still waits for an
+// answer.
+func EscalationWaiting(status EscalationStatus) bool {
+	switch status {
 	case EscalationOpen, EscalationHandling, EscalationForwarded:
 		return true
 	}
 	return false
 }
 
-// Listed says whether navi lists the escalation as one to act on.
-func (s EscalationStatus) Listed() bool { return s.Waiting() || s == EscalationDeclined }
+// EscalationListed says whether navi lists an escalation in status as one to
+// act on.
+func EscalationListed(status EscalationStatus) bool {
+	return EscalationWaiting(status) || status == EscalationDeclined
+}
 
-// Outcome is what the handler decided.
-type Outcome string
+// Outcome is what the handler decided. EscalationDecision.Outcome holds it.
+type Outcome = string
 
 const (
-	OutcomeResolved  Outcome = "resolved"
-	OutcomeForwarded Outcome = "forwarded"
-	OutcomeDeclined  Outcome = "declined"
+	OutcomeResolved  = "resolved"
+	OutcomeForwarded = "forwarded"
+	OutcomeDeclined  = "declined"
 )
 
 // EscalationDecision is the payload of UpdateEscalationDecide.
-type EscalationDecision struct {
-	Outcome   Outcome   `json:"outcome"`
-	Text      string    `json:"text"`
-	Reasoning string    `json:"reasoning,omitempty"`
-	Handler   string    `json:"handler,omitempty"`
-	Learning  string    `json:"learning,omitempty"`
-	At        time.Time `json:"at"`
-}
+type EscalationDecision = naviv1.EscalationDecision
 
 // EscalationReview is the payload of UpdateEscalationReview.
-type EscalationReview struct {
-	Text       string    `json:"text,omitempty"`
-	By         *Person   `json:"by,omitempty"`
-	Restricted bool      `json:"restricted,omitempty"`
-	At         time.Time `json:"at"`
-}
+type EscalationReview = naviv1.EscalationReview
 
 // EscalationSession is what the handler's chat takes from the chat it serves.
-type EscalationSession struct {
-	Host         string       `json:"host"`
-	Backend      string       `json:"backend,omitempty"`
-	Model        string       `json:"model,omitempty"`
-	Models       []string     `json:"models,omitempty"`
-	Repositories []Repository `json:"repositories"`
-	Restricted   bool         `json:"restricted,omitempty"`
-	Scope        *scope.Scope `json:"scope,omitempty"`
-}
+type EscalationSession = naviv1.EscalationSession
 
 // EscalationRequest is what a chat asks for.
-type EscalationRequest struct {
-	ID        string             `json:"id"`
-	Chat      string             `json:"chat"`
-	Need      string             `json:"need"`
-	Why       string             `json:"why"`
-	Tried     string             `json:"tried,omitempty"`
-	Next      string             `json:"next,omitempty"`
-	Issue     *Issue             `json:"issue,omitempty"`
-	Project   string             `json:"project,omitempty"`
-	StartedBy *Person            `json:"started_by,omitempty"`
-	Title     string             `json:"title"`
-	Session   *EscalationSession `json:"session,omitempty"`
-}
+type EscalationRequest = naviv1.EscalationRequest
 
 // EscalationAnswer is the payload of UpdateEscalationResolve.
-type EscalationAnswer struct {
-	Text       string  `json:"text"`
-	By         *Person `json:"by,omitempty"`
-	Restricted bool    `json:"restricted,omitempty"`
-}
+type EscalationAnswer = naviv1.EscalationAnswer
 
 // EscalationClaim is the payload of SignalEscalationHandling.
-type EscalationClaim struct {
-	Handler string `json:"handler"`
-}
+type EscalationClaim = naviv1.EscalationClaim
 
 // EscalationForward is the payload of SignalEscalationForward.
-type EscalationForward struct {
-	Note      string `json:"note,omitempty"`
-	Reasoning string `json:"reasoning,omitempty"`
-}
+type EscalationForward = naviv1.EscalationForward
 
-// EscalationState is what QueryEscalation returns.
-type EscalationState struct {
-	Request   EscalationRequest   `json:"request"`
-	Status    EscalationStatus    `json:"status"`
-	Raised    time.Time           `json:"raised"`
-	Changed   time.Time           `json:"changed"`
-	Handler   string              `json:"handler,omitempty"`
-	Note      string              `json:"note,omitempty"`
-	Decision  *EscalationDecision `json:"decision,omitempty"`
-	Review    *EscalationReview   `json:"review,omitempty"`
-	Answer    *EscalationAnswer   `json:"answer,omitempty"`
-	Withdrawn bool                `json:"withdrawn,omitempty"`
-	Delivered bool                `json:"delivered,omitempty"`
-}
+// EscalationState is the escalation workflow's input and result, and what
+// QueryEscalation returns.
+type EscalationState = naviv1.EscalationState
 
 // EscalationRef is what a chat keeps of an escalation it raised.
-type EscalationRef struct {
-	ID         string           `json:"id"`
-	Title      string           `json:"title"`
-	Status     EscalationStatus `json:"status"`
-	Overridden bool             `json:"overridden,omitempty"`
-}
+type EscalationRef = naviv1.EscalationRef
 
 // EscalationNotice is the payload of SignalEscalation.
-type EscalationNotice struct {
-	ID       string            `json:"id"`
-	Status   EscalationStatus  `json:"status"`
-	Answer   *EscalationAnswer `json:"answer,omitempty"`
-	Override bool              `json:"override,omitempty"`
-}
+type EscalationNotice = naviv1.EscalationNotice
+
+// HandlerIntake is the payload of SignalEscalationIntake.
+type HandlerIntake = naviv1.HandlerIntake
+
+// ResolvedRecord is what the handler remembers of an escalation it resolved
+// or declined, for its loop guard.
+type ResolvedRecord = naviv1.ResolvedRecord
+
+// HandlerState is the handler workflow's input and state.
+type HandlerState = naviv1.HandlerState

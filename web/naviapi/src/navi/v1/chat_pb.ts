@@ -14,7 +14,7 @@ import type { Message as Message$1 } from "@bufbuild/protobuf";
  * Describes the file navi/v1/chat.proto.
  */
 export const file_navi_v1_chat: GenFile = /*@__PURE__*/
-  fileDesc("ChJuYXZpL3YxL2NoYXQucHJvdG8SB25hdmkudjEiIwoQTGlzdENoYXRzUmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJIjgKEUxpc3RDaGF0c1Jlc3BvbnNlEiMKBWNoYXRzGAEgAygLMhQubmF2aS52MS5DaGF0U3VtbWFyeSIrChhMaXN0QXJjaGl2ZWRDaGF0c1JlcXVlc3QSDwoHcHJvamVjdBgBIAEoCSJAChlMaXN0QXJjaGl2ZWRDaGF0c1Jlc3BvbnNlEiMKBWNoYXRzGAEgAygLMhQubmF2aS52MS5DaGF0U3VtbWFyeSImChNMaXN0U2Vzc2lvbnNSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkiPgoUTGlzdFNlc3Npb25zUmVzcG9uc2USJgoIc2Vzc2lvbnMYASADKAsyFC5uYXZpLnYxLkNoYXRTdW1tYXJ5Ii0KDkdldENoYXRSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkiMgoPR2V0Q2hhdFJlc3BvbnNlEh8KBGNoYXQYASABKAsyES5uYXZpLnYxLkNoYXRWaWV3IlUKEUNyZWF0ZUNoYXRSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSDwoHbWVzc2FnZRgCIAEoCRINCgVtb2RlbBgDIAEoCRIPCgdiYWNrZW5kGAQgASgJIjUKEkNyZWF0ZUNoYXRSZXNwb25zZRIfCgRjaGF0GAEgASgLMhEubmF2aS52MS5DaGF0VmlldyJdChJTZW5kTWVzc2FnZVJlcXVlc3QSDwoHcHJvamVjdBgBIAEoCRIKCgJpZBgCIAEoCRIMCgR0ZXh0GAMgASgJEhwKBXBpY2tzGAQgAygLMg0ubmF2aS52MS5QaWNrIjgKE1NlbmRNZXNzYWdlUmVzcG9uc2USIQoHbWVzc2FnZRgBIAEoCzIQLm5hdmkudjEuTWVzc2FnZSIqCgtTdG9wUmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJEgoKAmlkGAIgASgJIg4KDFN0b3BSZXNwb25zZSIxChJTdG9wRGlzY2FyZFJlcXVlc3QSDwoHcHJvamVjdBgBIAEoCRIKCgJpZBgCIAEoCSIVChNTdG9wRGlzY2FyZFJlc3BvbnNlIj4KDkRlcXVldWVSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkSDwoHbWVzc2FnZRgDIAEoCSIRCg9EZXF1ZXVlUmVzcG9uc2UiKwoMQ2xvc2VSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkiDwoNQ2xvc2VSZXNwb25zZSItCg5BcmNoaXZlUmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJEgoKAmlkGAIgASgJIhEKD0FyY2hpdmVSZXNwb25zZSIvChBVbmFyY2hpdmVSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkiEwoRVW5hcmNoaXZlUmVzcG9uc2UiLwoQV2F0Y2hDaGF0UmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJEgoKAmlkGAIgASgJIpsBChFXYXRjaENoYXRSZXNwb25zZRIiCgVzdGF0ZRgBIAEoCzIRLm5hdmkudjEuQ2hhdFZpZXdIABImCgVldmVudBgCIAEoCzIVLm5hdmkudjEuU2Vzc2lvbkV2ZW50SAASEQoHcHJvYmxlbRgDIAEoCUgAEh0KBHBpbmcYBCABKAsyDS5uYXZpLnYxLlBpbmdIAEIICgZ1cGRhdGUiBgoEUGluZyLoAQoLQ2hhdFN1bW1hcnkSCgoCaWQYASABKAkSDQoFdGl0bGUYAiABKAkSDgoGc3RhdHVzGAMgASgJEi4KCnN0YXJ0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBGtpbmQYBSABKAkSEgoKc3RhcnRlZF9ieRgGIAEoCRIOCgZwYXJlbnQYByABKAkSDQoFb3duZXIYCCABKAkSDQoFaXNzdWUYCSABKAkSDQoFc3RhdGUYCiABKAkSDgoGcmVhc29uGAsgASgJEg8KB291dGNvbWUYDCABKAkiWAoIQ2hhdFZpZXcSCgoCaWQYASABKAkSIQoFc3RhdGUYAiABKAsyEi5uYXZpLnYxLkNoYXRTdGF0ZRIdCgVyZXRyeRgDIAEoCzIOLm5hdmkudjEuUmV0cnkiOwoFUmV0cnkSEAoIYWN0aXZpdHkYASABKAkSDwoHYXR0ZW1wdBgCIAEoBRIPCgdtZXNzYWdlGAMgASgJIokGCglDaGF0U3RhdGUSHgoGcHJvYmVzGAEgAygLMg4ubmF2aS52MS5Qcm9iZRIpCghvcGVyYXRvchgCIAEoCzIXLm5hdmkudjEuT3BlcmF0b3JBY2Nlc3MSIAoIY2hpbGRyZW4YAyADKAsyDi5uYXZpLnYxLkNoaWxkEisKC2VzY2FsYXRpb25zGAQgAygLMhYubmF2aS52MS5Fc2NhbGF0aW9uUmVmEhEKCWF0dGVudGlvbhgFIAEoCBIfCgZyZXN1bHQYBiABKAsyDy5uYXZpLnYxLlJlcG9ydBIkCgxtb2RlbF9sZWFzZXMYByADKAsyDi5uYXZpLnYxLkxlYXNlEiUKB3JlcXVlc3QYCCABKAsyFC5uYXZpLnYxLkNoYXRSZXF1ZXN0Eg4KBnN0YXR1cxgJIAEoCRIhCgdzZXNzaW9uGAogASgLMhAubmF2aS52MS5TZXNzaW9uEiEKB3BlbmRpbmcYCyADKAsyEC5uYXZpLnYxLk1lc3NhZ2USIQoHY3VycmVudBgMIAEoCzIQLm5hdmkudjEuTWVzc2FnZRINCgV0dXJucxgNIAEoBRIPCgdjbG9zaW5nGA4gASgIEg8KB3Jlc3VtZXMYDyABKAUSMAoHc2VuZGVycxgQIAMoCzIfLm5hdmkudjEuQ2hhdFN0YXRlLlNlbmRlcnNFbnRyeRIjCgpzdG9wcGVkX2J5GBEgASgLMg8ubmF2aS52MS5QZXJzb24SIgoJY2xvc2VkX2J5GBIgASgLMg8ubmF2aS52MS5QZXJzb24SDwoHYnJpZWZlZBgTIAEoCBIRCglsZWFybmluZ3MYFCABKAUSFQoNbGFzdF9sZWFybmluZxgVIAEoCRIQCghhcmNoaXZlZBgWIAEoCBIdCgVib2FyZBgXIAEoCzIOLm5hdmkudjEuQm9hcmQSEQoJbGFzdF9zdG9wGBggASgJEg0KBWVycm9yGBkgASgJGi4KDFNlbmRlcnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBItoDCgtDaGF0UmVxdWVzdBIKCgJpZBgBIAEoCRINCgV0aXRsZRgCIAEoCRIjCgpzdGFydGVkX2J5GAMgASgLMg8ubmF2aS52MS5QZXJzb24SDAoEaG9zdBgEIAEoCRIPCgdiYWNrZW5kGAUgASgJEg0KBW1vZGVsGAYgASgJEg4KBm1vZGVscxgHIAMoCRIpCgxyZXBvc2l0b3JpZXMYCCADKAsyEy5uYXZpLnYxLlJlcG9zaXRvcnkSHQoFaXNzdWUYCSABKAsyDi5uYXZpLnYxLklzc3VlEg0KBW93bmVyGAogASgJEicKCmVzY2FsYXRpb24YCyABKAsyEy5uYXZpLnYxLkVzY2FsYXRpb24SDwoHcHJvamVjdBgMIAEoCRISCgpyZXN0cmljdGVkGA0gASgIEh0KBXNjb3BlGA4gASgLMg4ubmF2aS52MS5TY29wZRIOCgZwYXJlbnQYDyABKAkSDQoFZGVwdGgYECABKAUSDwoHaGFuZGxlchgRIAEoCBISCgpwb29sX3Njb3BlGBIgASgJEgwKBHBvb2wYEyABKAkSIAoGc2VydmVzGBQgASgLMhAubmF2aS52MS5TZXJ2aW5nEhMKC3Jldmlld19oaW50GBUgASgJIicKClJlcG9zaXRvcnkSDAoEbmFtZRgBIAEoCRILCgN1cmwYAiABKAkiJQoFSXNzdWUSDAoEcmVwbxgBIAEoCRIOCgZudW1iZXIYAiABKAUiHAoKRXNjYWxhdGlvbhIOCgZyZWFzb24YASABKAkiKwoHU2VydmluZxISCgplc2NhbGF0aW9uGAEgASgJEgwKBGNoYXQYAiABKAkimAEKBVNjb3BlEg8KB3Byb2plY3QYASABKAkSFAoMcmVwb3NpdG9yaWVzGAIgAygJEjQKC3Blcm1pc3Npb25zGAMgAygLMh8ubmF2aS52MS5TY29wZS5QZXJtaXNzaW9uc0VudHJ5GjIKEFBlcm1pc3Npb25zRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASJ0CgdNZXNzYWdlEgoKAmlkGAEgASgJEgwKBHRleHQYAiABKAkSHQoEZnJvbRgDIAEoCzIPLm5hdmkudjEuUGVyc29uEhIKCnJlc3RyaWN0ZWQYBCABKAgSHAoFcGlja3MYBSADKAsyDS5uYXZpLnYxLlBpY2silwIKBFBpY2sSEAoIYXJ0Ym9hcmQYASABKAkSDAoEcGFnZRgCIAEoCRIQCghzZWxlY3RvchgDIAEoCRILCgN0YWcYBCABKAkSDAoEdGV4dBgFIAEoCRIMCgRodG1sGAYgASgJEh4KA2JveBgHIAEoCzIRLm5hdmkudjEuUGljay5Cb3gSKQoGc3R5bGVzGAggAygLMhkubmF2aS52MS5QaWNrLlN0eWxlc0VudHJ5GjoKA0JveBIJCgF4GAEgASgFEgkKAXkYAiABKAUSDQoFd2lkdGgYAyABKAUSDgoGaGVpZ2h0GAQgASgFGi0KC1N0eWxlc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEi/wEKBlJlcG9ydBIPCgdjaGF0X2lkGAEgASgJEhEKCWF0dGVudGlvbhgCIAEoCBIPCgdtZXNzYWdlGAMgASgJEhMKC3N0b3BfcmVhc29uGAQgASgJEgwKBHRleHQYBSABKAkSDQoFZXJyb3IYBiABKAkSDwoHc3RvcHBlZBgHIAEoCBISCgpzdG9wcGVkX2J5GAggASgJEg8KB3Jlc3VtZXMYCSABKAUSDwoHZ2F2ZV91cBgKIAEoCBIMCgRpZGxlGAsgASgIEg0KBWVuZGVkGAwgASgIEioKCmVzY2FsYXRpb24YDSABKAsyFi5uYXZpLnYxLkVzY2FsYXRpb25SZWYiTgoNRXNjYWxhdGlvblJlZhIKCgJpZBgBIAEoCRINCgV0aXRsZRgCIAEoCRIOCgZzdGF0dXMYAyABKAkSEgoKb3ZlcnJpZGRlbhgEIAEoCCIjCgVQcm9iZRIMCgRraW5kGAEgASgJEgwKBG5hbWUYAiABKAkidQoFQ2hpbGQSCgoCaWQYASABKAkSDQoFdGl0bGUYAiABKAkSDwoHbWVzc2FnZRgDIAEoCRIMCgRkb25lGAQgASgIEhEKCWF0dGVudGlvbhgFIAEoCBIfCgZyZXN1bHQYBiABKAsyDy5uYXZpLnYxLlJlcG9ydCJGCg5PcGVyYXRvckFjY2VzcxINCgVjb3VudBgBIAEoBRIlCgRsYXN0GAIgAygLMhcubmF2aS52MS5PcGVyYXRvcklzc3VlZCKAAQoOT3BlcmF0b3JJc3N1ZWQSJgoCYXQYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEisKB2V4cGlyZXMYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgoKAmJ5GAMgASgJEg0KBWJhc2lzGAQgASgJIiIKBUxlYXNlEg0KBWxpbWl0GAEgASgJEgoKAmlkGAIgASgJIhQKBUJvYXJkEgsKA2RpchgBIAEoCSKyAQoHU2Vzc2lvbhIKCgJpZBgBIAEoCRISCgp0YXNrX3F1ZXVlGAIgASgJEiYKBmlucHV0cxgDIAMoCzIWLm5hdmkudjEuUmVzb2x2ZWRJbnB1dBIdCgVsZWFzZRgEIAEoCzIOLm5hdmkudjEuTGVhc2USDwoHcmVwb3J0cxgFIAEoCBILCgNwb2QYBiABKAkSIgoEcG9vbBgHIAEoCzIULm5hdmkudjEuU2Vzc2lvblBvb2wiVQoNUmVzb2x2ZWRJbnB1dBITCgtkZXN0aW5hdGlvbhgBIAEoCRISCgpyZXBvc2l0b3J5GAIgASgJEgsKA3JlZhgDIAEoCRIOCgZjb21taXQYBCABKAkinQEKC1Nlc3Npb25Qb29sEgwKBG5hbWUYASABKAkSEwoLbWF4X3dvcmtlcnMYAiABKAUSGwoTc2Vzc2lvbnNfcGVyX3dvcmtlchgDIAEoBRIvCgxpZGxlX3RpbWVvdXQYBCABKAsyGS5nb29nbGUucHJvdG9idWYuRHVyYXRpb24SHQoDcG9kGAUgASgLMhAubmF2aS52MS5Qb2RTcGVjItgBCgdQb2RTcGVjEg0KBWltYWdlGAEgASgJEjAKCHJlcXVlc3RzGAIgAygLMh4ubmF2aS52MS5Qb2RTcGVjLlJlcXVlc3RzRW50cnkSLAoGbGltaXRzGAMgAygLMhwubmF2aS52MS5Qb2RTcGVjLkxpbWl0c0VudHJ5Gi8KDVJlcXVlc3RzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ARotCgtMaW1pdHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIuMBCgxTZXNzaW9uRXZlbnQSDwoHc2Vzc2lvbhgBIAEoCRILCgNzZXEYAiABKAMSKAoEdGltZRgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDAoEa2luZBgEIAEoCRIMCgR0dXJuGAUgASgJEgwKBHRleHQYBiABKAkSIAoEdG9vbBgHIAEoCzISLm5hdmkudjEuVG9vbEV2ZW50EiAKBHBsYW4YCCADKAsyEi5uYXZpLnYxLlBsYW5FbnRyeRIdCgNlbmQYCSABKAsyEC5uYXZpLnYxLlR1cm5FbmQiYwoJVG9vbEV2ZW50EgoKAmlkGAEgASgJEg0KBXRpdGxlGAIgASgJEgwKBGtpbmQYAyABKAkSDgoGc3RhdHVzGAQgASgJEg0KBWlucHV0GAUgASgJEg4KBm91dHB1dBgGIAEoCSI+CglQbGFuRW50cnkSDwoHY29udGVudBgBIAEoCRIOCgZzdGF0dXMYAiABKAkSEAoIcHJpb3JpdHkYAyABKAkiRQoHVHVybkVuZBITCgtzdG9wX3JlYXNvbhgBIAEoCRIlCgdmYWlsdXJlGAIgASgLMhQubmF2aS52MS5UdXJuRmFpbHVyZSJ6CgtUdXJuRmFpbHVyZRIMCgRraW5kGAEgASgJEg8KB21lc3NhZ2UYAiABKAkSLAoIcmVzZXRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg8KB2FjY291bnQYBCABKAkSDQoFbW9kZWwYBSABKAky4AcKC0NoYXRTZXJ2aWNlEksKCUxpc3RDaGF0cxIZLm5hdmkudjEuTGlzdENoYXRzUmVxdWVzdBoaLm5hdmkudjEuTGlzdENoYXRzUmVzcG9uc2UiB5ACAeDgGAESYwoRTGlzdEFyY2hpdmVkQ2hhdHMSIS5uYXZpLnYxLkxpc3RBcmNoaXZlZENoYXRzUmVxdWVzdBoiLm5hdmkudjEuTGlzdEFyY2hpdmVkQ2hhdHNSZXNwb25zZSIHkAIB4OAYARJUCgxMaXN0U2Vzc2lvbnMSHC5uYXZpLnYxLkxpc3RTZXNzaW9uc1JlcXVlc3QaHS5uYXZpLnYxLkxpc3RTZXNzaW9uc1Jlc3BvbnNlIgeQAgHg4BgBEkUKB0dldENoYXQSFy5uYXZpLnYxLkdldENoYXRSZXF1ZXN0GhgubmF2aS52MS5HZXRDaGF0UmVzcG9uc2UiB5ACAeDgGAESSwoKQ3JlYXRlQ2hhdBIaLm5hdmkudjEuQ3JlYXRlQ2hhdFJlcXVlc3QaGy5uYXZpLnYxLkNyZWF0ZUNoYXRSZXNwb25zZSIE4OAYAhJOCgtTZW5kTWVzc2FnZRIbLm5hdmkudjEuU2VuZE1lc3NhZ2VSZXF1ZXN0GhwubmF2aS52MS5TZW5kTWVzc2FnZVJlc3BvbnNlIgTg4BgCEjkKBFN0b3ASFC5uYXZpLnYxLlN0b3BSZXF1ZXN0GhUubmF2aS52MS5TdG9wUmVzcG9uc2UiBODgGAISTgoLU3RvcERpc2NhcmQSGy5uYXZpLnYxLlN0b3BEaXNjYXJkUmVxdWVzdBocLm5hdmkudjEuU3RvcERpc2NhcmRSZXNwb25zZSIE4OAYAhJCCgdEZXF1ZXVlEhcubmF2aS52MS5EZXF1ZXVlUmVxdWVzdBoYLm5hdmkudjEuRGVxdWV1ZVJlc3BvbnNlIgTg4BgCEjwKBUNsb3NlEhUubmF2aS52MS5DbG9zZVJlcXVlc3QaFi5uYXZpLnYxLkNsb3NlUmVzcG9uc2UiBODgGAISQgoHQXJjaGl2ZRIXLm5hdmkudjEuQXJjaGl2ZVJlcXVlc3QaGC5uYXZpLnYxLkFyY2hpdmVSZXNwb25zZSIE4OAYAhJICglVbmFyY2hpdmUSGS5uYXZpLnYxLlVuYXJjaGl2ZVJlcXVlc3QaGi5uYXZpLnYxLlVuYXJjaGl2ZVJlc3BvbnNlIgTg4BgCEkoKCVdhdGNoQ2hhdBIZLm5hdmkudjEuV2F0Y2hDaGF0UmVxdWVzdBoaLm5hdmkudjEuV2F0Y2hDaGF0UmVzcG9uc2UiBODgGAEwAUJEWkJnaXRodWIuY29tL2dmeC1sYWJzL3Byb3RvY29sNy9wa2cvdHJhbnNwb3J0L25hdmlhcGkvbmF2aS92MTtuYXZpdjFiBnByb3RvMw", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_navi_v1_common]);
+  fileDesc("ChJuYXZpL3YxL2NoYXQucHJvdG8SB25hdmkudjEiIwoQTGlzdENoYXRzUmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJIjgKEUxpc3RDaGF0c1Jlc3BvbnNlEiMKBWNoYXRzGAEgAygLMhQubmF2aS52MS5DaGF0U3VtbWFyeSIrChhMaXN0QXJjaGl2ZWRDaGF0c1JlcXVlc3QSDwoHcHJvamVjdBgBIAEoCSJAChlMaXN0QXJjaGl2ZWRDaGF0c1Jlc3BvbnNlEiMKBWNoYXRzGAEgAygLMhQubmF2aS52MS5DaGF0U3VtbWFyeSImChNMaXN0U2Vzc2lvbnNSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkiPgoUTGlzdFNlc3Npb25zUmVzcG9uc2USJgoIc2Vzc2lvbnMYASADKAsyFC5uYXZpLnYxLkNoYXRTdW1tYXJ5Ii0KDkdldENoYXRSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkiMgoPR2V0Q2hhdFJlc3BvbnNlEh8KBGNoYXQYASABKAsyES5uYXZpLnYxLkNoYXRWaWV3IlUKEUNyZWF0ZUNoYXRSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSDwoHbWVzc2FnZRgCIAEoCRINCgVtb2RlbBgDIAEoCRIPCgdiYWNrZW5kGAQgASgJIjUKEkNyZWF0ZUNoYXRSZXNwb25zZRIfCgRjaGF0GAEgASgLMhEubmF2aS52MS5DaGF0VmlldyJdChJTZW5kTWVzc2FnZVJlcXVlc3QSDwoHcHJvamVjdBgBIAEoCRIKCgJpZBgCIAEoCRIMCgR0ZXh0GAMgASgJEhwKBXBpY2tzGAQgAygLMg0ubmF2aS52MS5QaWNrIjgKE1NlbmRNZXNzYWdlUmVzcG9uc2USIQoHbWVzc2FnZRgBIAEoCzIQLm5hdmkudjEuTWVzc2FnZSIqCgtTdG9wUmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJEgoKAmlkGAIgASgJIg4KDFN0b3BSZXNwb25zZSIxChJTdG9wRGlzY2FyZFJlcXVlc3QSDwoHcHJvamVjdBgBIAEoCRIKCgJpZBgCIAEoCSIVChNTdG9wRGlzY2FyZFJlc3BvbnNlIj4KDkRlcXVldWVSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkSDwoHbWVzc2FnZRgDIAEoCSIRCg9EZXF1ZXVlUmVzcG9uc2UiKwoMQ2xvc2VSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkiDwoNQ2xvc2VSZXNwb25zZSItCg5BcmNoaXZlUmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJEgoKAmlkGAIgASgJIhEKD0FyY2hpdmVSZXNwb25zZSIvChBVbmFyY2hpdmVSZXF1ZXN0Eg8KB3Byb2plY3QYASABKAkSCgoCaWQYAiABKAkiEwoRVW5hcmNoaXZlUmVzcG9uc2UiLwoQV2F0Y2hDaGF0UmVxdWVzdBIPCgdwcm9qZWN0GAEgASgJEgoKAmlkGAIgASgJIpsBChFXYXRjaENoYXRSZXNwb25zZRIiCgVzdGF0ZRgBIAEoCzIRLm5hdmkudjEuQ2hhdFZpZXdIABImCgVldmVudBgCIAEoCzIVLm5hdmkudjEuU2Vzc2lvbkV2ZW50SAASEQoHcHJvYmxlbRgDIAEoCUgAEh0KBHBpbmcYBCABKAsyDS5uYXZpLnYxLlBpbmdIAEIICgZ1cGRhdGUiBgoEUGluZyI2CgZBY3Rpb24SGwoCYnkYASABKAsyDy5uYXZpLnYxLlBlcnNvbhIPCgdkaXNjYXJkGAIgASgIIjIKB0RlcXVldWUSCgoCaWQYASABKAkSGwoCYnkYAiABKAsyDy5uYXZpLnYxLlBlcnNvbiI4CgdBcmNoaXZlEhAKCGFyY2hpdmVkGAEgASgIEhsKAmJ5GAIgASgLMg8ubmF2aS52MS5QZXJzb24i6AEKC0NoYXRTdW1tYXJ5EgoKAmlkGAEgASgJEg0KBXRpdGxlGAIgASgJEg4KBnN0YXR1cxgDIAEoCRIuCgpzdGFydGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIMCgRraW5kGAUgASgJEhIKCnN0YXJ0ZWRfYnkYBiABKAkSDgoGcGFyZW50GAcgASgJEg0KBW93bmVyGAggASgJEg0KBWlzc3VlGAkgASgJEg0KBXN0YXRlGAogASgJEg4KBnJlYXNvbhgLIAEoCRIPCgdvdXRjb21lGAwgASgJIlgKCENoYXRWaWV3EgoKAmlkGAEgASgJEiEKBXN0YXRlGAIgASgLMhIubmF2aS52MS5DaGF0U3RhdGUSHQoFcmV0cnkYAyABKAsyDi5uYXZpLnYxLlJldHJ5IjsKBVJldHJ5EhAKCGFjdGl2aXR5GAEgASgJEg8KB2F0dGVtcHQYAiABKAUSDwoHbWVzc2FnZRgDIAEoCSKJBgoJQ2hhdFN0YXRlEh4KBnByb2JlcxgBIAMoCzIOLm5hdmkudjEuUHJvYmUSKQoIb3BlcmF0b3IYAiABKAsyFy5uYXZpLnYxLk9wZXJhdG9yQWNjZXNzEiAKCGNoaWxkcmVuGAMgAygLMg4ubmF2aS52MS5DaGlsZBIrCgtlc2NhbGF0aW9ucxgEIAMoCzIWLm5hdmkudjEuRXNjYWxhdGlvblJlZhIRCglhdHRlbnRpb24YBSABKAgSHwoGcmVzdWx0GAYgASgLMg8ubmF2aS52MS5SZXBvcnQSJAoMbW9kZWxfbGVhc2VzGAcgAygLMg4ubmF2aS52MS5MZWFzZRIlCgdyZXF1ZXN0GAggASgLMhQubmF2aS52MS5DaGF0UmVxdWVzdBIOCgZzdGF0dXMYCSABKAkSIQoHc2Vzc2lvbhgKIAEoCzIQLm5hdmkudjEuU2Vzc2lvbhIhCgdwZW5kaW5nGAsgAygLMhAubmF2aS52MS5NZXNzYWdlEiEKB2N1cnJlbnQYDCABKAsyEC5uYXZpLnYxLk1lc3NhZ2USDQoFdHVybnMYDSABKAUSDwoHY2xvc2luZxgOIAEoCBIPCgdyZXN1bWVzGA8gASgFEjAKB3NlbmRlcnMYECADKAsyHy5uYXZpLnYxLkNoYXRTdGF0ZS5TZW5kZXJzRW50cnkSIwoKc3RvcHBlZF9ieRgRIAEoCzIPLm5hdmkudjEuUGVyc29uEiIKCWNsb3NlZF9ieRgSIAEoCzIPLm5hdmkudjEuUGVyc29uEg8KB2JyaWVmZWQYEyABKAgSEQoJbGVhcm5pbmdzGBQgASgFEhUKDWxhc3RfbGVhcm5pbmcYFSABKAkSEAoIYXJjaGl2ZWQYFiABKAgSHQoFYm9hcmQYFyABKAsyDi5uYXZpLnYxLkJvYXJkEhEKCWxhc3Rfc3RvcBgYIAEoCRINCgVlcnJvchgZIAEoCRouCgxTZW5kZXJzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASLaAwoLQ2hhdFJlcXVlc3QSCgoCaWQYASABKAkSDQoFdGl0bGUYAiABKAkSIwoKc3RhcnRlZF9ieRgDIAEoCzIPLm5hdmkudjEuUGVyc29uEgwKBGhvc3QYBCABKAkSDwoHYmFja2VuZBgFIAEoCRINCgVtb2RlbBgGIAEoCRIOCgZtb2RlbHMYByADKAkSKQoMcmVwb3NpdG9yaWVzGAggAygLMhMubmF2aS52MS5SZXBvc2l0b3J5Eh0KBWlzc3VlGAkgASgLMg4ubmF2aS52MS5Jc3N1ZRINCgVvd25lchgKIAEoCRInCgplc2NhbGF0aW9uGAsgASgLMhMubmF2aS52MS5Fc2NhbGF0aW9uEg8KB3Byb2plY3QYDCABKAkSEgoKcmVzdHJpY3RlZBgNIAEoCBIdCgVzY29wZRgOIAEoCzIOLm5hdmkudjEuU2NvcGUSDgoGcGFyZW50GA8gASgJEg0KBWRlcHRoGBAgASgFEg8KB2hhbmRsZXIYESABKAgSEgoKcG9vbF9zY29wZRgSIAEoCRIMCgRwb29sGBMgASgJEiAKBnNlcnZlcxgUIAEoCzIQLm5hdmkudjEuU2VydmluZxITCgtyZXZpZXdfaGludBgVIAEoCSInCgpSZXBvc2l0b3J5EgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJIiUKBUlzc3VlEgwKBHJlcG8YASABKAkSDgoGbnVtYmVyGAIgASgFIhwKCkVzY2FsYXRpb24SDgoGcmVhc29uGAEgASgJIisKB1NlcnZpbmcSEgoKZXNjYWxhdGlvbhgBIAEoCRIMCgRjaGF0GAIgASgJIpgBCgVTY29wZRIPCgdwcm9qZWN0GAEgASgJEhQKDHJlcG9zaXRvcmllcxgCIAMoCRI0CgtwZXJtaXNzaW9ucxgDIAMoCzIfLm5hdmkudjEuU2NvcGUuUGVybWlzc2lvbnNFbnRyeRoyChBQZXJtaXNzaW9uc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEidAoHTWVzc2FnZRIKCgJpZBgBIAEoCRIMCgR0ZXh0GAIgASgJEh0KBGZyb20YAyABKAsyDy5uYXZpLnYxLlBlcnNvbhISCgpyZXN0cmljdGVkGAQgASgIEhwKBXBpY2tzGAUgAygLMg0ubmF2aS52MS5QaWNrIpcCCgRQaWNrEhAKCGFydGJvYXJkGAEgASgJEgwKBHBhZ2UYAiABKAkSEAoIc2VsZWN0b3IYAyABKAkSCwoDdGFnGAQgASgJEgwKBHRleHQYBSABKAkSDAoEaHRtbBgGIAEoCRIeCgNib3gYByABKAsyES5uYXZpLnYxLlBpY2suQm94EikKBnN0eWxlcxgIIAMoCzIZLm5hdmkudjEuUGljay5TdHlsZXNFbnRyeRo6CgNCb3gSCQoBeBgBIAEoBRIJCgF5GAIgASgFEg0KBXdpZHRoGAMgASgFEg4KBmhlaWdodBgEIAEoBRotCgtTdHlsZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIv8BCgZSZXBvcnQSDwoHY2hhdF9pZBgBIAEoCRIRCglhdHRlbnRpb24YAiABKAgSDwoHbWVzc2FnZRgDIAEoCRITCgtzdG9wX3JlYXNvbhgEIAEoCRIMCgR0ZXh0GAUgASgJEg0KBWVycm9yGAYgASgJEg8KB3N0b3BwZWQYByABKAgSEgoKc3RvcHBlZF9ieRgIIAEoCRIPCgdyZXN1bWVzGAkgASgFEg8KB2dhdmVfdXAYCiABKAgSDAoEaWRsZRgLIAEoCBINCgVlbmRlZBgMIAEoCBIqCgplc2NhbGF0aW9uGA0gASgLMhYubmF2aS52MS5Fc2NhbGF0aW9uUmVmIk4KDUVzY2FsYXRpb25SZWYSCgoCaWQYASABKAkSDQoFdGl0bGUYAiABKAkSDgoGc3RhdHVzGAMgASgJEhIKCm92ZXJyaWRkZW4YBCABKAgiIwoFUHJvYmUSDAoEa2luZBgBIAEoCRIMCgRuYW1lGAIgASgJInUKBUNoaWxkEgoKAmlkGAEgASgJEg0KBXRpdGxlGAIgASgJEg8KB21lc3NhZ2UYAyABKAkSDAoEZG9uZRgEIAEoCBIRCglhdHRlbnRpb24YBSABKAgSHwoGcmVzdWx0GAYgASgLMg8ubmF2aS52MS5SZXBvcnQiRgoOT3BlcmF0b3JBY2Nlc3MSDQoFY291bnQYASABKAUSJQoEbGFzdBgCIAMoCzIXLm5hdmkudjEuT3BlcmF0b3JJc3N1ZWQigAEKDk9wZXJhdG9ySXNzdWVkEiYKAmF0GAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIrCgdleHBpcmVzGAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIKCgJieRgDIAEoCRINCgViYXNpcxgEIAEoCSIiCgVMZWFzZRINCgVsaW1pdBgBIAEoCRIKCgJpZBgCIAEoCSIUCgVCb2FyZBILCgNkaXIYASABKAkisgEKB1Nlc3Npb24SCgoCaWQYASABKAkSEgoKdGFza19xdWV1ZRgCIAEoCRImCgZpbnB1dHMYAyADKAsyFi5uYXZpLnYxLlJlc29sdmVkSW5wdXQSHQoFbGVhc2UYBCABKAsyDi5uYXZpLnYxLkxlYXNlEg8KB3JlcG9ydHMYBSABKAgSCwoDcG9kGAYgASgJEiIKBHBvb2wYByABKAsyFC5uYXZpLnYxLlNlc3Npb25Qb29sIlUKDVJlc29sdmVkSW5wdXQSEwoLZGVzdGluYXRpb24YASABKAkSEgoKcmVwb3NpdG9yeRgCIAEoCRILCgNyZWYYAyABKAkSDgoGY29tbWl0GAQgASgJIp0BCgtTZXNzaW9uUG9vbBIMCgRuYW1lGAEgASgJEhMKC21heF93b3JrZXJzGAIgASgFEhsKE3Nlc3Npb25zX3Blcl93b3JrZXIYAyABKAUSLwoMaWRsZV90aW1lb3V0GAQgASgLMhkuZ29vZ2xlLnByb3RvYnVmLkR1cmF0aW9uEh0KA3BvZBgFIAEoCzIQLm5hdmkudjEuUG9kU3BlYyLYAQoHUG9kU3BlYxINCgVpbWFnZRgBIAEoCRIwCghyZXF1ZXN0cxgCIAMoCzIeLm5hdmkudjEuUG9kU3BlYy5SZXF1ZXN0c0VudHJ5EiwKBmxpbWl0cxgDIAMoCzIcLm5hdmkudjEuUG9kU3BlYy5MaW1pdHNFbnRyeRovCg1SZXF1ZXN0c0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEaLQoLTGltaXRzRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASLjAQoMU2Vzc2lvbkV2ZW50Eg8KB3Nlc3Npb24YASABKAkSCwoDc2VxGAIgASgDEigKBHRpbWUYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEgwKBGtpbmQYBCABKAkSDAoEdHVybhgFIAEoCRIMCgR0ZXh0GAYgASgJEiAKBHRvb2wYByABKAsyEi5uYXZpLnYxLlRvb2xFdmVudBIgCgRwbGFuGAggAygLMhIubmF2aS52MS5QbGFuRW50cnkSHQoDZW5kGAkgASgLMhAubmF2aS52MS5UdXJuRW5kImMKCVRvb2xFdmVudBIKCgJpZBgBIAEoCRINCgV0aXRsZRgCIAEoCRIMCgRraW5kGAMgASgJEg4KBnN0YXR1cxgEIAEoCRINCgVpbnB1dBgFIAEoCRIOCgZvdXRwdXQYBiABKAkiPgoJUGxhbkVudHJ5Eg8KB2NvbnRlbnQYASABKAkSDgoGc3RhdHVzGAIgASgJEhAKCHByaW9yaXR5GAMgASgJIkUKB1R1cm5FbmQSEwoLc3RvcF9yZWFzb24YASABKAkSJQoHZmFpbHVyZRgCIAEoCzIULm5hdmkudjEuVHVybkZhaWx1cmUiegoLVHVybkZhaWx1cmUSDAoEa2luZBgBIAEoCRIPCgdtZXNzYWdlGAIgASgJEiwKCHJlc2V0X2F0GAMgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIPCgdhY2NvdW50GAQgASgJEg0KBW1vZGVsGAUgASgJMuAHCgtDaGF0U2VydmljZRJLCglMaXN0Q2hhdHMSGS5uYXZpLnYxLkxpc3RDaGF0c1JlcXVlc3QaGi5uYXZpLnYxLkxpc3RDaGF0c1Jlc3BvbnNlIgeQAgHg4BgBEmMKEUxpc3RBcmNoaXZlZENoYXRzEiEubmF2aS52MS5MaXN0QXJjaGl2ZWRDaGF0c1JlcXVlc3QaIi5uYXZpLnYxLkxpc3RBcmNoaXZlZENoYXRzUmVzcG9uc2UiB5ACAeDgGAESVAoMTGlzdFNlc3Npb25zEhwubmF2aS52MS5MaXN0U2Vzc2lvbnNSZXF1ZXN0Gh0ubmF2aS52MS5MaXN0U2Vzc2lvbnNSZXNwb25zZSIHkAIB4OAYARJFCgdHZXRDaGF0EhcubmF2aS52MS5HZXRDaGF0UmVxdWVzdBoYLm5hdmkudjEuR2V0Q2hhdFJlc3BvbnNlIgeQAgHg4BgBEksKCkNyZWF0ZUNoYXQSGi5uYXZpLnYxLkNyZWF0ZUNoYXRSZXF1ZXN0GhsubmF2aS52MS5DcmVhdGVDaGF0UmVzcG9uc2UiBODgGAISTgoLU2VuZE1lc3NhZ2USGy5uYXZpLnYxLlNlbmRNZXNzYWdlUmVxdWVzdBocLm5hdmkudjEuU2VuZE1lc3NhZ2VSZXNwb25zZSIE4OAYAhI5CgRTdG9wEhQubmF2aS52MS5TdG9wUmVxdWVzdBoVLm5hdmkudjEuU3RvcFJlc3BvbnNlIgTg4BgCEk4KC1N0b3BEaXNjYXJkEhsubmF2aS52MS5TdG9wRGlzY2FyZFJlcXVlc3QaHC5uYXZpLnYxLlN0b3BEaXNjYXJkUmVzcG9uc2UiBODgGAISQgoHRGVxdWV1ZRIXLm5hdmkudjEuRGVxdWV1ZVJlcXVlc3QaGC5uYXZpLnYxLkRlcXVldWVSZXNwb25zZSIE4OAYAhI8CgVDbG9zZRIVLm5hdmkudjEuQ2xvc2VSZXF1ZXN0GhYubmF2aS52MS5DbG9zZVJlc3BvbnNlIgTg4BgCEkIKB0FyY2hpdmUSFy5uYXZpLnYxLkFyY2hpdmVSZXF1ZXN0GhgubmF2aS52MS5BcmNoaXZlUmVzcG9uc2UiBODgGAISSAoJVW5hcmNoaXZlEhkubmF2aS52MS5VbmFyY2hpdmVSZXF1ZXN0GhoubmF2aS52MS5VbmFyY2hpdmVSZXNwb25zZSIE4OAYAhJKCglXYXRjaENoYXQSGS5uYXZpLnYxLldhdGNoQ2hhdFJlcXVlc3QaGi5uYXZpLnYxLldhdGNoQ2hhdFJlc3BvbnNlIgTg4BgBMAFCRFpCZ2l0aHViLmNvbS9nZngtbGFicy9wcm90b2NvbDcvcGtnL3RyYW5zcG9ydC9uYXZpYXBpL25hdmkvdjE7bmF2aXYxYgZwcm90bzM", [file_google_protobuf_duration, file_google_protobuf_timestamp, file_navi_v1_common]);
 
 /**
  * @generated from message navi.v1.ListChatsRequest
@@ -575,6 +575,82 @@ export const PingSchema: GenMessage<Ping> = /*@__PURE__*/
   messageDesc(file_navi_v1_chat, 26);
 
 /**
+ * Action is the payload of the chat's stop and close signals.
+ *
+ * @generated from message navi.v1.Action
+ */
+export type Action = Message$1<"navi.v1.Action"> & {
+  /**
+   * @generated from field: navi.v1.Person by = 1;
+   */
+  by?: Person | undefined;
+
+  /**
+   * discard makes a stop drop the waiting messages as well.
+   *
+   * @generated from field: bool discard = 2;
+   */
+  discard: boolean;
+};
+
+/**
+ * Describes the message navi.v1.Action.
+ * Use `create(ActionSchema)` to create a new message.
+ */
+export const ActionSchema: GenMessage<Action> = /*@__PURE__*/
+  messageDesc(file_navi_v1_chat, 27);
+
+/**
+ * Dequeue is the payload of the chat's dequeue signal.
+ *
+ * @generated from message navi.v1.Dequeue
+ */
+export type Dequeue = Message$1<"navi.v1.Dequeue"> & {
+  /**
+   * id is the id of the message that waits.
+   *
+   * @generated from field: string id = 1;
+   */
+  id: string;
+
+  /**
+   * @generated from field: navi.v1.Person by = 2;
+   */
+  by?: Person | undefined;
+};
+
+/**
+ * Describes the message navi.v1.Dequeue.
+ * Use `create(DequeueSchema)` to create a new message.
+ */
+export const DequeueSchema: GenMessage<Dequeue> = /*@__PURE__*/
+  messageDesc(file_navi_v1_chat, 28);
+
+/**
+ * Archive is the payload of the chat's archive update.
+ *
+ * @generated from message navi.v1.Archive
+ */
+export type Archive = Message$1<"navi.v1.Archive"> & {
+  /**
+   * @generated from field: bool archived = 1;
+   */
+  archived: boolean;
+
+  /**
+   * @generated from field: navi.v1.Person by = 2;
+   */
+  by?: Person | undefined;
+};
+
+/**
+ * Describes the message navi.v1.Archive.
+ * Use `create(ArchiveSchema)` to create a new message.
+ */
+export const ArchiveSchema: GenMessage<Archive> = /*@__PURE__*/
+  messageDesc(file_navi_v1_chat, 29);
+
+/**
  * ChatSummary is one row of the chat and session lists.
  *
  * @generated from message navi.v1.ChatSummary
@@ -661,7 +737,7 @@ export type ChatSummary = Message$1<"navi.v1.ChatSummary"> & {
  * Use `create(ChatSummarySchema)` to create a new message.
  */
 export const ChatSummarySchema: GenMessage<ChatSummary> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 27);
+  messageDesc(file_navi_v1_chat, 30);
 
 /**
  * ChatView is one chat as the page shows it.
@@ -692,7 +768,7 @@ export type ChatView = Message$1<"navi.v1.ChatView"> & {
  * Use `create(ChatViewSchema)` to create a new message.
  */
 export const ChatViewSchema: GenMessage<ChatView> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 28);
+  messageDesc(file_navi_v1_chat, 31);
 
 /**
  * Retry says that a step of the chat failed and is tried again.
@@ -721,10 +797,13 @@ export type Retry = Message$1<"navi.v1.Retry"> & {
  * Use `create(RetrySchema)` to create a new message.
  */
 export const RetrySchema: GenMessage<Retry> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 29);
+  messageDesc(file_navi_v1_chat, 32);
 
 /**
- * ChatState is what a chat's workflow says of itself.
+ * ChatState is what a chat's workflow keeps and what it answers the state
+ * query with. It is the workflow's input, so it is also what one run hands to
+ * the next on Continue-As-New. A new chat starts from a ChatState that holds
+ * only its request and first message.
  *
  * @generated from message navi.v1.ChatState
  */
@@ -863,7 +942,7 @@ export type ChatState = Message$1<"navi.v1.ChatState"> & {
  * Use `create(ChatStateSchema)` to create a new message.
  */
 export const ChatStateSchema: GenMessage<ChatState> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 30);
+  messageDesc(file_navi_v1_chat, 33);
 
 /**
  * ChatRequest describes a chat as it was started.
@@ -982,7 +1061,7 @@ export type ChatRequest = Message$1<"navi.v1.ChatRequest"> & {
  * Use `create(ChatRequestSchema)` to create a new message.
  */
 export const ChatRequestSchema: GenMessage<ChatRequest> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 31);
+  messageDesc(file_navi_v1_chat, 34);
 
 /**
  * Repository is one repository cloned into a chat's session.
@@ -1006,7 +1085,7 @@ export type Repository = Message$1<"navi.v1.Repository"> & {
  * Use `create(RepositorySchema)` to create a new message.
  */
 export const RepositorySchema: GenMessage<Repository> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 32);
+  messageDesc(file_navi_v1_chat, 35);
 
 /**
  * Issue names a GitHub issue.
@@ -1032,7 +1111,7 @@ export type Issue = Message$1<"navi.v1.Issue"> & {
  * Use `create(IssueSchema)` to create a new message.
  */
 export const IssueSchema: GenMessage<Issue> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 33);
+  messageDesc(file_navi_v1_chat, 36);
 
 /**
  * Escalation is set on an older chat the system opened to ask a person
@@ -1052,7 +1131,7 @@ export type Escalation = Message$1<"navi.v1.Escalation"> & {
  * Use `create(EscalationSchema)` to create a new message.
  */
 export const EscalationSchema: GenMessage<Escalation> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 34);
+  messageDesc(file_navi_v1_chat, 37);
 
 /**
  * Serving names what an escalation handler's chat serves.
@@ -1076,7 +1155,7 @@ export type Serving = Message$1<"navi.v1.Serving"> & {
  * Use `create(ServingSchema)` to create a new message.
  */
 export const ServingSchema: GenMessage<Serving> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 35);
+  messageDesc(file_navi_v1_chat, 38);
 
 /**
  * Scope is a chat's effective GitHub authority.
@@ -1109,7 +1188,7 @@ export type Scope = Message$1<"navi.v1.Scope"> & {
  * Use `create(ScopeSchema)` to create a new message.
  */
 export const ScopeSchema: GenMessage<Scope> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 36);
+  messageDesc(file_navi_v1_chat, 39);
 
 /**
  * Message is one message to a chat.
@@ -1148,7 +1227,7 @@ export type Message = Message$1<"navi.v1.Message"> & {
  * Use `create(MessageSchema)` to create a new message.
  */
 export const MessageSchema: GenMessage<Message> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 37);
+  messageDesc(file_navi_v1_chat, 40);
 
 /**
  * Pick is one element the person picked on a design board.
@@ -1202,7 +1281,7 @@ export type Pick = Message$1<"navi.v1.Pick"> & {
  * Use `create(PickSchema)` to create a new message.
  */
 export const PickSchema: GenMessage<Pick> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 38);
+  messageDesc(file_navi_v1_chat, 41);
 
 /**
  * @generated from message navi.v1.Pick.Box
@@ -1234,7 +1313,7 @@ export type Pick_Box = Message$1<"navi.v1.Pick.Box"> & {
  * Use `create(Pick_BoxSchema)` to create a new message.
  */
 export const Pick_BoxSchema: GenMessage<Pick_Box> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 38, 0);
+  messageDesc(file_navi_v1_chat, 41, 0);
 
 /**
  * Report is what a chat reports after a turn, and its last result.
@@ -1313,7 +1392,7 @@ export type Report = Message$1<"navi.v1.Report"> & {
  * Use `create(ReportSchema)` to create a new message.
  */
 export const ReportSchema: GenMessage<Report> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 39);
+  messageDesc(file_navi_v1_chat, 42);
 
 /**
  * EscalationRef is what a chat keeps of an escalation it raised.
@@ -1350,7 +1429,7 @@ export type EscalationRef = Message$1<"navi.v1.EscalationRef"> & {
  * Use `create(EscalationRefSchema)` to create a new message.
  */
 export const EscalationRefSchema: GenMessage<EscalationRef> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 40);
+  messageDesc(file_navi_v1_chat, 43);
 
 /**
  * Probe is a probe a chat deployed.
@@ -1374,7 +1453,7 @@ export type Probe = Message$1<"navi.v1.Probe"> & {
  * Use `create(ProbeSchema)` to create a new message.
  */
 export const ProbeSchema: GenMessage<Probe> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 41);
+  messageDesc(file_navi_v1_chat, 44);
 
 /**
  * Child is a child chat owned by a chat.
@@ -1418,7 +1497,7 @@ export type Child = Message$1<"navi.v1.Child"> & {
  * Use `create(ChildSchema)` to create a new message.
  */
 export const ChildSchema: GenMessage<Child> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 42);
+  messageDesc(file_navi_v1_chat, 45);
 
 /**
  * OperatorAccess is the record of a chat's operator grants.
@@ -1442,7 +1521,7 @@ export type OperatorAccess = Message$1<"navi.v1.OperatorAccess"> & {
  * Use `create(OperatorAccessSchema)` to create a new message.
  */
 export const OperatorAccessSchema: GenMessage<OperatorAccess> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 43);
+  messageDesc(file_navi_v1_chat, 46);
 
 /**
  * OperatorIssued is one operator token grant. It holds no token.
@@ -1478,7 +1557,7 @@ export type OperatorIssued = Message$1<"navi.v1.OperatorIssued"> & {
  * Use `create(OperatorIssuedSchema)` to create a new message.
  */
 export const OperatorIssuedSchema: GenMessage<OperatorIssued> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 44);
+  messageDesc(file_navi_v1_chat, 47);
 
 /**
  * Lease is a place held in a limit.
@@ -1502,7 +1581,7 @@ export type Lease = Message$1<"navi.v1.Lease"> & {
  * Use `create(LeaseSchema)` to create a new message.
  */
 export const LeaseSchema: GenMessage<Lease> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 45);
+  messageDesc(file_navi_v1_chat, 48);
 
 /**
  * Board is a design board shown beside a chat.
@@ -1523,7 +1602,7 @@ export type Board = Message$1<"navi.v1.Board"> & {
  * Use `create(BoardSchema)` to create a new message.
  */
 export const BoardSchema: GenMessage<Board> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 46);
+  messageDesc(file_navi_v1_chat, 49);
 
 /**
  * Session is the chat's open session.
@@ -1572,7 +1651,7 @@ export type Session = Message$1<"navi.v1.Session"> & {
  * Use `create(SessionSchema)` to create a new message.
  */
 export const SessionSchema: GenMessage<Session> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 47);
+  messageDesc(file_navi_v1_chat, 50);
 
 /**
  * ResolvedInput is an input placed in a session's workspace.
@@ -1606,7 +1685,7 @@ export type ResolvedInput = Message$1<"navi.v1.ResolvedInput"> & {
  * Use `create(ResolvedInputSchema)` to create a new message.
  */
 export const ResolvedInputSchema: GenMessage<ResolvedInput> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 48);
+  messageDesc(file_navi_v1_chat, 51);
 
 /**
  * SessionPool is the pool whose worker holds a session.
@@ -1645,7 +1724,7 @@ export type SessionPool = Message$1<"navi.v1.SessionPool"> & {
  * Use `create(SessionPoolSchema)` to create a new message.
  */
 export const SessionPoolSchema: GenMessage<SessionPool> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 49);
+  messageDesc(file_navi_v1_chat, 52);
 
 /**
  * PodSpec changes a pool worker's pod.
@@ -1674,7 +1753,7 @@ export type PodSpec = Message$1<"navi.v1.PodSpec"> & {
  * Use `create(PodSpecSchema)` to create a new message.
  */
 export const PodSpecSchema: GenMessage<PodSpec> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 50);
+  messageDesc(file_navi_v1_chat, 53);
 
 /**
  * SessionEvent is one thing that happened in a session.
@@ -1740,7 +1819,7 @@ export type SessionEvent = Message$1<"navi.v1.SessionEvent"> & {
  * Use `create(SessionEventSchema)` to create a new message.
  */
 export const SessionEventSchema: GenMessage<SessionEvent> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 51);
+  messageDesc(file_navi_v1_chat, 54);
 
 /**
  * ToolEvent is a tool call or an update to one. An update carries only the
@@ -1785,7 +1864,7 @@ export type ToolEvent = Message$1<"navi.v1.ToolEvent"> & {
  * Use `create(ToolEventSchema)` to create a new message.
  */
 export const ToolEventSchema: GenMessage<ToolEvent> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 52);
+  messageDesc(file_navi_v1_chat, 55);
 
 /**
  * PlanEntry is one item of the agent's plan.
@@ -1814,7 +1893,7 @@ export type PlanEntry = Message$1<"navi.v1.PlanEntry"> & {
  * Use `create(PlanEntrySchema)` to create a new message.
  */
 export const PlanEntrySchema: GenMessage<PlanEntry> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 53);
+  messageDesc(file_navi_v1_chat, 56);
 
 /**
  * TurnEnd is how a turn ended.
@@ -1838,7 +1917,7 @@ export type TurnEnd = Message$1<"navi.v1.TurnEnd"> & {
  * Use `create(TurnEndSchema)` to create a new message.
  */
 export const TurnEndSchema: GenMessage<TurnEnd> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 54);
+  messageDesc(file_navi_v1_chat, 57);
 
 /**
  * TurnFailure says why a turn did not end normally.
@@ -1877,7 +1956,7 @@ export type TurnFailure = Message$1<"navi.v1.TurnFailure"> & {
  * Use `create(TurnFailureSchema)` to create a new message.
  */
 export const TurnFailureSchema: GenMessage<TurnFailure> = /*@__PURE__*/
-  messageDesc(file_navi_v1_chat, 55);
+  messageDesc(file_navi_v1_chat, 58);
 
 /**
  * ChatService reads and drives the chats of one navi project. It serves what

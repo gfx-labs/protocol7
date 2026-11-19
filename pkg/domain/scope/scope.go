@@ -8,6 +8,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	naviv1 "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1"
 )
 
 // Scope is what a chat may do on GitHub: which repositories, and with which
@@ -17,18 +19,15 @@ import (
 // starts the chat and stored on its request, so that a later policy change
 // does not widen a chat that runs.
 //
+// It is the navi.v1 message: Project is the navi project, Repositories are
+// owner/name in lower case and sorted, and Permissions are GitHub App
+// permissions by name (contents, pull_requests, issues, checks, actions,
+// statuses, metadata), each "read" or "write". A permission that is not
+// listed is not held. A nil scope holds nothing.
+//
 // A scope never grows: Intersect is how a child chat, a handler or an
 // escalation takes its parent's, and it cannot yield more than either.
-type Scope struct {
-	// Project is the navi project's name. Empty or a name, as the platform defines it.
-	Project string `json:"project"`
-	// Repositories are owner/name in lower case, sorted.
-	Repositories []string `json:"repositories"`
-	// Permissions are GitHub App permissions by name: contents, pull_requests,
-	// issues, checks, actions, statuses and metadata. The value is "read" or
-	// "write". A permission that is not listed is not held.
-	Permissions map[string]string `json:"permissions,omitempty"`
-}
+type Scope = naviv1.Scope
 
 // Level is the highest permission a scope holds.
 type Level string
@@ -56,10 +55,10 @@ func rank(permission string) int {
 	return 0
 }
 
-// Level is the highest permission the scope holds.
-func (s Scope) Level() Level {
+// LevelOf is the highest permission the scope holds.
+func LevelOf(s *Scope) Level {
 	level := LevelNone
-	for _, permission := range s.Permissions {
+	for _, permission := range s.GetPermissions() {
 		switch rank(permission) {
 		case 0:
 		case 1:
@@ -73,11 +72,10 @@ func (s Scope) Level() Level {
 	return level
 }
 
-// NewScope returns a scope with its repositories in lower case, sorted and
-// without repeats,
-// and the permissions that are read, write or admin.
-func NewScope(project string, repositories []string, permissions map[string]string) Scope {
-	scope := Scope{Project: project, Repositories: []string{}}
+// New returns a scope with its repositories in lower case, sorted and without
+// repeats, and the permissions that are read, write or admin.
+func New(project string, repositories []string, permissions map[string]string) *Scope {
+	scope := &Scope{Project: project, Repositories: []string{}}
 	for _, repository := range repositories {
 		// GitHub names are not case sensitive.
 		repository = strings.ToLower(repository)
@@ -100,65 +98,66 @@ func NewScope(project string, repositories []string, permissions map[string]stri
 // Intersect is what both scopes allow: the repositories that are in both, and
 // for each permission the lower of the two (write above read above none). Two
 // scopes of different projects have nothing in common.
-func (s Scope) Intersect(other Scope) Scope {
-	if s.Project != other.Project {
-		return NewScope(s.Project, nil, nil)
+func Intersect(s, other *Scope) *Scope {
+	if s.GetProject() != other.GetProject() {
+		return New(s.GetProject(), nil, nil)
 	}
 	var repositories []string
-	for _, repository := range s.Repositories {
-		if slices.ContainsFunc(other.Repositories, func(r string) bool { return strings.EqualFold(r, repository) }) {
+	for _, repository := range s.GetRepositories() {
+		if HasRepository(other, repository) {
 			repositories = append(repositories, repository)
 		}
 	}
 	permissions := map[string]string{}
-	for name, permission := range s.Permissions {
-		if theirs, ok := other.Permissions[name]; ok {
+	for name, permission := range s.GetPermissions() {
+		if theirs, ok := other.GetPermissions()[name]; ok {
 			if rank(theirs) < rank(permission) {
 				permission = theirs
 			}
 			permissions[name] = permission
 		}
 	}
-	return NewScope(s.Project, repositories, permissions)
+	return New(s.GetProject(), repositories, permissions)
 }
 
-// Narrow is the scope of something that a chat with this scope starts, a
-// child chat, a handler or an escalation: requested, cut to what the chat
-// itself holds. Nil requests nothing narrower.
-func (s Scope) Narrow(requested *Scope) Scope {
+// Narrow is the scope of something that a chat with scope s starts, a child
+// chat, a handler or an escalation: requested, cut to what the chat itself
+// holds. Nil requests nothing narrower.
+func Narrow(s, requested *Scope) *Scope {
 	if requested == nil {
-		return s.clone()
+		return Clone(s)
 	}
-	return s.Intersect(*requested)
+	return Intersect(s, requested)
 }
 
 // ReadOnly is the scope with every permission cut to read.
-func (s Scope) ReadOnly() Scope {
+func ReadOnly(s *Scope) *Scope {
 	permissions := map[string]string{}
-	for name, permission := range s.Permissions {
+	for name, permission := range s.GetPermissions() {
 		if rank(permission) > 0 {
 			permissions[name] = "read"
 		}
 	}
-	return NewScope(s.Project, s.Repositories, permissions)
+	return New(s.GetProject(), s.GetRepositories(), permissions)
 }
 
-func (s Scope) clone() Scope {
-	return NewScope(s.Project, s.Repositories, maps.Clone(s.Permissions))
+// Clone is a copy of s that shares nothing with it.
+func Clone(s *Scope) *Scope {
+	return New(s.GetProject(), s.GetRepositories(), maps.Clone(s.GetPermissions()))
 }
 
-// Within says whether the scope allows nothing that other does not.
-func (s Scope) Within(other Scope) bool {
-	if s.Project != other.Project {
+// Within says whether s allows nothing that other does not.
+func Within(s, other *Scope) bool {
+	if s.GetProject() != other.GetProject() {
 		return false
 	}
-	for _, repository := range s.Repositories {
-		if !other.HasRepository(repository) {
+	for _, repository := range s.GetRepositories() {
+		if !HasRepository(other, repository) {
 			return false
 		}
 	}
-	for name, permission := range s.Permissions {
-		if rank(permission) > rank(other.Permissions[name]) {
+	for name, permission := range s.GetPermissions() {
+		if rank(permission) > rank(other.GetPermissions()[name]) {
 			return false
 		}
 	}
@@ -166,20 +165,20 @@ func (s Scope) Within(other Scope) bool {
 }
 
 // Equal says whether two scopes allow the same.
-func (s Scope) Equal(other Scope) bool { return s.Within(other) && other.Within(s) }
+func Equal(s, other *Scope) bool { return Within(s, other) && Within(other, s) }
 
 // HasRepository says whether repo (owner/name) is one of the scope's.
-func (s Scope) HasRepository(repo string) bool {
-	return slices.ContainsFunc(s.Repositories, func(r string) bool { return strings.EqualFold(r, repo) })
+func HasRepository(s *Scope, repo string) bool {
+	return slices.ContainsFunc(s.GetRepositories(), func(r string) bool { return strings.EqualFold(r, repo) })
 }
 
 // Allows says whether the scope holds permission at level or above.
-func (s Scope) Allows(permission, level string) bool {
-	return rank(s.Permissions[permission]) >= rank(level) && rank(level) > 0
+func Allows(s *Scope, permission, level string) bool {
+	return rank(s.GetPermissions()[permission]) >= rank(level) && rank(level) > 0
 }
 
 // Empty says whether the scope reaches no repository.
-func (s Scope) Empty() bool { return len(s.Repositories) == 0 }
+func Empty(s *Scope) bool { return len(s.GetRepositories()) == 0 }
 
 // ParsePermissions reads "name=level;name=level".
 func ParsePermissions(text string) (map[string]string, error) {
@@ -200,11 +199,11 @@ func ParsePermissions(text string) (map[string]string, error) {
 
 // Key names the scope in a way that two scopes that allow the same share, and
 // no two that differ do. Pool names and audit lines use it.
-func (s Scope) Key() string {
-	names := slices.Sorted(maps.Keys(s.Permissions))
+func Key(s *Scope) string {
+	names := slices.Sorted(maps.Keys(s.GetPermissions()))
 	permissions := make([]string, 0, len(names))
 	for _, name := range names {
-		permissions = append(permissions, name+"="+s.Permissions[name])
+		permissions = append(permissions, name+"="+s.GetPermissions()[name])
 	}
-	return fmt.Sprintf("project=%s;repositories=%s;%s", s.Project, strings.Join(s.Repositories, ","), strings.Join(permissions, ";"))
+	return fmt.Sprintf("project=%s;repositories=%s;%s", s.GetProject(), strings.Join(s.GetRepositories(), ","), strings.Join(permissions, ";"))
 }

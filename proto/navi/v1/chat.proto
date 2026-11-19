@@ -205,6 +205,26 @@ message WatchChatResponse {
 // Ping carries nothing.
 message Ping {}
 
+// Action is the payload of the chat's stop and close signals.
+message Action {
+  Person by = 1;
+  // discard makes a stop drop the waiting messages as well.
+  bool discard = 2;
+}
+
+// Dequeue is the payload of the chat's dequeue signal.
+message Dequeue {
+  // id is the id of the message that waits.
+  string id = 1;
+  Person by = 2;
+}
+
+// Archive is the payload of the chat's archive update.
+message Archive {
+  bool archived = 1;
+  Person by = 2;
+}
+
 // ChatSummary is one row of the chat and session lists.
 message ChatSummary {
   string id = 1;
@@ -244,7 +264,10 @@ message Retry {
   string message = 3;
 }
 
-// ChatState is what a chat's workflow says of itself.
+// ChatState is what a chat's workflow keeps and what it answers the state
+// query with. It is the workflow's input, so it is also what one run hands to
+// the next on Continue-As-New. A new chat starts from a ChatState that holds
+// only its request and first message.
 message ChatState {
   repeated Probe probes = 1;
   OperatorAccess operator = 2;
