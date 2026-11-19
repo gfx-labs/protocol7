@@ -1,0 +1,517 @@
+syntax = "proto3";
+
+package navi.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "navi/v1/common.proto";
+
+option go_package = "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1;naviv1";
+
+// ChatService reads and drives the chats of one navi project. It serves what
+// the routes under /api/projects/{project}/chats serve. Message names are
+// those of the Go types in pkg/domain/navi.
+service ChatService {
+  // ListChats lists the people's chats that are not archived, newest first.
+  rpc ListChats(ListChatsRequest) returns (ListChatsResponse) {
+    option (access) = ACCESS_VIEW;
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // ListArchivedChats lists the people's chats that were archived, newest
+  // first.
+  rpc ListArchivedChats(ListArchivedChatsRequest) returns (ListArchivedChatsResponse) {
+    option (access) = ACCESS_VIEW;
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // ListSessions lists the agent sessions that other workflows run, newest
+  // first.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse) {
+    option (access) = ACCESS_VIEW;
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // GetChat reads one chat.
+  rpc GetChat(GetChatRequest) returns (GetChatResponse) {
+    option (access) = ACCESS_VIEW;
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // CreateChat starts a chat with its first message.
+  rpc CreateChat(CreateChatRequest) returns (CreateChatResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // SendMessage sends a message to a chat, or guidance to a session.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // Stop stops the chat's current turn. The messages that wait stay.
+  rpc Stop(StopRequest) returns (StopResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // StopDiscard stops the chat's current turn and drops the messages that
+  // wait.
+  rpc StopDiscard(StopDiscardRequest) returns (StopDiscardResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // Dequeue removes one message that waits for its turn.
+  rpc Dequeue(DequeueRequest) returns (DequeueResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // Close ends the chat and its session.
+  rpc Close(CloseRequest) returns (CloseResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // Archive hides a running chat from ListChats.
+  rpc Archive(ArchiveRequest) returns (ArchiveResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // Unarchive returns a running chat to ListChats.
+  rpc Unarchive(UnarchiveRequest) returns (UnarchiveResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
+  // WatchChat streams a chat: its view whenever it changes, and every event
+  // of its session from the first one on. A client that reconnects gets
+  // everything again.
+  rpc WatchChat(WatchChatRequest) returns (stream WatchChatResponse) {
+    option (access) = ACCESS_VIEW;
+  }
+}
+
+message ListChatsRequest {
+  string project = 1;
+}
+
+message ListChatsResponse {
+  repeated ChatSummary chats = 1;
+}
+
+message ListArchivedChatsRequest {
+  string project = 1;
+}
+
+message ListArchivedChatsResponse {
+  repeated ChatSummary chats = 1;
+}
+
+message ListSessionsRequest {
+  string project = 1;
+}
+
+message ListSessionsResponse {
+  repeated ChatSummary sessions = 1;
+}
+
+message GetChatRequest {
+  string project = 1;
+  string id = 2;
+}
+
+message GetChatResponse {
+  ChatView chat = 1;
+}
+
+message CreateChatRequest {
+  string project = 1;
+  // message is the chat's first message.
+  string message = 2;
+  // model names one of the choices of navi's IdentityService.ListModels.
+  // Empty is the first.
+  string model = 3;
+  // backend is "host" or "kubernetes". Empty is the project's. Only an admin
+  // sets it.
+  string backend = 4;
+}
+
+message CreateChatResponse {
+  ChatView chat = 1;
+}
+
+message SendMessageRequest {
+  string project = 1;
+  string id = 2;
+  string text = 3;
+  // picks are the elements picked on the chat's design board.
+  repeated Pick picks = 4;
+}
+
+message SendMessageResponse {
+  // message is the message as the chat received it. Its id is that of the
+  // turn that answers it.
+  Message message = 1;
+}
+
+message StopRequest {
+  string project = 1;
+  string id = 2;
+}
+
+message StopResponse {}
+
+message StopDiscardRequest {
+  string project = 1;
+  string id = 2;
+}
+
+message StopDiscardResponse {}
+
+message DequeueRequest {
+  string project = 1;
+  string id = 2;
+  // message is the id of the message that waits.
+  string message = 3;
+}
+
+message DequeueResponse {}
+
+message CloseRequest {
+  string project = 1;
+  string id = 2;
+}
+
+message CloseResponse {}
+
+message ArchiveRequest {
+  string project = 1;
+  string id = 2;
+}
+
+message ArchiveResponse {}
+
+message UnarchiveRequest {
+  string project = 1;
+  string id = 2;
+}
+
+message UnarchiveResponse {}
+
+message WatchChatRequest {
+  string project = 1;
+  string id = 2;
+}
+
+// WatchChatResponse is one update of a watched chat.
+message WatchChatResponse {
+  oneof update {
+    // state is the chat's view, sent first and whenever it changes.
+    ChatView state = 1;
+    // event is one event of the chat's session.
+    SessionEvent event = 2;
+    // problem says that the chat's state cannot be read for now. The stream
+    // goes on and sends the state once it can be read again.
+    string problem = 3;
+    // ping is sent on a quiet stream, so proxies keep it open.
+    Ping ping = 4;
+  }
+}
+
+// Ping carries nothing.
+message Ping {}
+
+// ChatSummary is one row of the chat and session lists.
+message ChatSummary {
+  string id = 1;
+  string title = 2;
+  // status is a ChatStatus, or "unknown" when a running chat did not answer.
+  string status = 3;
+  google.protobuf.Timestamp started_at = 4;
+  // kind is a Kind: chat or session.
+  string kind = 5;
+  // started_by is the login of the person who started the chat.
+  string started_by = 6;
+  string parent = 7;
+  // owner is the workflow that started the chat and talks to it.
+  string owner = 8;
+  // issue is owner/name#number of the GitHub issue the chat works on.
+  string issue = 9;
+  // state and reason are set on an escalation: its EscalationStatus, and why
+  // the chat cannot do what it asks. parent is then the chat that asked.
+  string state = 10;
+  string reason = 11;
+  // outcome is what the escalation handler decided, once it did.
+  string outcome = 12;
+}
+
+// ChatView is one chat as the page shows it.
+message ChatView {
+  string id = 1;
+  ChatState state = 2;
+  // retry is set while an activity of the chat is being retried.
+  Retry retry = 3;
+}
+
+// Retry says that a step of the chat failed and is tried again.
+message Retry {
+  string activity = 1;
+  int32 attempt = 2;
+  string message = 3;
+}
+
+// ChatState is what a chat's workflow says of itself.
+message ChatState {
+  repeated Probe probes = 1;
+  OperatorAccess operator = 2;
+  repeated Child children = 3;
+  repeated EscalationRef escalations = 4;
+  bool attention = 5;
+  Report result = 6;
+  repeated Lease model_leases = 7;
+  ChatRequest request = 8;
+  // status is a ChatStatus: opening, idle, running, escalated, closing,
+  // closed or failed.
+  string status = 9;
+  Session session = 10;
+  repeated Message pending = 11;
+  Message current = 12;
+  int32 turns = 13;
+  bool closing = 14;
+  int32 resumes = 15;
+  map<string, string> senders = 16;
+  Person stopped_by = 17;
+  Person closed_by = 18;
+  bool briefed = 19;
+  int32 learnings = 20;
+  string last_learning = 21;
+  bool archived = 22;
+  Board board = 23;
+  string last_stop = 24;
+  string error = 25;
+}
+
+// ChatRequest describes a chat as it was started.
+message ChatRequest {
+  string id = 1;
+  string title = 2;
+  Person started_by = 3;
+  string host = 4;
+  string backend = 5;
+  string model = 6;
+  repeated string models = 7;
+  repeated Repository repositories = 8;
+  Issue issue = 9;
+  string owner = 10;
+  Escalation escalation = 11;
+  string project = 12;
+  bool restricted = 13;
+  Scope scope = 14;
+  string parent = 15;
+  int32 depth = 16;
+  bool handler = 17;
+  string pool_scope = 18;
+  string pool = 19;
+  Serving serves = 20;
+  string review_hint = 21;
+}
+
+// Repository is one repository cloned into a chat's session.
+message Repository {
+  string name = 1;
+  string url = 2;
+}
+
+// Issue names a GitHub issue.
+message Issue {
+  // repo is owner/name.
+  string repo = 1;
+  int32 number = 2;
+}
+
+// Escalation is set on an older chat the system opened to ask a person
+// something.
+message Escalation {
+  string reason = 1;
+}
+
+// Serving names what an escalation handler's chat serves.
+message Serving {
+  string escalation = 1;
+  string chat = 2;
+}
+
+// Scope is a chat's effective GitHub authority.
+message Scope {
+  string project = 1;
+  // repositories are owner/name in lower case, sorted.
+  repeated string repositories = 2;
+  // permissions are GitHub App permissions by name, each "read" or "write".
+  map<string, string> permissions = 3;
+}
+
+// Message is one message to a chat.
+message Message {
+  string id = 1;
+  string text = 2;
+  Person from = 3;
+  bool restricted = 4;
+  repeated Pick picks = 5;
+}
+
+// Pick is one element the person picked on a design board.
+message Pick {
+  message Box {
+    int32 x = 1;
+    int32 y = 2;
+    int32 width = 3;
+    int32 height = 4;
+  }
+  string artboard = 1;
+  string page = 2;
+  string selector = 3;
+  string tag = 4;
+  string text = 5;
+  string html = 6;
+  Box box = 7;
+  map<string, string> styles = 8;
+}
+
+// Report is what a chat reports after a turn, and its last result.
+message Report {
+  string chat_id = 1;
+  bool attention = 2;
+  string message = 3;
+  string stop_reason = 4;
+  string text = 5;
+  string error = 6;
+  bool stopped = 7;
+  string stopped_by = 8;
+  int32 resumes = 9;
+  bool gave_up = 10;
+  bool idle = 11;
+  bool ended = 12;
+  EscalationRef escalation = 13;
+}
+
+// EscalationRef is what a chat keeps of an escalation it raised.
+message EscalationRef {
+  string id = 1;
+  string title = 2;
+  // status is an EscalationStatus: open, handling, forwarded, resolved or
+  // declined.
+  string status = 3;
+  bool overridden = 4;
+}
+
+// Probe is a probe a chat deployed.
+message Probe {
+  string kind = 1;
+  string name = 2;
+}
+
+// Child is a child chat owned by a chat.
+message Child {
+  string id = 1;
+  string title = 2;
+  string message = 3;
+  bool done = 4;
+  bool attention = 5;
+  Report result = 6;
+}
+
+// OperatorAccess is the record of a chat's operator grants.
+message OperatorAccess {
+  int32 count = 1;
+  repeated OperatorIssued last = 2;
+}
+
+// OperatorIssued is one operator token grant. It holds no token.
+message OperatorIssued {
+  google.protobuf.Timestamp at = 1;
+  google.protobuf.Timestamp expires = 2;
+  string by = 3;
+  // basis is "started" or "issue".
+  string basis = 4;
+}
+
+// Lease is a place held in a limit.
+message Lease {
+  string limit = 1;
+  string id = 2;
+}
+
+// Board is a design board shown beside a chat.
+message Board {
+  // dir is the board's directory, relative to the session's workspace.
+  string dir = 1;
+}
+
+// Session is the chat's open session.
+message Session {
+  string id = 1;
+  string task_queue = 2;
+  repeated ResolvedInput inputs = 3;
+  Lease lease = 4;
+  bool reports = 5;
+  string pod = 6;
+  SessionPool pool = 7;
+}
+
+// ResolvedInput is an input placed in a session's workspace.
+message ResolvedInput {
+  string destination = 1;
+  string repository = 2;
+  string ref = 3;
+  string commit = 4;
+}
+
+// SessionPool is the pool whose worker holds a session.
+message SessionPool {
+  string name = 1;
+  int32 max_workers = 2;
+  int32 sessions_per_worker = 3;
+  google.protobuf.Duration idle_timeout = 4;
+  PodSpec pod = 5;
+}
+
+// PodSpec changes a pool worker's pod.
+message PodSpec {
+  string image = 1;
+  map<string, string> requests = 2;
+  map<string, string> limits = 3;
+}
+
+// SessionEvent is one thing that happened in a session.
+message SessionEvent {
+  string session = 1;
+  int64 seq = 2;
+  google.protobuf.Timestamp time = 3;
+  // kind is prompt, message, thought, tool_call, tool_update, plan or
+  // turn_end.
+  string kind = 4;
+  // turn is the id of the turn a prompt starts.
+  string turn = 5;
+  // text is the prompt, or a piece of a message or thought.
+  string text = 6;
+  ToolEvent tool = 7;
+  repeated PlanEntry plan = 8;
+  TurnEnd end = 9;
+}
+
+// ToolEvent is a tool call or an update to one. An update carries only the
+// fields that changed.
+message ToolEvent {
+  string id = 1;
+  string title = 2;
+  string kind = 3;
+  string status = 4;
+  string input = 5;
+  string output = 6;
+}
+
+// PlanEntry is one item of the agent's plan.
+message PlanEntry {
+  string content = 1;
+  string status = 2;
+  string priority = 3;
+}
+
+// TurnEnd is how a turn ended.
+message TurnEnd {
+  string stop_reason = 1;
+  TurnFailure failure = 2;
+}
+
+// TurnFailure says why a turn did not end normally.
+message TurnFailure {
+  string kind = 1;
+  string message = 2;
+  google.protobuf.Timestamp reset_at = 3;
+  string account = 4;
+  string model = 5;
+}
