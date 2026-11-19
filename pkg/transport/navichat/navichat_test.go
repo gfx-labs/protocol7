@@ -54,7 +54,9 @@ func (chatAgent) Cancel(_ context.Context, execution *a2asrv.ExecutorContext) it
 }
 
 // loginUser names the caller by the login header, as navi does.
-type loginUser struct{ a2asrv.PassthroughCallInterceptor }
+type loginUser struct {
+	a2asrv.PassthroughCallInterceptor
+}
 
 func (loginUser) Before(ctx context.Context, call *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
 	logins, _ := call.ServiceParams().Get(navichat.LoginHeader)
