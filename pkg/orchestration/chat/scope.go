@@ -14,11 +14,11 @@ import (
 // narrows it: the repositories that are cloned, the pool a session joins, and
 // the scope of what the chat starts.
 
-// inheritScope is the scope of a chat, handler or escalation that a chat with
+// InheritScope is the scope of a chat, handler or escalation that a chat with
 // the scope parent starts. requested may ask for less, never for more: the
 // result is within parent. A parent with no recorded scope (a chat that
 // started before scopes) has none to hand on.
-func inheritScope(parent, requested *scope.Scope) *scope.Scope {
+func InheritScope(parent, requested *scope.Scope) *scope.Scope {
 	if parent == nil {
 		return nil
 	}

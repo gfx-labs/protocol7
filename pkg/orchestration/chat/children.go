@@ -35,7 +35,9 @@ func liveChildren(state *State) int {
 	return count
 }
 
-func workflowID(ctx workflow.Context) (string, error) {
+// NewID is a new ID made in a side effect, so that a replay reads the same
+// one. Chats, escalations and an app's records take their IDs from it.
+func NewID(ctx workflow.Context) (string, error) {
 	var id string
 	err := workflow.SideEffect(ctx, func(workflow.Context) any { return ids.New() }).Get(&id)
 	return id, err
@@ -150,7 +152,7 @@ func coordinationTools(state *State) []p7.Tool {
 					if child.ID != args.ID || child.Done {
 						continue
 					}
-					id, err := workflowID(ctx)
+					id, err := NewID(ctx)
 					if err != nil {
 						return p7.ToolResult{}, err
 					}
@@ -179,7 +181,7 @@ func spawnChild(ctx workflow.Context, state *State, task, title string, escalati
 	if state.Closing || state.Request.Depth >= MaxChildDepth || liveChildren(state) >= MaxLiveChildren || len(state.Children) >= MaxChildren {
 		return "", fmt.Errorf("chat is closing or its child depth/live/total bound is reached")
 	}
-	id, err := workflowID(ctx)
+	id, err := NewID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -191,7 +193,7 @@ func spawnChild(ctx workflow.Context, state *State, task, title string, escalati
 	request.Depth++
 	request.Issue, request.Escalation = nil, escalation
 	// A child holds its parent's scope and may only narrow it.
-	request.Scope = inheritScope(state.Request.Scope, nil)
+	request.Scope = InheritScope(state.Request.Scope, nil)
 	request.Repositories = ScopedRepositories(state.Request.Repositories, request.Scope)
 	// The child's pool is named from its own request when it opens its session
 	// (withPool). Nothing in the name differs from its parent's, except for an
@@ -210,7 +212,7 @@ func spawnChild(ctx workflow.Context, state *State, task, title string, escalati
 	workflow.Go(ctx, func(ctx workflow.Context) {
 		var result Report
 		if err := future.Get(ctx, &result); err != nil {
-			result.Error = cause(err)
+			result.Error = Cause(err)
 		}
 		state.Children[index].Done = true
 		state.Children[index].Attention = false

@@ -151,7 +151,7 @@ func run(ctx workflow.Context, state State) (Report, error) {
 		state.Request = withPool(state.Request)
 		session, err := p7.OpenSession(ctx, sessionSpec(state.Request, chatTools(&state)))
 		if err != nil {
-			state.Status, state.Error = StatusFailed, cause(err)
+			state.Status, state.Error = StatusFailed, Cause(err)
 			report(ctx, state, Report{Error: state.Error, Idle: true, Ended: true})
 			return Report{}, err
 		}
@@ -263,7 +263,7 @@ func run(ctx workflow.Context, state State) (Report, error) {
 			state.LastStop, state.Error = p7.StopCancelled, ""
 		default:
 			// The chat stays open: the next message may well run.
-			state.LastStop, state.Error = "", cause(err)
+			state.LastStop, state.Error = "", Cause(err)
 		}
 		if state.Request.Escalation != nil && state.Request.Parent != "" && message.From == nil {
 			state.Attention = true
@@ -296,7 +296,7 @@ func run(ctx workflow.Context, state State) (Report, error) {
 		_, _ = workflow.AwaitWithTimeout(closeCtx, 30*time.Second, func() bool { return workflow.AllHandlersFinished(closeCtx) })
 	}
 	if err := state.Session.Close(closeCtx); err != nil {
-		state.Status, state.Error = StatusFailed, cause(err)
+		state.Status, state.Error = StatusFailed, Cause(err)
 		report(closeCtx, state, Report{Error: state.Error, Idle: true, Ended: true})
 		return Report{}, err
 	}
@@ -347,9 +347,9 @@ func report(ctx workflow.Context, state State, value Report) {
 	_ = workflow.SignalExternalWorkflow(ctx, state.Request.Owner, "", SignalReport, value).Get(ctx, nil)
 }
 
-// cause is what a person is told about a failed step: the message of the
+// Cause is what a person is told about a failed step: the message of the
 // error the activity returned, without Temporal's description of the activity.
-func cause(err error) string {
+func Cause(err error) string {
 	if application, ok := errors.AsType[*temporal.ApplicationError](err); ok {
 		return application.Message()
 	}

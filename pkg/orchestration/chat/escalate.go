@@ -62,7 +62,7 @@ func raiseEscalation(ctx workflow.Context, state *State, request EscalationReque
 	if state.Closing || openEscalations(state) >= MaxOpenEscalations || len(state.Escalations) >= MaxEscalations {
 		return "", fmt.Errorf("the chat is closing, or it has %d escalations waiting or has raised %d", MaxOpenEscalations, MaxEscalations)
 	}
-	id, err := workflowID(ctx)
+	id, err := NewID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -70,7 +70,7 @@ func raiseEscalation(ctx workflow.Context, state *State, request EscalationReque
 	request.Issue, request.Project, request.StartedBy = state.Request.Issue, state.Request.Project, state.Request.StartedBy
 	request.Session = &EscalationSession{
 		Host: state.Request.Host, Backend: state.Request.Backend, Model: state.Request.Model, Models: state.Request.Models,
-		Repositories: state.Request.Repositories, Restricted: state.Request.Restricted, Scope: inheritScope(state.Request.Scope, nil),
+		Repositories: state.Request.Repositories, Restricted: state.Request.Restricted, Scope: InheritScope(state.Request.Scope, nil),
 	}
 	if request.Title == "" {
 		request.Title = oneLine(request.Need, 72)

@@ -412,7 +412,7 @@ func runEscalation(ctx workflow.Context, state EscalationState, handoff string) 
 			})
 			handoffCtx := workflow.WithActivityOptions(ctx, handoffOptions)
 			if err := workflow.ExecuteActivity(handoffCtx, handoff, state.Request).Get(ctx, nil); err != nil {
-				giveUp(ctx, "The escalation handler could not take this escalation: "+cause(err)+".", "The hand-off to the handler failed, so the handler never saw it.")
+				giveUp(ctx, "The escalation handler could not take this escalation: "+Cause(err)+".", "The hand-off to the handler failed, so the handler never saw it.")
 			}
 		}
 	}
