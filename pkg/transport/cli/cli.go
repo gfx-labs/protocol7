@@ -179,6 +179,7 @@ type root struct {
 	Session sessionCommand `cmd:"" help:"Run one session in its own pod on the kubernetes backend."`
 	Pods    podsCommand    `cmd:"" help:"Create and delete session pods for the kubernetes backend."`
 	Dev     devCommand     `cmd:"" help:"Run a Temporal development server, an embedded NATS server and the core worker in one process."`
+	Files   filesCommand   `cmd:"" help:"Serve the sessions' workspaces for design boards, render their screenshots, and serve the artifact and operator credential activities. Runs beside the core worker."`
 }
 
 // sessionCommand is the worker inside a session's pod. It is the host
@@ -291,6 +292,15 @@ func Main(args []string) int {
 
 // WorkerMain runs the p7-worker command, which is p7 worker.
 func WorkerMain(args []string) int {
+	// p7-worker files runs the file server beside the worker. Anything else
+	// is the worker itself, so existing deployments keep their arguments.
+	if len(args) > 0 && args[0] == "files" {
+		var command struct {
+			config.Flag  `embed:""`
+			filesCommand `embed:""`
+		}
+		return run("p7-worker files", "Serve the sessions' workspaces beside the core worker.", &command, args[1:])
+	}
 	var command struct {
 		config.Flag   `embed:""`
 		workerCommand `embed:""`

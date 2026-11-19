@@ -44,6 +44,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a h1:yDWHCSQ40h88yih2JAcL6Ls/kVkSE8GFACTGVnMPruw=
 github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a/go.mod h1:7Ga40egUymuWXxAe151lTNnCv97MddSOVsjpPPkityA=
+github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
+github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/gfx-labs/acphost v0.27.0 h1:kgKTpBRrmP4NQ4sby6OVqom8IJywkxl7u9Zcu5kC7Is=
 github.com/gfx-labs/acphost v0.27.0/go.mod h1:fzca2xxY7T0Qy2cG9BjdglN75NnWpy2xpqlPw9KreNM=
 github.com/gfx-labs/go-acp v0.1.1 h1:hnl/foPFDaDc3sqruLWbRMo7zOxj5x5HHptDX8rmrkg=

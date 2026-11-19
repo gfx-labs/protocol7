@@ -27,6 +27,10 @@ func TestEveryCommandHasWhatItsComponentsAskFor(t *testing.T) {
 		},
 		"pods with snapshots": &podsCommand{Namespace: "p7", Template: "/template.json", Container: "session", Snapshots: snapshotFlags{Bucket: "b"}},
 		"pods":                &podsCommand{Namespace: "p7", Template: "/template.json", Container: "session"},
+		"files":               &filesCommand{StateDir: "/state"},
+		// The operator credential's writer alone, and beside the artifacts.
+		"files with the operator credential":               &filesCommand{StateDir: "/state", OperatorCredentials: true, Host: "h"},
+		"files with the operator credential and artifacts": &filesCommand{StateDir: "/state", OperatorCredentials: true, Host: "h", Artifacts: artifactFlags{Dir: t.TempDir(), Retention: "24h"}},
 	}
 	for name, command := range commands {
 		options, err := command.options()
