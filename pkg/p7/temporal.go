@@ -31,9 +31,13 @@ const workloadAPITimeout = time.Minute
 // NewTemporalClient returns a lazy Temporal client made from options. With
 // spiffe set, the client presents this workload's SVID, which the Workload
 // API renews, and accepts only a server that presents spiffe.ServerID.
+// Options without a DataConverter get DataConverter.
 // Call closeClient, not the client's Close, when done: it closes the client
 // and then the source of its certificates.
 func NewTemporalClient(options client.Options, spiffe TemporalSPIFFE) (temporalClient client.Client, closeClient func() error, err error) {
+	if options.DataConverter == nil {
+		options.DataConverter = DataConverter()
+	}
 	if spiffe.ServerID == "" {
 		if spiffe.Socket != "" {
 			return nil, nil, errors.New("a SPIFFE Workload API socket is set without the Temporal server's SPIFFE ID")
