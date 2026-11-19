@@ -3,6 +3,7 @@ module github.com/gfx-labs/protocol7
 go 1.27.3
 
 require (
+	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/alecthomas/kong v1.17.0
 	github.com/gfx-labs/acphost v0.27.0
 	github.com/gfx-labs/go-acp v0.1.1
@@ -10,6 +11,7 @@ require (
 	github.com/johannesboyne/gofakes3 v1.2.0
 	github.com/klauspost/compress v1.20.4
 	github.com/minio/minio-go/v7 v7.4.1
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.55.0
 	github.com/spiffe/go-spiffe/v2 v2.7.0
@@ -49,17 +51,22 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
+	github.com/segmentio/asm v1.1.3 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.shabbyrobe.org/gocovmerge v0.0.0-20230507111327-fa4f82cfbf4d // indirect
 	go.uber.org/dig v1.19.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
