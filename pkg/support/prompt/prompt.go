@@ -1,24 +1,26 @@
 // Package prompt builds model prompts: markdown sections, paragraphs written as
-// indented raw strings, bullet lists, fenced untrusted text and {name}
-// placeholders, without strings.Builder and fmt.Fprintf boilerplate.
+// indented raw strings, bullet lists, fenced untrusted text and text/template
+// placeholders ({{.name}}), without strings.Builder and fmt.Fprintf
+// boilerplate.
 package prompt
 
 import (
+	"errors"
 	"fmt"
-	"regexp"
-	"sort"
 	"strings"
+	"text/template"
 )
 
-// Vars fill {name} placeholders. A value is formatted with %v.
+// Vars is the data for {{.name}} placeholders and any other text/template
+// actions ({{if .x}}, {{range .items}}).
 type Vars map[string]any
 
 // Builder collects a prompt. The zero value is ready to use. Blocks are
 // separated by one blank line, so callers never manage newlines.
 type Builder struct {
-	vars    Vars
-	blocks  []string
-	missing map[string]bool
+	vars   Vars
+	blocks []string
+	errs   []error
 }
 
 // New returns a builder whose placeholders are filled from vars.
@@ -45,7 +47,7 @@ func (b *Builder) Heading(text string) *Builder {
 }
 
 // P adds a paragraph. text may be an indented raw string spanning lines: it
-// is dedented and trimmed, and its placeholders are filled.
+// is dedented and trimmed, then executed as a template.
 func (b *Builder) P(text string) *Builder {
 	if text = b.fill(Dedent(text)); text != "" {
 		b.blocks = append(b.blocks, text)
@@ -70,7 +72,7 @@ func (b *Builder) Bullets(text string) *Builder {
 }
 
 // List adds items as a bullet list. Empty items are skipped, and nothing is
-// added when none remain. Items are not placeholder-filled: they are often
+// added when none remain. Items are not executed as templates: they are often
 // data (paths, commands) that may contain braces.
 func (b *Builder) List(items ...string) *Builder {
 	var lines []string
@@ -97,7 +99,8 @@ func (b *Builder) Codes(items ...string) *Builder {
 }
 
 // Fence adds text in a fenced block. Fences inside text are defused, so
-// untrusted text cannot close the block early. text is not placeholder-filled.
+// untrusted text cannot close the block early. text is never executed as a
+// template.
 func (b *Builder) Fence(lang, text string) *Builder {
 	return b.block("```" + lang + "\n" + strings.ReplaceAll(strings.TrimRight(text, "\n"), "```", "'''") + "\n```")
 }
@@ -110,8 +113,8 @@ func (b *Builder) Raw(text string) *Builder {
 	return b
 }
 
-// Template adds a markdown document, typically embedded from a .md file, with
-// its placeholders filled. Keep static prose (backticks included) in such
+// Template adds a markdown document, typically embedded from a .md file,
+// executed as a text/template. Keep static prose (backticks included) in such
 // files and build only the dynamic parts in Go.
 func (b *Builder) Template(text string) *Builder {
 	return b.Raw(b.fill(text))
@@ -133,17 +136,10 @@ func (b *Builder) String() string {
 	return strings.Join(b.blocks, "\n\n") + "\n"
 }
 
-// Err names the placeholders that had no value. They are left in the text.
+// Err reports every placeholder that had no value and every template that
+// did not parse. Such text is added unfilled, so the problem stays visible.
 func (b *Builder) Err() error {
-	if len(b.missing) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(b.missing))
-	for name := range b.missing {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return fmt.Errorf("prompt: no value for %s", strings.Join(names, ", "))
+	return errors.Join(b.errs...)
 }
 
 func (b *Builder) block(text string) *Builder {
@@ -151,23 +147,24 @@ func (b *Builder) block(text string) *Builder {
 	return b
 }
 
-// placeholder is {name}: a letter, then letters, digits, dots or underscores.
-// Anything else in braces (JSON, globs such as {a,b}) is left alone.
-var placeholder = regexp.MustCompile(`\{([A-Za-z][A-Za-z0-9_.]*)\}`)
-
+// fill executes text as a text/template over the builder's vars. A missing
+// key is an error, not "<no value>". Text without "{{" is returned as is, so
+// braces in prose (JSON, globs such as {a,b}) need no escaping.
 func (b *Builder) fill(text string) string {
-	return placeholder.ReplaceAllStringFunc(text, func(match string) string {
-		name := match[1 : len(match)-1]
-		value, ok := b.vars[name]
-		if !ok {
-			if b.missing == nil {
-				b.missing = map[string]bool{}
-			}
-			b.missing[name] = true
-			return match
-		}
-		return fmt.Sprint(value)
-	})
+	if !strings.Contains(text, "{{") {
+		return text
+	}
+	tmpl, err := template.New("prompt").Option("missingkey=error").Parse(text)
+	if err != nil {
+		b.errs = append(b.errs, fmt.Errorf("prompt: %w", err))
+		return text
+	}
+	var out strings.Builder
+	if err := tmpl.Execute(&out, map[string]any(b.vars)); err != nil {
+		b.errs = append(b.errs, fmt.Errorf("prompt: %w", err))
+		return text
+	}
+	return out.String()
 }
 
 // Dedent removes the indentation common to all non-blank lines and trims
