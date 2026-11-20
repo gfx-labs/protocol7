@@ -27,13 +27,16 @@ import (
 // Temporal's test environment keeps its clock still while an activity runs,
 // so what a test does during a turn is done from onSlow.
 type session struct {
-	mu      sync.Mutex
-	opened  []domain.SessionRequest
-	turns   []domain.TurnRequest
-	closed  int
-	onSlow  func()
-	onTurn  func(context.Context, domain.TurnRequest) (domain.TurnResult, error)
-	release chan struct{}
+	mu     sync.Mutex
+	opened []domain.SessionRequest
+	turns  []domain.TurnRequest
+	closed int
+	onSlow func()
+	// restricted is the Restricted flag of each message that a turn context
+	// was built for, by message ID.
+	restricted map[string]bool
+	onTurn     func(context.Context, domain.TurnRequest) (domain.TurnResult, error)
+	release    chan struct{}
 }
 
 func (s *session) open(_ context.Context, request domain.SessionRequest) (domain.SessionHandle, error) {
@@ -126,6 +129,12 @@ func newEnvironment(t *testing.T) (*testsuite.TestWorkflowEnvironment, *session)
 			return "app instructions for " + request.Id, nil
 		},
 		TurnContext: func(_ workflow.Context, _ *chat.Chat, message *chat.Message) string {
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if fake.restricted == nil {
+				fake.restricted = map[string]bool{}
+			}
+			fake.restricted[message.Id] = message.Restricted
 			return "turn context for " + message.Id
 		},
 		Activities: map[string]any{

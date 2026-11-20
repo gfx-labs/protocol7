@@ -59,12 +59,14 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	}); err != nil {
 		return &Report{}, err
 	}
-	if err := workflow.SetUpdateHandler(ctx, UpdateSpawn, func(ctx workflow.Context, request *navi.Spawn) (string, error) {
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, UpdateSpawn, func(ctx workflow.Context, request *navi.Spawn) (string, error) {
 		if request == nil || request.By.GetLogin() == "" {
 			return "", errors.New("manual spawn requires a person")
 		}
 		return spawnChildMessage(ctx, &state, request.Task, request.Title, nil, request)
-	}); err != nil {
+	}, workflow.UpdateHandlerOptions{Validator: func(ctx workflow.Context, request *navi.Spawn) error {
+		return validateSpawn(ctx, &state, request)
+	}}); err != nil {
 		return &Report{}, err
 	}
 

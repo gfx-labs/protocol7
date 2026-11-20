@@ -10,7 +10,7 @@ Decided behavior:
 
 - `chat_spawn` starts a bounded task in the same Temporal namespace and navi project, then returns its chat ID after Temporal acknowledges the start.
 - The parent starts a turn automatically whenever a child needs attention, including a result, escalation, failure or stop waiting for guidance. `chat_await` remains an optional explicit wait, never a prerequisite for wake-up.
-- Keep the existing limits of four live children and sixteen lifetime direct children per chat, with a maximum depth of two below the root. Keep the existing 24 hour child execution timeout for the first release.
+- Keep the existing limits of four live children and sixteen lifetime direct children per chat, with a maximum depth of two below the root. Keep the existing 24 hour child execution timeout for the first release. The limits are per chat, so one root holds at most 20 live descendants (4 children with 4 each). A spawn that a chat would refuse is rejected by an update validator before it enters history. A child's report starts a parent turn that is always restricted, so it never holds a tool that needs a person's own message.
 - Preserve `PARENT_CLOSE_POLICY_REQUEST_CANCEL`. Closing or cancelling a chat requests closure of its descendants. Stopping a turn does not close the tree.
 - Keep the parent run alive while it has live children. Do not attempt to transfer native child futures through continue-as-new.
 - Keep existing workflow kinds and wire names. navi distinguishes a subchat from an issue or handler session by its verified parent relation, not by `owner` alone.
