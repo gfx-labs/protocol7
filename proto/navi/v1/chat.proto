@@ -38,6 +38,10 @@ service ChatService {
   rpc CreateChat(CreateChatRequest) returns (CreateChatResponse) {
     option (access) = ACCESS_MODIFY;
   }
+  // SpawnChat starts a native child through the parent chat's spawn update.
+  rpc SpawnChat(SpawnChatRequest) returns (SpawnChatResponse) {
+    option (access) = ACCESS_MODIFY;
+  }
   // SendMessage sends a message to a chat, or guidance to a session.
   rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {
     option (access) = ACCESS_MODIFY;
@@ -122,6 +126,26 @@ message CreateChatRequest {
 
 message CreateChatResponse {
   ChatView chat = 1;
+}
+
+message SpawnChatRequest {
+  string project = 1;
+  // id is the parent chat ID.
+  string id = 2;
+  string task = 3;
+  string title = 4;
+}
+
+message SpawnChatResponse {
+  string id = 1;
+}
+
+// Spawn is the payload of the parent workflow's spawn update.
+message Spawn {
+  string task = 1;
+  string title = 2;
+  Person by = 3;
+  bool restricted = 4;
 }
 
 message SendMessageRequest {
@@ -255,6 +279,8 @@ message ChatView {
   ChatState state = 2;
   // retry is set while an activity of the chat is being retried.
   Retry retry = 3;
+  // children are API projections, never carried into workflow state.
+  repeated ChatSummary children = 4;
 }
 
 // Retry says that a step of the chat failed and is tried again.
@@ -399,6 +425,8 @@ message Report {
   bool idle = 11;
   bool ended = 12;
   EscalationRef escalation = 13;
+  // started advances the parent's expected message before a guided turn.
+  bool started = 14;
 }
 
 // EscalationRef is what a chat keeps of an escalation it raised.

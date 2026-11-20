@@ -49,6 +49,9 @@ type Dequeue = naviv1.Dequeue
 // Archive is the payload of UpdateArchive.
 type Archive = naviv1.Archive
 
+// Spawn asks a parent chat to start a native child.
+type Spawn = naviv1.Spawn
+
 // Board is a design board shown beside a chat. Dir is the board's directory,
 // relative to the session's workspace.
 type Board = naviv1.Board
@@ -81,6 +84,12 @@ func KindOf(request *ChatRequest) Kind {
 	default:
 		return KindChat
 	}
+}
+
+// IsSubchat classifies an ordinary child request, not its authorization or
+// native parent identity, which the caller must verify with Temporal.
+func IsSubchat(request *ChatRequest) bool {
+	return request.GetParent() != "" && request.GetEscalation() == nil && !request.GetHandler()
 }
 
 // Pick is one element the person picked on a design board.
