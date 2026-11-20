@@ -27,16 +27,16 @@ import (
 // Temporal's test environment keeps its clock still while an activity runs,
 // so what a test does during a turn is done from onSlow.
 type session struct {
-	mu      sync.Mutex
-	opened  []domain.SessionRequest
-	turns   []domain.TurnRequest
-	closed  int
-	onSlow  func()
+	mu     sync.Mutex
+	opened []domain.SessionRequest
+	turns  []domain.TurnRequest
+	closed int
+	onSlow func()
 	// restricted is the Restricted flag of each message that a turn context
 	// was built for, by message ID.
 	restricted map[string]bool
-	onTurn  func(context.Context, domain.TurnRequest) (domain.TurnResult, error)
-	release chan struct{}
+	onTurn     func(context.Context, domain.TurnRequest) (domain.TurnResult, error)
+	release    chan struct{}
 }
 
 func (s *session) open(_ context.Context, request domain.SessionRequest) (domain.SessionHandle, error) {
