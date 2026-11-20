@@ -221,6 +221,7 @@ type State struct {
 	modelTurnNumber int
 	modelActive     bool
 	awaiting        bool
+	childPaused     bool
 	// session is the open session that turns run on. ChatState.Session
 	// records it, and syncSession copies it there after each step that can
 	// move it to another worker.

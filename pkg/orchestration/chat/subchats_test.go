@@ -147,6 +147,31 @@ func TestStoppedChildWaitsForGuidanceAndWakesParent(t *testing.T) {
 	}
 }
 
+func TestStopWhileChildTurnStartsWaitsForGuidance(t *testing.T) {
+	env, sessions := newEnvironment(t)
+	env.OnSignalExternalWorkflow(mock.Anything, "parent", "", chat.SignalReport, mock.MatchedBy(func(report *chat.Report) bool {
+		return report.GetStarted() && report.GetMessage() == "m1"
+	})).Return(nil).After(time.Second)
+	env.OnSignalExternalWorkflow(mock.Anything, "parent", "", chat.SignalReport, mock.Anything).Return(nil)
+	state := newChat("must not start")
+	state.Request.Parent, state.Request.Owner = "parent", "parent"
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalStop, &chat.Action{}) }, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		stopped := queryState(t, env)
+		if stopped.Status != chat.StatusIdle || !stopped.Attention || !stopped.Result.GetStopped() || len(sessions.turns) != 0 {
+			t.Errorf("starting child was not stopped before its activity: %v", stopped)
+		}
+		env.SignalWorkflow(chat.SignalMessage, &chat.Message{Id: "guidance", Text: "guided task"})
+	}, time.Minute)
+	env.ExecuteWorkflow(chat.WorkflowName, state)
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions.turns) != 1 || sessions.turns[0].Prompt != "guided task" {
+		t.Errorf("turns %v, want only guidance after stop", sessions.turns)
+	}
+}
+
 func TestSpawnEnforcesChildBounds(t *testing.T) {
 	for _, limit := range []string{"live", "lifetime", "depth", "handler", "empty task", "large task"} {
 		t.Run(limit, func(t *testing.T) {
