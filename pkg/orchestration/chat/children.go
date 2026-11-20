@@ -291,6 +291,7 @@ func wakeForChild(ctx workflow.Context, state *State, child *Child, event string
 		id += "-" + result.Escalation.Id
 	}
 	state.Pending = append(state.Pending, &Message{Id: id, Text: text.String(), Restricted: state.Request.Restricted})
+	state.childPaused = false
 }
 
 func takeChildReport(ctx workflow.Context, state *State, result *Report) {

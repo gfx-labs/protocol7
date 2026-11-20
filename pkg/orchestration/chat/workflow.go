@@ -70,6 +70,8 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 
 	// cancelTurn is set while a turn runs.
 	var cancelTurn workflow.CancelFunc
+	childStopPause := state.Request.Parent != "" && workflow.GetVersion(ctx, "subchat-stop-pause", workflow.DefaultVersion, 1) >= 1
+	state.childPaused = childStopPause && state.Attention && state.Result.GetStopped()
 	messages := workflow.GetSignalChannel(ctx, SignalMessage)
 	stops := workflow.GetSignalChannel(ctx, SignalStop)
 	dequeues := workflow.GetSignalChannel(ctx, SignalDequeue)
@@ -79,6 +81,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	addMessage := func(message *Message) {
 		if message.GetId() != "" && message.GetText() != "" {
 			state.Pending = append(state.Pending, message)
+			state.childPaused = false
 		}
 	}
 	// takeNotice applies what an escalation told the chat. A person's answer
@@ -93,6 +96,9 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	}
 	stopTurn := func(ctx workflow.Context, action *Action) {
 		state.StoppedBy = action.GetBy()
+		if childStopPause && !state.Closing {
+			state.childPaused = true
+		}
 		// A stop ends the running turn only. The messages that wait are
 		// dropped when the person asks for that.
 		if action.GetDiscard() || workflow.GetVersion(ctx, versionStopKeepsQueue, workflow.DefaultVersion, 1) == workflow.DefaultVersion {
@@ -231,7 +237,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 			}
 			break
 		}
-		waiting := func() bool { return state.Closing || len(state.Pending) > 0 }
+		waiting := func() bool { return state.Closing || (len(state.Pending) > 0 && !state.childPaused) }
 		if workflow.GetVersion(ctx, versionUpgradeWake, workflow.DefaultVersion, 1) >= 1 {
 			woken, err := workflow.AwaitWithTimeout(ctx, upgradeWake, waiting)
 			if err != nil || state.Closing {
@@ -249,8 +255,14 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		message := state.Pending[0]
 		state.Pending = state.Pending[1:]
 		state.Current, state.Status = message, StatusRunning
+		turnCtx := ctx
+		var cancel workflow.CancelFunc
+		if childStopPause {
+			turnCtx, cancel = workflow.WithCancel(ctx)
+			cancelTurn = cancel
+		}
 		if state.Request.Parent != "" && workflow.GetVersion(ctx, "subchat-guidance", workflow.DefaultVersion, 1) >= 1 {
-			report(ctx, state, &Report{ChatId: state.Request.Id, Message: message.Id, Started: true})
+			report(turnCtx, state, &Report{ChatId: state.Request.Id, Message: message.Id, Started: true})
 		}
 		if message.From != nil {
 			if state.Senders == nil {
@@ -258,15 +270,19 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 			}
 			state.Senders[message.Id] = message.From.Login
 		}
-		prompt, err := turnPrompt(ctx, &state, message)
+		prompt, err := turnPrompt(turnCtx, &state, message)
 		var outcome turnOutcome
 		if err == nil {
-			turnCtx, cancel := workflow.WithCancel(ctx)
-			cancelTurn = cancel
+			if !childStopPause {
+				turnCtx, cancel = workflow.WithCancel(ctx)
+				cancelTurn = cancel
+			}
 			state.Attention = false
 			outcome, err = runTurn(turnCtx, &state, message, prompt)
 			// A turn may move the session to another worker of its pool.
 			state.syncSession()
+		}
+		if cancel != nil {
 			cancelTurn = nil
 			cancel()
 		}
@@ -293,7 +309,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 			state.Attention = true
 		}
 		modernChild := state.Request.Parent != "" && workflow.GetVersion(ctx, versionSubchatLifecycle, workflow.DefaultVersion, 1) >= 1
-		if modernChild && state.LastStop == p7.StopCancelled && !state.Closing && len(state.Pending) == 0 {
+		if modernChild && state.LastStop == p7.StopCancelled && !state.Closing && (len(state.Pending) == 0 || state.childPaused) {
 			state.Attention = true
 		}
 		summary := &Report{ChatId: state.Request.Id, Attention: state.Attention, Message: message.Id, StopReason: state.LastStop, Text: turn.Text, Error: state.Error, Idle: len(state.Pending) == 0, GaveUp: outcome.GaveUp, Resumes: state.Resumes}
