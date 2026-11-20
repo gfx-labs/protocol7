@@ -32,6 +32,7 @@ type session struct {
 	turns   []domain.TurnRequest
 	closed  int
 	onSlow  func()
+	onTurn  func(context.Context, domain.TurnRequest) (domain.TurnResult, error)
 	release chan struct{}
 }
 
@@ -42,10 +43,13 @@ func (s *session) open(_ context.Context, request domain.SessionRequest) (domain
 	return domain.SessionHandle{ID: request.ID, TaskQueue: "local-test"}, nil
 }
 
-func (s *session) turn(_ context.Context, request domain.TurnRequest) (domain.TurnResult, error) {
+func (s *session) turn(ctx context.Context, request domain.TurnRequest) (domain.TurnResult, error) {
 	s.mu.Lock()
 	s.turns = append(s.turns, request)
 	s.mu.Unlock()
+	if s.onTurn != nil {
+		return s.onTurn(ctx, request)
+	}
 	if request.Prompt != "slow" {
 		return domain.TurnResult{Text: "answer to " + request.Prompt, Turn: request.Turn, StopReason: p7.StopEndTurn}, nil
 	}
@@ -114,7 +118,8 @@ func newEnvironment(t *testing.T) (*testsuite.TestWorkflowEnvironment, *session)
 	env := suite.NewTestWorkflowEnvironment()
 	fake := &session{release: make(chan struct{})}
 	// The test environment does not end a cancelled activity's context.
-	env.SetOnActivityCanceledListener(func(*activity.Info) { close(fake.release) })
+	var released sync.Once
+	env.SetOnActivityCanceledListener(func(*activity.Info) { released.Do(func() { close(fake.release) }) })
 	err := chat.Register(registry{env}, chat.Options{
 		Tools: func(current *chat.Chat) []p7.Tool { return []p7.Tool{lookup(current)} },
 		Instructions: func(request *chat.Request) (string, error) {

@@ -35,6 +35,8 @@ const (
 	ChatServiceGetChatProcedure = "/navi.v1.ChatService/GetChat"
 	// ChatServiceCreateChatProcedure is the procedure name of the ChatService's CreateChat RPC.
 	ChatServiceCreateChatProcedure = "/navi.v1.ChatService/CreateChat"
+	// ChatServiceSpawnChatProcedure is the procedure name of the ChatService's SpawnChat RPC.
+	ChatServiceSpawnChatProcedure = "/navi.v1.ChatService/SpawnChat"
 	// ChatServiceSendMessageProcedure is the procedure name of the ChatService's SendMessage RPC.
 	ChatServiceSendMessageProcedure = "/navi.v1.ChatService/SendMessage"
 	// ChatServiceStopProcedure is the procedure name of the ChatService's Stop RPC.
@@ -91,6 +93,13 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_navi_v1_chat_proto.Services().ByName("ChatService").Methods().ByName("CreateChat"),
 			Procedure:  ChatServiceCreateChatProcedure,
+		}
+	})
+	chatServiceSpawnChatSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_navi_v1_chat_proto.Services().ByName("ChatService").Methods().ByName("SpawnChat"),
+			Procedure:  ChatServiceSpawnChatProcedure,
 		}
 	})
 	chatServiceSendMessageSpec = sync.OnceValue(func() connect.Spec {
@@ -165,6 +174,8 @@ type ChatServiceClient interface {
 	GetChat(context.Context, *v1.GetChatRequest) (*v1.GetChatResponse, error)
 	// CreateChat starts a chat with its first message.
 	CreateChat(context.Context, *v1.CreateChatRequest) (*v1.CreateChatResponse, error)
+	// SpawnChat starts a native child through the parent chat's spawn update.
+	SpawnChat(context.Context, *v1.SpawnChatRequest) (*v1.SpawnChatResponse, error)
 	// SendMessage sends a message to a chat, or guidance to a session.
 	SendMessage(context.Context, *v1.SendMessageRequest) (*v1.SendMessageResponse, error)
 	// Stop stops the chat's current turn. The messages that wait stay.
@@ -226,6 +237,8 @@ type ChatServiceHandler interface {
 	GetChat(context.Context, *v1.GetChatRequest) (*v1.GetChatResponse, error)
 	// CreateChat starts a chat with its first message.
 	CreateChat(context.Context, *v1.CreateChatRequest) (*v1.CreateChatResponse, error)
+	// SpawnChat starts a native child through the parent chat's spawn update.
+	SpawnChat(context.Context, *v1.SpawnChatRequest) (*v1.SpawnChatResponse, error)
 	// SendMessage sends a message to a chat, or guidance to a session.
 	SendMessage(context.Context, *v1.SendMessageRequest) (*v1.SendMessageResponse, error)
 	// Stop stops the chat's current turn. The messages that wait stay.
@@ -256,6 +269,7 @@ func RegisterChatServiceHandler(server *connect.Server, svc ChatServiceHandler) 
 		connect.Method{Spec: chatServiceListSessionsSpec(), Handler: adapter.listSessions},
 		connect.Method{Spec: chatServiceGetChatSpec(), Handler: adapter.getChat},
 		connect.Method{Spec: chatServiceCreateChatSpec(), Handler: adapter.createChat},
+		connect.Method{Spec: chatServiceSpawnChatSpec(), Handler: adapter.spawnChat},
 		connect.Method{Spec: chatServiceSendMessageSpec(), Handler: adapter.sendMessage},
 		connect.Method{Spec: chatServiceStopSpec(), Handler: adapter.stop},
 		connect.Method{Spec: chatServiceStopDiscardSpec(), Handler: adapter.stopDiscard},
@@ -303,6 +317,10 @@ func (UnimplementedChatServiceHandler) GetChat(context.Context, *v1.GetChatReque
 
 func (UnimplementedChatServiceHandler) CreateChat(context.Context, *v1.CreateChatRequest) (*v1.CreateChatResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "navi.v1.ChatService.CreateChat is not implemented")
+}
+
+func (UnimplementedChatServiceHandler) SpawnChat(context.Context, *v1.SpawnChatRequest) (*v1.SpawnChatResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "navi.v1.ChatService.SpawnChat is not implemented")
 }
 
 func (UnimplementedChatServiceHandler) SendMessage(context.Context, *v1.SendMessageRequest) (*v1.SendMessageResponse, error) {
@@ -376,6 +394,14 @@ func (c *chatServiceClient) GetChat(ctx context.Context, req *v1.GetChatRequest)
 func (c *chatServiceClient) CreateChat(ctx context.Context, req *v1.CreateChatRequest) (*v1.CreateChatResponse, error) {
 	var res v1.CreateChatResponse
 	if err := c.client.CallUnary(ctx, chatServiceCreateChatSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *chatServiceClient) SpawnChat(ctx context.Context, req *v1.SpawnChatRequest) (*v1.SpawnChatResponse, error) {
+	var res v1.SpawnChatResponse
+	if err := c.client.CallUnary(ctx, chatServiceSpawnChatSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -501,6 +527,18 @@ func (h chatServiceHandler) createChat(ctx context.Context, _ connect.Spec, stre
 		return err
 	}
 	res, err := h.svc.CreateChat(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h chatServiceHandler) spawnChat(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SpawnChatRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.SpawnChat(ctx, &req)
 	if err != nil {
 		return err
 	}

@@ -69,6 +69,8 @@ const (
 	QueryState = "state"
 	// UpdateArchive archives or unarchives a chat. It carries an Archive.
 	UpdateArchive = "archive"
+	// UpdateSpawn starts a native child and returns its chat ID after start.
+	UpdateSpawn = "spawn"
 )
 
 // Escalation signals, queries and updates.

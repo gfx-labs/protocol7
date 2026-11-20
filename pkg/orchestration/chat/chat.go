@@ -44,6 +44,8 @@ const (
 	// A running workflow sets AttributeArchived, which the page's list
 	// filters on. A closed workflow keeps the value it had.
 	UpdateArchive = navi.UpdateArchive
+	// UpdateSpawn starts a native child through the same path as Chat.Spawn.
+	UpdateSpawn = navi.UpdateSpawn
 	// MemoTitle is the memo field the page lists a chat's title from.
 	MemoTitle = navi.MemoTitle
 )

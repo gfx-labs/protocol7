@@ -22,6 +22,9 @@ const versionUpgradeWake = "upgrade-wake"
 // history from before it dropped them, and replays that way.
 const versionStopKeepsQueue = "stop-keeps-queue"
 
+const versionSubchatLifecycle = "subchat-lifecycle"
+const versionSubchatClose = "subchat-close-drain"
+
 // upgradeWake is how long an idle chat waits for a message before it looks
 // again at whether a newer worker build is the target. Without it a chat that
 // nobody writes to would stay on its build, and keep that build from
@@ -53,6 +56,14 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		}
 		state.Archived = archive.Archived
 		return nil
+	}); err != nil {
+		return &Report{}, err
+	}
+	if err := workflow.SetUpdateHandler(ctx, UpdateSpawn, func(ctx workflow.Context, request *navi.Spawn) (string, error) {
+		if request == nil || request.By.GetLogin() == "" {
+			return "", errors.New("manual spawn requires a person")
+		}
+		return spawnChildMessage(ctx, &state, request.Task, request.Title, nil, request)
 	}); err != nil {
 		return &Report{}, err
 	}
@@ -89,6 +100,11 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		}
 		if cancelTurn != nil {
 			cancelTurn()
+		} else if state.Request.Parent != "" && workflow.GetVersion(ctx, versionSubchatLifecycle, workflow.DefaultVersion, 1) >= 1 && !state.Closing {
+			state.Attention = true
+			value := &Report{ChatId: state.Request.Id, Message: state.Result.GetMessage(), Attention: true, Stopped: true, StoppedBy: action.GetBy().GetLogin(), Idle: true}
+			state.Result = value
+			report(ctx, state, value)
 		}
 	}
 	dequeue := func(request *Dequeue) {
@@ -125,12 +141,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		selector.AddReceive(children, func(channel workflow.ReceiveChannel, _ bool) {
 			var result *Report
 			channel.Receive(ctx, &result)
-			for index, child := range state.Children {
-				if child.Id == result.GetChatId() && child.Message == result.GetMessage() && result.GetAttention() && !child.Done {
-					state.Children[index].Attention = true
-					state.Children[index].Result = result
-				}
-			}
+			takeChildReport(ctx, &state, result)
 		})
 		selector.AddReceive(escalations, func(channel workflow.ReceiveChannel, _ bool) {
 			var notice *EscalationNotice
@@ -170,6 +181,9 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 			// being answered finishes first, or the agent would get no result.
 			if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
 				break
+			}
+			if workflow.GetVersion(ctx, versionSubchatSpawn, workflow.DefaultVersion, 1) >= 1 && liveChildren(&state) > 0 {
+				continue
 			}
 			// Take what the server already delivered, so no signal is lost
 			// between this run and the next.
@@ -235,6 +249,9 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		message := state.Pending[0]
 		state.Pending = state.Pending[1:]
 		state.Current, state.Status = message, StatusRunning
+		if state.Request.Parent != "" && workflow.GetVersion(ctx, "subchat-guidance", workflow.DefaultVersion, 1) >= 1 {
+			report(ctx, state, &Report{ChatId: state.Request.Id, Message: message.Id, Started: true})
+		}
 		if message.From != nil {
 			if state.Senders == nil {
 				state.Senders = map[string]string{}
@@ -275,6 +292,10 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		if state.Request.Escalation != nil && state.Request.Parent != "" && message.From == nil {
 			state.Attention = true
 		}
+		modernChild := state.Request.Parent != "" && workflow.GetVersion(ctx, versionSubchatLifecycle, workflow.DefaultVersion, 1) >= 1
+		if modernChild && state.LastStop == p7.StopCancelled && !state.Closing && len(state.Pending) == 0 {
+			state.Attention = true
+		}
 		summary := &Report{ChatId: state.Request.Id, Attention: state.Attention, Message: message.Id, StopReason: state.LastStop, Text: turn.Text, Error: state.Error, Idle: len(state.Pending) == 0, GaveUp: outcome.GaveUp, Resumes: state.Resumes}
 		if state.LastStop == p7.StopCancelled && !state.Closing {
 			// Only a person's stop cancels a turn while the chat stays open.
@@ -286,7 +307,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		state.Result = summary
 		report(ctx, state, state.Result)
 		// A child that waits for an answer to an escalation is not done.
-		if state.Request.Parent != "" && !state.Attention && len(state.Pending) == 0 && openEscalations(&state) == 0 {
+		if state.Request.Parent != "" && !state.Attention && len(state.Pending) == 0 && openEscalations(&state) == 0 && (!modernChild || liveChildren(&state) == 0) {
 			state.Closing = true
 		}
 	}
@@ -300,7 +321,13 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	withdrawEscalations(closeCtx, &state)
 	// Even a ready timed await consumes command IDs, so historical roots must skip it.
 	if state.Request.Parent != "" || len(state.Children) > 0 {
-		_, _ = workflow.AwaitWithTimeout(closeCtx, 30*time.Second, func() bool { return workflow.AllHandlersFinished(closeCtx) })
+		if workflow.GetVersion(closeCtx, versionSubchatClose, workflow.DefaultVersion, 1) >= 1 {
+			_, _ = workflow.AwaitWithTimeout(closeCtx, 30*time.Second, func() bool {
+				return workflow.AllHandlersFinished(closeCtx) && liveChildren(&state) == 0
+			})
+		} else {
+			_, _ = workflow.AwaitWithTimeout(closeCtx, 30*time.Second, func() bool { return workflow.AllHandlersFinished(closeCtx) })
+		}
 	}
 	if err := state.session.Close(closeCtx); err != nil {
 		state.Status, state.Error = StatusFailed, Cause(err)
