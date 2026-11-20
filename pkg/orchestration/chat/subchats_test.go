@@ -306,3 +306,91 @@ func TestCloseCascadesToLiveGrandchildren(t *testing.T) {
 		t.Errorf("parent returned before descendants settled, sessions closed %d", sessions.closed)
 	}
 }
+
+// A child's report derives from content that no person vetted, so the turn it
+// starts is restricted even when the chat itself is not.
+func TestChildWakeNoticeIsRestrictedInAnUnrestrictedChat(t *testing.T) {
+	env, sessions := subchatEnvironment(t)
+	env.RegisterDelayedCallback(func() {
+		spawnUpdate(t, env, "c1", "inspect the change", func(string, error) {})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, &chat.Action{}) }, time.Minute)
+	state := newChat("first")
+	env.ExecuteWorkflow(chat.WorkflowName, state)
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if queryState(t, env).Request.Restricted {
+		t.Fatal("the chat under test must not be restricted")
+	}
+	sessions.mu.Lock()
+	defer sessions.mu.Unlock()
+	woke := 0
+	for id, restricted := range sessions.restricted {
+		if strings.HasPrefix(id, "child-") {
+			woke++
+			if !restricted {
+				t.Errorf("wake notice %s is not restricted", id)
+			}
+		}
+	}
+	if woke == 0 {
+		t.Fatalf("no wake turn ran: %v", sessions.restricted)
+	}
+	if sessions.restricted["m1"] {
+		t.Error("the person's own message was restricted")
+	}
+}
+
+// A spawn that the chat would refuse is rejected before it is accepted, so it
+// writes nothing to history.
+func TestRefusedSpawnIsRejectedBeforeAcceptance(t *testing.T) {
+	for _, limit := range []string{"live", "lifetime", "depth", "handler", "empty task", "large task", "no person"} {
+		t.Run(limit, func(t *testing.T) {
+			env, _ := subchatEnvironment(t)
+			state := newChat("first")
+			task := "work"
+			by := &navi.Person{Login: "alice@example.com"}
+			switch limit {
+			case "live", "lifetime":
+				count := chat.MaxLiveChildren
+				if limit == "lifetime" {
+					count = chat.MaxChildren
+				}
+				for index := range count {
+					state.Children = append(state.Children, &chat.Child{Id: fmt.Sprintf("old-%d", index), Done: limit == "lifetime"})
+				}
+			case "depth":
+				state.Request.Depth = chat.MaxChildDepth
+			case "handler":
+				state.Request.Handler = true
+			case "empty task":
+				task = " "
+			case "large task":
+				task = strings.Repeat("x", (64<<10)+1)
+			case "no person":
+				by = nil
+			}
+			accepted, rejected := false, false
+			env.RegisterDelayedCallback(func() {
+				toolCalls++
+				err := env.UpdateWorkflowByID(chat.WorkflowID("c1"), chat.UpdateSpawn, fmt.Sprintf("spawn-%d", toolCalls), &testsuite.TestUpdateCallback{
+					OnAccept:   func() { accepted = true },
+					OnReject:   func(error) { rejected = true },
+					OnComplete: func(any, error) {},
+				}, &navi.Spawn{Task: task, Title: "child task", By: by})
+				if err != nil {
+					t.Error(err)
+				}
+			}, time.Second)
+			env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, &chat.Action{}) }, time.Minute)
+			env.ExecuteWorkflow(chat.WorkflowName, state)
+			if err := env.GetWorkflowError(); err != nil {
+				t.Fatal(err)
+			}
+			if accepted || !rejected {
+				t.Fatalf("accepted %v, rejected %v, want the validator to reject it", accepted, rejected)
+			}
+		})
+	}
+}

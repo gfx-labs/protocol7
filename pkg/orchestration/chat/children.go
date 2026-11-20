@@ -3,6 +3,7 @@ package chat
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,9 +24,18 @@ import (
 const versionSubchatSpawn = "subchat-spawn"
 const versionSubchatWake = "subchat-wake"
 
+// versionSubchatWakeRestricted gates the restriction of a wake notice. A
+// history from before it queued the notice with the chat's own flag, and
+// replays that way.
+const versionSubchatWakeRestricted = "subchat-wake-restricted"
+
 //go:embed child-notice.md
 var childNoticeTemplate string
 
+// The bounds are per chat. With a depth of two, one root holds at most
+// MaxLiveChildren live children and MaxLiveChildren*MaxLiveChildren live
+// grandchildren, so 20 live descendants, and a validator cannot count the
+// ones below a child. A per-tree cap would need a query of every descendant.
 const (
 	MaxLiveChildren = 4
 	MaxChildDepth   = 2
@@ -188,12 +198,37 @@ func spawnChild(ctx workflow.Context, state *State, task, title string, escalati
 	return spawnChildMessage(ctx, state, task, title, escalation, nil)
 }
 
-func spawnChildMessage(ctx workflow.Context, state *State, task, title string, escalation *Escalation, guidance *navi.Spawn) (string, error) {
+// spawnBounds is why a chat refuses to spawn a child, from its state alone.
+func spawnBounds(state *State, task, title string) error {
 	if strings.TrimSpace(task) == "" || len(task) > 64<<10 || len(title) > 120 {
-		return "", fmt.Errorf("task must be nonempty and at most 64 KiB, title at most 120 bytes")
+		return fmt.Errorf("task must be nonempty and at most 64 KiB, title at most 120 bytes")
 	}
 	if state.Closing || state.Request.Depth >= MaxChildDepth || liveChildren(state) >= MaxLiveChildren || len(state.Children) >= MaxChildren {
-		return "", fmt.Errorf("chat is closing or its child depth/live/total bound is reached")
+		return fmt.Errorf("chat is closing or its child depth/live/total bound is reached")
+	}
+	return nil
+}
+
+// validateSpawn rejects a manual spawn that the chat would refuse, before the
+// update enters history. It runs only on a live update, never in a replay, so
+// it needs no version. The handler checks again, because two updates in one
+// task are validated before either runs.
+func validateSpawn(ctx workflow.Context, state *State, request *navi.Spawn) error {
+	if request == nil || request.By.GetLogin() == "" {
+		return errors.New("manual spawn requires a person")
+	}
+	if err := spawnBounds(state, request.Task, request.Title); err != nil {
+		return err
+	}
+	if state.Request.Handler || upgrade.Due(ctx) {
+		return fmt.Errorf("the chat is a handler or is draining for continue-as-new")
+	}
+	return nil
+}
+
+func spawnChildMessage(ctx workflow.Context, state *State, task, title string, escalation *Escalation, guidance *navi.Spawn) (string, error) {
+	if err := spawnBounds(state, task, title); err != nil {
+		return "", err
 	}
 	modern := workflow.GetVersion(ctx, versionSubchatSpawn, workflow.DefaultVersion, 1) >= 1
 	if modern && (state.Request.Handler || upgrade.Due(ctx)) {
@@ -290,7 +325,13 @@ func wakeForChild(ctx workflow.Context, state *State, child *Child, event string
 	if result.GetEscalation() != nil {
 		id += "-" + result.Escalation.Id
 	}
-	state.Pending = append(state.Pending, &Message{Id: id, Text: text.String(), Restricted: state.Request.Restricted})
+	// A child's report derives from content that no person vetted, so the turn
+	// it starts never holds the tools that need a person's own message.
+	restricted := state.Request.Restricted
+	if workflow.GetVersion(ctx, versionSubchatWakeRestricted, workflow.DefaultVersion, 1) >= 1 {
+		restricted = true
+	}
+	state.Pending = append(state.Pending, &Message{Id: id, Text: text.String(), Restricted: restricted})
 	state.childPaused = false
 }
 
