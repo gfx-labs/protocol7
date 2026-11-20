@@ -1,21 +1,21 @@
 # Subchats and navi
 
-Status: proposed, 2026-11-20. This is a design for review, not an implementation or deployment plan approval.
+Status: decided, 2026-11-20 at 11:23Z. The user approved implementation and rollout in SDK, core navi, oku-review and oku-selfdev order.
 
 ## Summary
 
 Keep subchats in the SDK base chat. They are already native Temporal child workflows, with model tools and protobuf relation fields. Complete the lifecycle behavior and make navi show and control the same tree. Do not add a separate agent scheduler, child registry, result store or retry engine.
 
-Recommended behavior:
+Decided behavior:
 
 - `chat_spawn` starts a bounded task in the same Temporal namespace and navi project, then returns its chat ID after Temporal acknowledges the start.
-- The parent can continue its turn. `chat_await` explicitly waits for selected children to finish or need attention. Child completion does not silently start another model turn in the parent.
+- The parent starts a turn automatically whenever a child needs attention, including a result, escalation, failure or stop waiting for guidance. `chat_await` remains an optional explicit wait, never a prerequisite for wake-up.
 - Keep the existing limits of four live children and sixteen lifetime direct children per chat, with a maximum depth of two below the root. Keep the existing 24 hour child execution timeout for the first release.
 - Preserve `PARENT_CLOSE_POLICY_REQUEST_CANCEL`. Closing or cancelling a chat requests closure of its descendants. Stopping a turn does not close the tree.
 - Keep the parent run alive while it has live children. Do not attempt to transfer native child futures through continue-as-new.
 - Keep existing workflow kinds and wire names. navi distinguishes a subchat from an issue or handler session by its verified parent relation, not by `owner` alone.
 
-The defaults above are recommendations. Section 8 lists the product decisions to confirm before implementation.
+Section 8 records the user's decisions. Manual spawning is available through the model tool, `Chat.Spawn`, navi UI and A2A.
 
 ## 1. Investigation
 
@@ -113,7 +113,7 @@ These limits apply per parent, not per project. A fully occupied depth-two tree 
 4. Keep final result authority with that future. Signals report attention and escalation progress, not a second completion protocol. Match reports to a recorded child and, where present, its task/guidance message ID. An open-escalation report also makes `chat_await` return attention with the escalation reference. Ignore stale attention after completion.
 5. `chat_spawn` returns without waiting for the result. The model can continue independent work or call `chat_await` for selected children. A timeout returns pending records rather than cancelling them. Only one await is active per parent. `chat_message` can guide only a live recorded direct child.
 
-Do not automatically create a parent model turn when a result arrives. The parent model explicitly awaits when it needs the result. Otherwise the result is available in queried state and navi, and a later user message can ask the parent to use it. This avoids unexpected model work and concurrent synthetic messages. Automatic wake-up is an alternative requiring product approval, not a hidden behavior of this design.
+Queue a bounded parent message and automatically run a parent turn on every new result, escalation, failure or stop waiting for guidance. Serialize these messages through the existing pending-turn queue, including when a parent turn is already running. Native child futures remain authoritative for terminal results. Attention signals must match a live recorded child and must not duplicate terminal notifications. `chat_await` may consume available records or wait explicitly, but wake-up never depends on its use.
 
 Keep `chat_attention` for a child asking its parent for guidance. `escalate` still means a request to the app's handler or a person. The two must not be conflated.
 
@@ -122,7 +122,7 @@ Keep `chat_attention` for a child asking its parent for guidance. `escalate` sti
 | Event | Recommended behavior |
 | --- | --- |
 | Child completes its task turn | Auto-close only when it has no pending messages, attention, open escalations or live children |
-| Child has live grandchildren after its turn | Keep its workflow open. Wake its completion check when descendants settle. It need not consume model tokens while waiting. To synthesize their results, the model must use `chat_await` before ending its task turn |
+| Child has live grandchildren after its turn | Keep its workflow open without consuming model tokens while waiting. A grandchild result or attention notice queues the next parent turn automatically |
 | Person stops a child's running turn | Stop only that turn and preserve the queue. If no queued turn remains, keep the child open for guidance, mark attention and report that it was stopped. Do not turn a stop into successful task completion |
 | Person stops the parent's turn | Do not stop its independent children. A cancelled `chat_await` stops waiting, not the children |
 | Person closes a chat | Discard its pending messages, cancel its current turn, request close of live direct children, withdraw its open escalations and close its p7 session |
@@ -179,7 +179,7 @@ Root archive controls remain root controls. Do not expose child Archive/Unarchiv
 
 Reuse `GetChat`, `SendMessage`, `Stop`, `StopDiscard` and `Close` for a child's ID. A subchat is not exempt from permissions, but it is exempt from the rule that only an issue or handler owner may stop its session. Keep that restriction for non-subchat sessions. Share action eligibility between REST, Connect and A2A instead of retaining three interpretations of `owner`.
 
-Do not add a `parent` parameter to `CreateChat` that makes navi start a second top-level workflow. Model tools and app `Chat.Spawn` remain the ways to start children. A future manual spawn action would call a parent workflow update that executes `ExecuteChildWorkflow`, never `client.ExecuteWorkflow` from navi.
+Do not add a `parent` parameter to `CreateChat` that makes navi start a second top-level workflow. Model tools, app `Chat.Spawn`, navi UI and A2A spawn all use the parent's native child-start path. Manual spawn calls a parent workflow update that executes `ExecuteChildWorkflow`, never `client.ExecuteWorkflow` from navi. Require project modify access and `mayJoin`, preserve caller identity and restrictions, and return only after native child-start acknowledgement.
 
 ### Chat list and chat page
 
@@ -202,7 +202,7 @@ Keep the existing A2A mapping: one agent per project, `contextId` is a chat ID a
 - Include ordinary subchats in the same project-scoped chat listing used by `ListTasks`. Existing get, stream, resubscribe and send operations work with the child's context/task ID. Preserve task metadata when emitting initial and status events so streaming clients can discover the family too.
 - Add a documented navi metadata object on returned tasks containing `parentChatId` and `childChatIds`. Resolve it from the same workflow state. Advertise its stable extension URI through the agent card's `Capabilities.Extensions`, with `Required` false, without claiming A2A defines a native task tree. The pinned a2a-go version has both task metadata and card extensions.
 - `CancelTask` on a child stops that turn through the shared chat action check. It does not close the parent or silently cancel descendants. A2A task cancellation is still not chat closure.
-- A message with no context ID continues to start a root. Clients can ask a parent model to delegate. Direct client-side subchat creation and a separate A2A spawn RPC are not included in the first release.
+- A message with no context ID continues to start a root. Expose direct spawn through a documented A2A extension targeting a parent context and invoking its native spawn update. Require project modify access and the same scope checks as UI spawning. Include the spawn capability in the agent card extension.
 
 All routes resolve the caller from the existing trusted tailnet identity and project policy. View, modify and admin rules stay unchanged. No new global permission, per-child ACL or privileged credential is introduced. Admin-only backend selection stays admin-only. The effective scope and `Restricted` value can only stay equal or narrow on spawn.
 
@@ -214,7 +214,7 @@ Preserve the not-set-up check. `requireChat` uses cached task-queue pollers for 
 
 ## 7. PR sequence and validation gates
 
-This document is PR 0. Stop after opening it for review. Do not merge, deploy or begin implementation until the review decisions are confirmed.
+This document is PR 0. User decisions were confirmed on 2026-11-20 at 11:23Z. Merge this design after CI, then implement SDK, core navi and the tenants in order. Merge each implementation after CI and verify normal pin commits and rollouts before live acceptance.
 
 | PR | Repository | Scope and acceptance |
 | --- | --- | --- |
@@ -223,14 +223,14 @@ This document is PR 0. Stop after opening it for review. Do not merge, deploy or
 | 3 | protocol7-selfdev | Bump the merged SDK revision for navi and core chat. Implement project-checked family projection, combined list, action checks and A2A metadata/cancellation. Update React tree and child page controls, REST/Connect serialization and app instructions where needed. Core worker replay plus API and browser acceptance. No `kubernetes/` or `cdk8s` edits |
 | 4 | oku-review | Bump the merged SDK revision. Keep `pkg/chat/Register` and its own extensions and image. Replay its histories and run a parent/child/grandchild scenario on its worker |
 | 5 | oku-selfdev | Same dependency, replay and lifecycle acceptance for its own worker. Recheck the active audit PR before editing shared dependency files |
-| Later, separately authorized | Platform and tenant release owners | Review build/versioning state and carry out normal releases in order, initially core then oku-review then oku-selfdev. No manifest migration is part of the design or SDK feature PRs |
+| Release verification | Platform and tenant release owners | Follow normal pin commits and rollouts in core, oku-review, oku-selfdev order. Confirm chat pods roll and recorded chats still replay. No manifest migration is part of the feature |
 
 Before publication of each PR, fetch its default branch and inspect open PRs again. Coordinate dependency changes rather than overwriting another owner's pins. A server supporting the additive response may precede the UI. A UI talking to an older server falls back to `state.children` and reports unavailable live status. Existing subchats require no data migration or historical kind rewrite.
 
 Required implementation checks, not yet run:
 
 1. A real Temporal parent starts two children and a grandchild. Assert native parent execution identity, same namespace/project/scope, separate sessions/branches, inherited extensions, limit rejection and failed-start accounting.
-2. The parent continues work after spawn, explicitly awaits results, receives attention, guides a child, and observes timeout/failure/stopped results without duplicate child execution. Worker restart replays the in-flight tree.
+2. The parent continues work after spawn and automatically wakes on results, attention, escalations and failure, without requiring `chat_await`. It can also explicitly await, guide a child, and observe timeout/failure/stopped results without duplicate child execution. Worker restart replays the in-flight tree.
 3. A stopped child remains available for guidance when no queued turn follows. Root Stop leaves its children running. Child Close and root Close request recursive closure. Test cancellation, parent failure/termination and an unavailable child worker. Observe actual terminal events, not only signal acceptance.
 4. Parent continue-as-new is deferred while children are live. A child continues as new and completes through the original parent future. A parent then continues as new with completed results and pending messages intact. Exercise a build-target change and history-pressure admission.
 5. A subchat escalates, receives the answer in that subchat, and completes only afterward. Closing it withdraws the escalation on the graceful path. Document the abrupt-termination/expiry limitation.
@@ -242,16 +242,18 @@ Keep tests focused on this repository's behavior and recorded real histories. Us
 
 Rollback of navi can remove the tree UI while retaining existing child workflows and wire fields. Workflow rollback is more constrained: do not send post-change histories to an older worker that lacks their versioned branches. Retain compatible worker builds until their pinned workflows drain. Do not delete version markers or registered workflow types as a rollback shortcut.
 
-## 8. Decisions to confirm
+## 8. Decided
 
-| Decision | Recommendation | Alternative and consequence |
-| --- | --- | --- |
-| Parent wake-up | Explicit `chat_await`, no automatic parent turn | Queue an automatic result/attention turn. More responsive when the parent has ended its turn, but introduces additional model calls and ordering rules |
-| Bounds and cost | Keep 4 live, 16 lifetime direct children, depth 2, 24 hour child lifetime | Raise limits or wait longer for escalations. More concurrent sessions and a longer delay before parent history/build rollover. A project-wide budget is separate work |
-| User control of a subchat | Project modifiers may message, stop and close it. Stop keeps it open for guidance | Keep owner-only stop/close. Simpler ownership but does not provide the requested child-stop control in navi |
-| Direct manual spawn | Model tool and app extension only in the first release | Add a parent workflow spawn update plus UI/A2A extension. Useful for deterministic manual delegation, but additional API and replay scope |
+Confirmed by the user on 2026-11-20 at 11:23Z:
 
-The recommended implementation also keeps cooperative `REQUEST_CANCEL` rather than immediate termination and accepts the existing abandoned-escalation expiry limitation. Confirm these semantics with the lifecycle acceptance evidence before authorizing a release.
+| Decision | Behavior |
+| --- | --- |
+| Parent wake-up | Automatically start a parent turn on a child result, escalation, failure or stop waiting for guidance. Keep `chat_await` as an optional explicit wait, not a dependency |
+| Bounds and cost | Keep 4 live and 16 lifetime direct children, depth 2 and 24 hour child lifetime |
+| User control of a subchat | Project modifiers may message, stop and close children. A stopped child stays open for guidance |
+| Spawn entry points | Model tool, app `Chat.Spawn`, navi UI and A2A. Manual paths invoke a parent workflow update using the same native child-start implementation |
+
+Keep cooperative `REQUEST_CANCEL` rather than immediate termination and the existing abandoned-escalation expiry limitation. Verify lifecycle behavior before completing the release.
 
 ## 9. Temporal references
 
