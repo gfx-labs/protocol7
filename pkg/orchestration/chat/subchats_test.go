@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/mock"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/testsuite"
@@ -60,6 +61,23 @@ func childState(t *testing.T, env *testsuite.TestWorkflowEnvironment, id string)
 	return state
 }
 
+func stopSlowChild(t *testing.T, env *testsuite.TestWorkflowEnvironment, sessions *session) func(context.Context, domain.TurnRequest) (domain.TurnResult, error) {
+	t.Helper()
+	return func(ctx context.Context, turn domain.TurnRequest) (domain.TurnResult, error) {
+		if turn.Prompt != "slow" {
+			return domain.TurnResult{Turn: turn.Turn, Text: "answer to " + turn.Prompt, StopReason: p7.StopEndTurn}, nil
+		}
+		id := activity.GetInfo(ctx).WorkflowExecution.ID
+		env.RegisterDelayedCallback(func() {
+			if err := env.SignalWorkflowByID(id, chat.SignalStop, &chat.Action{By: &chat.Person{Login: "alice@example.com"}}); err != nil {
+				t.Error(err)
+			}
+		}, 0)
+		<-sessions.release
+		return domain.TurnResult{Turn: turn.Turn, StopReason: p7.StopCancelled}, nil
+	}
+}
+
 func TestChildResultAutomaticallyWakesItsParent(t *testing.T) {
 	env, sessions := subchatEnvironment(t)
 	var child string
@@ -94,18 +112,13 @@ func TestChildResultAutomaticallyWakesItsParent(t *testing.T) {
 func TestStoppedChildWaitsForGuidanceAndWakesParent(t *testing.T) {
 	env, sessions := subchatEnvironment(t)
 	var child string
-	sessions.onSlow = func() {
-		state := queryState(t, env)
-		child = state.Children[0].Id
-		if err := env.SignalWorkflowByID(chat.WorkflowID(child), chat.SignalStop, &chat.Action{By: &chat.Person{Login: "alice@example.com"}}); err != nil {
-			t.Error(err)
-		}
-	}
+	sessions.onTurn = stopSlowChild(t, env, sessions)
 	env.RegisterDelayedCallback(func() {
-		spawnUpdate(t, env, "c1", "slow", func(_ string, err error) {
+		spawnUpdate(t, env, "c1", "slow", func(id string, err error) {
 			if err != nil {
 				t.Error(err)
 			}
+			child = id
 		})
 	}, time.Second)
 	env.RegisterDelayedCallback(func() {
@@ -179,12 +192,7 @@ func TestSpawnEnforcesChildBounds(t *testing.T) {
 func TestContinueAsNewWaitsForLiveChildren(t *testing.T) {
 	env, sessions := subchatEnvironment(t)
 	var child string
-	sessions.onSlow = func() {
-		state := queryState(t, env)
-		if err := env.SignalWorkflowByID(chat.WorkflowID(state.Children[0].Id), chat.SignalStop, &chat.Action{}); err != nil {
-			t.Error(err)
-		}
-	}
+	sessions.onTurn = stopSlowChild(t, env, sessions)
 	env.RegisterDelayedCallback(func() {
 		spawnUpdate(t, env, "c1", "slow", func(id string, err error) {
 			if err != nil {
@@ -225,19 +233,20 @@ func TestContinueAsNewWaitsForLiveChildren(t *testing.T) {
 func TestCloseCascadesToLiveGrandchildren(t *testing.T) {
 	env, sessions := subchatEnvironment(t)
 	var child, grandchild string
-	sessions.onTurn = func(_ context.Context, turn domain.TurnRequest) (domain.TurnResult, error) {
+	sessions.onTurn = func(ctx context.Context, turn domain.TurnRequest) (domain.TurnResult, error) {
 		switch turn.Prompt {
 		case "delegate again":
-			parent := queryState(t, env)
-			child = parent.Children[0].Id
+			parent := strings.TrimPrefix(activity.GetInfo(ctx).WorkflowExecution.ID, chat.WorkflowID(""))
 			started := make(chan struct{})
-			spawnUpdate(t, env, child, "wait for guidance", func(id string, err error) {
-				if err != nil {
-					t.Error(err)
-				}
-				grandchild = id
-				close(started)
-			})
+			env.RegisterDelayedCallback(func() {
+				spawnUpdate(t, env, parent, "wait for guidance", func(id string, err error) {
+					if err != nil {
+						t.Error(err)
+					}
+					grandchild = id
+					close(started)
+				})
+			}, 0)
 			<-started
 		case "wait for guidance":
 			return domain.TurnResult{Turn: turn.Turn, StopReason: p7.StopCancelled}, nil
@@ -245,10 +254,11 @@ func TestCloseCascadesToLiveGrandchildren(t *testing.T) {
 		return domain.TurnResult{Turn: turn.Turn, Text: "delegated work", StopReason: p7.StopEndTurn}, nil
 	}
 	env.RegisterDelayedCallback(func() {
-		spawnUpdate(t, env, "c1", "delegate again", func(_ string, err error) {
+		spawnUpdate(t, env, "c1", "delegate again", func(id string, err error) {
 			if err != nil {
 				t.Error(err)
 			}
+			child = id
 		})
 	}, time.Second)
 	env.RegisterDelayedCallback(func() {
