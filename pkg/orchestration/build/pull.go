@@ -67,29 +67,41 @@ func (a *PullActivities) BranchHead(ctx context.Context, request BranchRequest) 
 // BuildBranch waits for a branch-head build and the PR maker's pin commit.
 // The returned head lets the caller refuse to open a PR if the branch moved.
 func BuildBranch(ctx workflow.Context, request BranchRequest, options BuildOptions) (string, error) {
+	result, err := BuildBranchWithImages(ctx, request, options)
+	return result.Head, err
+}
+
+// BranchBuildResult retains immutable build evidence beside the final pinned head.
+type BranchBuildResult struct {
+	Head   string
+	Images []Image
+}
+
+// BuildBranchWithImages runs the same build and pin commands as BuildBranch.
+func BuildBranchWithImages(ctx workflow.Context, request BranchRequest, options BuildOptions) (BranchBuildResult, error) {
 	activityContext := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 5 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
 	var head string
 	if err := workflow.ExecuteActivity(activityContext, ActivityBranchHead, request).Get(ctx, &head); err != nil {
-		return "", err
+		return BranchBuildResult{}, err
 	}
 	if head == "" {
-		return "", nil
+		return BranchBuildResult{}, nil
 	}
 	result, err := Build(ctx, Request{Repository: request.Repository, Commit: head, Trigger: TriggerPullRequest}, options)
 	if err != nil {
-		return "", err
+		return BranchBuildResult{}, err
 	}
 	if result.Commit != head || len(result.Images) == 0 {
-		return "", fmt.Errorf("build: result does not contain images for branch head %s", head)
+		return BranchBuildResult{}, fmt.Errorf("build: result does not contain images for branch head %s", head)
 	}
 	var pinned string
 	if err := workflow.ExecuteActivity(activityContext, ActivityPinBranch, PinRequest{BranchRequest: request, Result: result}).Get(ctx, &pinned); err != nil {
-		return "", err
+		return BranchBuildResult{}, err
 	}
-	return pinned, nil
+	return BranchBuildResult{Head: pinned, Images: result.Images}, nil
 }
 
 // PinBranch writes only marked kubernetes files, with a non-forced fast-forward
