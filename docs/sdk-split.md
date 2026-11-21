@@ -4,7 +4,7 @@ Status: design, revised 2026-11-19. Section 1 and PRs 1 to 6 are merged. Section
 
 ## Goal
 
-A tenant (oku-trade/oku-selfdev, oku-trade/oku-review) builds and deploys only its own images, compiled against a pinned `github.com/gfx-labs/protocol7` module. It never runs a `ghcr.io/gfx-labs/protocol7-selfdev` image. The tenant's selfdev, meaning the chat workflow worker, its session `p7-worker` and the files server, lives in the tenant's repo, binary, image and manifests. oku-review, for example, does selfdev on its own Deployment, with prompts and reviewer code from `oku-trade/oku-review/kubernetes`.
+A tenant (oku-trade/oku-development, oku-trade/oku-review) builds and deploys only its own images, compiled against a pinned `github.com/gfx-labs/protocol7` module. It never runs a `ghcr.io/gfx-labs/protocol7-selfdev` image. The tenant's selfdev, meaning the chat workflow worker, its session `p7-worker` and the files server, lives in the tenant's repo, binary, image and manifests. oku-review, for example, does selfdev on its own Deployment, with prompts and reviewer code from `oku-trade/oku-review/kubernetes`.
 
 Each namespace provides its own chat. The tenant's binary registers the SDK's base chat with its own extensions (tools, instructions, per-turn hooks, activities) on its own worker. protocol7 does not ship issue work, reviews, learnings, probes, the operator broker or a replay harness. An app that wants one writes it in its own repository, reusing the code of another app by copying it, not by depending on it.
 
@@ -16,7 +16,7 @@ For the first version of this design, at these revisions:
 
 - protocol7 `origin/master` (pkg groups `domain`, `execution`, `orchestration`, `p7`, `support`, `transport`, and `pkg/support/config`).
 - protocol7-selfdev `origin/master` at `e0e2bb9`, `pkg/workflow/chat/{chat,escalation,handler,integrationtools}.go`, the names `pkg/web` uses from the workflow packages, `pkg/cli/{cli,wire,files}.go`, and `containers/selfdev/Dockerfile`.
-- oku-review `origin/main`: `kubernetes/{selfdev,p7-worker}.yaml`, `Dockerfile`. oku-selfdev `origin/main`: file list of `kubernetes/` and `images/`.
+- oku-review `origin/main`: `kubernetes/{selfdev,p7-worker}.yaml`, `Dockerfile`. oku-development `origin/main`: file list of `kubernetes/` and `images/`.
 
 For this revision, at protocol7 `3b13cac` and protocol7-selfdev `6382237`:
 
@@ -358,7 +358,7 @@ The session worker and files server are not app code: the app's image builds `gi
 ### What each oku repo builds
 
 - **oku-review** builds one image from its `Dockerfile`, with three binaries: `oku-review` (reviewer-a today, plus a new `selfdev-worker` subcommand from section 3), and `p7-worker` and `p7acpshim` built from the pinned protocol7 module. The session tools that `containers/selfdev/Dockerfile` adds today (node, towa, gh, kubectl, chromium for screenshots) move to a stage of this Dockerfile, or to a second image `oku-review-session` if the reviewer image should stay small. Prompts are embedded, or mounted from a ConfigMap generated from `kubernetes/`.
-- **oku-selfdev** does the same in `images/Dockerfile` with an `oku-selfdev selfdev-worker` subcommand and its own tools for the trade, retail and backend workers.
+- **oku-development** does the same in `images/Dockerfile` with an `oku-development selfdev-worker` subcommand and its own tools for the trade, retail and backend workers.
 
 ### What the manifests become
 
@@ -404,7 +404,7 @@ Each PR merges alone and leaves every deployment working.
 | 9 | oku-review | Turn on Worker Versioning on the current image (tenant cutover step 1). Settings in a ConfigMap read by `--config`. | `temporal worker deployment describe` lists the build. A new chat starts pinned. | |
 | 10 | oku-review | A `selfdev-worker` subcommand that registers the base chat with oku-review's extensions, p7-worker and session tools in the Dockerfile, and the `selfdev-next` Deployment, not promoted (step 2). | Image builds. The pod polls. A replay test in oku-review of a history its new build wrote. | |
 | 11 | oku-review | Promote the tenant build, swap `p7-worker` and `files` images, delete the old Deployment, add the image grep check (steps 3 to 5). | Old build's pinned count reaches zero. A chat opened in navi on oku-review runs a turn. The grep check passes. | |
-| 12 | oku-selfdev | PRs 9 to 11 for namespace `oku`. | Same checks on namespace `oku`. | |
+| 12 | oku-development | PRs 9 to 11 for namespace `oku`. | Same checks on namespace `oku`. | |
 
 PRs 1 to 6 changed no behavior. PR 7 adds code no one runs yet. PR 8 makes protocol7-selfdev the first consumer of the base chat, which tests it before a tenant depends on it. PRs 9 to 12 cut each tenant over one namespace at a time, each with its own extensions written in its own repository.
 
