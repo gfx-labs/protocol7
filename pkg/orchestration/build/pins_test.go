@@ -1,6 +1,7 @@
 package build_test
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -56,5 +57,48 @@ func TestPinFiles(t *testing.T) {
 	}
 	if _, err := build.PinFiles(nil, "registry.example", []build.Image{image}); err == nil {
 		t.Fatal("accepted a build without any marked pins")
+	}
+}
+
+func TestPinOnlyGate(t *testing.T) {
+	image := build.Image{Name: "reviewer", Package: "oku-trade/oku-review", Digest: "sha256:" + strings.Repeat("b", 64)}
+	line := func(reference string) string { return "  image: " + reference + " # p7-image: reviewer\n" }
+	before := map[string]string{
+		"kubernetes/chat.yaml": "replicas: 1\n" + line("ghcr.io/oku-trade/oku-review@sha256:"+strings.Repeat("a", 64)),
+		"main.go":              "package main\n",
+	}
+	pinned := "replicas: 1\n" + line(image.Reference("registry.example:30500"))
+	for _, test := range []struct {
+		name   string
+		change func(map[string]string)
+		accept bool
+	}{
+		{"pin-only", func(files map[string]string) {}, true},
+		{"mixed-code", func(files map[string]string) { files["main.go"] += "// feature\n" }, false},
+		{"mixed-manifest", func(files map[string]string) {
+			files["kubernetes/chat.yaml"] = strings.Replace(pinned, "replicas: 1", "replicas: 2", 1)
+		}, false},
+		{"tag", func(files map[string]string) {
+			files["kubernetes/chat.yaml"] = "replicas: 1\n" + line("registry.example:30500/oku-trade/oku-review:latest")
+		}, false},
+		{"untrusted-digest", func(files map[string]string) {
+			files["kubernetes/chat.yaml"] = strings.ReplaceAll(pinned, image.Digest, "sha256:"+strings.Repeat("c", 64))
+		}, false},
+		{"added-file", func(files map[string]string) { files["new.go"] = "package main\n" }, false},
+		{"removed-file", func(files map[string]string) { delete(files, "main.go") }, false},
+		{"changed-marker", func(files map[string]string) {
+			files["kubernetes/chat.yaml"] = strings.Replace(pinned, "p7-image: reviewer", "p7-image: worker", 1)
+		}, false},
+		{"unchanged", func(files map[string]string) { files["kubernetes/chat.yaml"] = before["kubernetes/chat.yaml"] }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			after := maps.Clone(before)
+			after["kubernetes/chat.yaml"] = pinned
+			test.change(after)
+			err := build.PinOnly(before, after, "registry.example:30500", []build.Image{image})
+			if (err == nil) != test.accept {
+				t.Fatalf("accepted=%v, error=%v", test.accept, err)
+			}
+		})
 	}
 }

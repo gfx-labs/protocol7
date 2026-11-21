@@ -67,3 +67,29 @@ func PinFiles(files map[string]string, registry string, images []Image) (map[str
 	}
 	return changed, nil
 }
+
+// PinOnly accepts exactly the rewrite produced by PinFiles from a trusted build.
+// Callers must supply the complete file set, not a possibly truncated diff.
+func PinOnly(before, after map[string]string, registry string, images []Image) error {
+	if len(images) == 0 || len(before) != len(after) {
+		return fmt.Errorf("build: pin-only change requires images and no added or removed files")
+	}
+	expected, err := PinFiles(before, registry, images)
+	if err != nil {
+		return err
+	}
+	if len(expected) == 0 {
+		return fmt.Errorf("build: no image pins changed")
+	}
+	for filename, original := range before {
+		want := original
+		if updated, ok := expected[filename]; ok {
+			want = updated
+		}
+		actual, ok := after[filename]
+		if !ok || actual != want {
+			return fmt.Errorf("build: %s differs from the trusted build's pin-only rewrite", filename)
+		}
+	}
+	return nil
+}
