@@ -71,9 +71,10 @@ type Image struct {
 	Tag string
 }
 
-// Reference is what manifests pin. Nodes pull it from zot through the ghcr.io mirror.
-func (image Image) Reference() string {
-	return "ghcr.io/" + image.Package + "@" + image.Digest
+// Reference is what manifests pin. registry is the node-reachable host:port
+// from the PR maker's settings, not the builder's in-cluster push address.
+func (image Image) Reference(registry string) string {
+	return registry + "/" + image.Package + "@" + image.Digest
 }
 
 // Result is what Build returns.
