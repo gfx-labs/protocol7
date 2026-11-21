@@ -27,6 +27,8 @@ type Grant struct {
 	SystemAdmin   bool                `json:"system_admin,omitempty"`
 	Namespaces    map[string][]string `json:"namespaces,omitempty"`
 	NamespaceAPIs map[string][]string `json:"namespace_apis,omitempty"`
+	// NexusEndpoints grants workflow and standalone calls from each source namespace.
+	NexusEndpoints map[string][]string `json:"nexus_endpoints,omitempty"`
 	// TaskQueues limits the task queues the identity may poll and describe,
 	// in every namespace it has a grant in. The other grants say which calls
 	// are allowed, and this says which queues those calls may name. In a
@@ -43,7 +45,8 @@ type namespaceAPIs map[string]map[string]bool
 
 // extension is what a mapped identity carries beyond Temporal's claims.
 type extension struct {
-	apis namespaceAPIs
+	apis           namespaceAPIs
+	nexusEndpoints map[string][]string
 	// queues is the template of Grant.TaskQueues until GetClaims has
 	// expanded it for the caller. Nil is no limit.
 	queues []string
@@ -141,15 +144,28 @@ func grantClaims(grant Grant) (*authorization.Claims, error) {
 			permissions[namespace][qualified] = true
 		}
 	}
-	claims.Extensions = extension{apis: permissions}
+	endpoints := make(map[string][]string, len(grant.NexusEndpoints))
+	for namespace, names := range grant.NexusEndpoints {
+		if namespace == "" || namespace == "*" || len(names) == 0 {
+			return nil, fmt.Errorf("Nexus grants must name a source namespace and endpoints")
+		}
+		for _, name := range names {
+			if name == "" || strings.Contains(name, "*") {
+				return nil, fmt.Errorf("Nexus grants must name exact endpoints")
+			}
+		}
+		endpoints[namespace] = slices.Clone(names)
+	}
+	granted := extension{apis: permissions, nexusEndpoints: endpoints}
 	if len(grant.TaskQueues) > 0 {
 		for _, queue := range grant.TaskQueues {
 			if queue == "" {
 				return nil, fmt.Errorf("task queue names must not be empty")
 			}
 		}
-		claims.Extensions = extension{apis: permissions, queues: slices.Clone(grant.TaskQueues)}
+		granted.queues = slices.Clone(grant.TaskQueues)
 	}
+	claims.Extensions = granted
 	return claims, nil
 }
 
@@ -207,6 +223,10 @@ func (m *Mapper) GetClaims(info *authorization.AuthInfo) (*authorization.Claims,
 			cloned[namespace][method] = allowed
 		}
 	}
-	claims.Extensions = extension{apis: cloned, queues: queues}
+	endpoints := make(map[string][]string, len(granted.nexusEndpoints))
+	for namespace, names := range granted.nexusEndpoints {
+		endpoints[namespace] = slices.Clone(names)
+	}
+	claims.Extensions = extension{apis: cloned, queues: queues, nexusEndpoints: endpoints}
 	return &claims, nil
 }

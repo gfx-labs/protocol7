@@ -27,6 +27,17 @@ func (a *Authorizer) Authorize(ctx context.Context, claims *authorization.Claims
 	if target == nil || claims == nil {
 		return authorization.Result{Decision: authorization.DecisionDeny}, nil
 	}
+	granted, _ := claims.Extensions.(extension)
+	if strings.HasPrefix(target.APIName, api.NexusServicePrefix) && claims.System&authorization.RoleAdmin == 0 {
+		// Worker-target dispatch authenticates as the server, not the source worker.
+		return authorization.Result{Decision: authorization.DecisionDeny}, nil
+	}
+	if target.APIName == api.WorkflowServicePrefix+"StartNexusOperationExecution" && claims.System&authorization.RoleAdmin == 0 {
+		request, ok := target.Request.(*workflowservice.StartNexusOperationExecutionRequest)
+		if !ok || !slices.Contains(granted.nexusEndpoints[target.Namespace], request.GetEndpoint()) {
+			return authorization.Result{Decision: authorization.DecisionDeny}, nil
+		}
+	}
 	if target.APIName == api.WorkflowServicePrefix+"RespondWorkflowTaskCompleted" {
 		if request, ok := target.Request.(*workflowservice.RespondWorkflowTaskCompletedRequest); ok {
 			for _, command := range request.GetCommands() {
@@ -38,6 +49,12 @@ func (a *Authorizer) Authorize(ctx context.Context, claims *authorization.Claims
 					namespace, method = command.GetSignalExternalWorkflowExecutionCommandAttributes().GetNamespace(), "SignalWorkflowExecution"
 				case enumspb.COMMAND_TYPE_REQUEST_CANCEL_EXTERNAL_WORKFLOW_EXECUTION:
 					namespace, method = command.GetRequestCancelExternalWorkflowExecutionCommandAttributes().GetNamespace(), "RequestCancelWorkflowExecution"
+				case enumspb.COMMAND_TYPE_SCHEDULE_NEXUS_OPERATION:
+					endpoint := command.GetScheduleNexusOperationCommandAttributes().GetEndpoint()
+					if claims.System&authorization.RoleAdmin == 0 && !slices.Contains(granted.nexusEndpoints[target.Namespace], endpoint) {
+						return authorization.Result{Decision: authorization.DecisionDeny}, nil
+					}
+					continue
 				default:
 					continue
 				}
@@ -51,7 +68,6 @@ func (a *Authorizer) Authorize(ctx context.Context, claims *authorization.Claims
 			}
 		}
 	}
-	granted, _ := claims.Extensions.(extension)
 	if granted.queues != nil && !queuesAllowed(target, granted.queues) {
 		return authorization.Result{Decision: authorization.DecisionDeny}, nil
 	}
@@ -126,6 +142,7 @@ func workerMethod(method string) bool {
 	}
 	switch strings.TrimPrefix(method, api.WorkflowServicePrefix) {
 	case "PollWorkflowTaskQueue", "RespondWorkflowTaskCompleted", "RespondWorkflowTaskFailed",
+		"PollNexusTaskQueue", "RespondNexusTaskCompleted", "RespondNexusTaskFailed",
 		"PollActivityTaskQueue", "RecordActivityTaskHeartbeat", "RecordActivityTaskHeartbeatById",
 		"RespondActivityTaskCompleted", "RespondActivityTaskCompletedById",
 		"RespondActivityTaskFailed", "RespondActivityTaskFailedById",
