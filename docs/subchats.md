@@ -1,6 +1,6 @@
 # Subchats and navi
 
-Status: decided, 2026-11-20 at 11:23Z. The user approved implementation and rollout in SDK, core navi, oku-review and oku-selfdev order.
+Status: decided, 2026-11-20 at 11:23Z. The user approved implementation and rollout in SDK, core navi, oku-review and oku-development order.
 
 ## Summary
 
@@ -28,9 +28,9 @@ Fetched the repositories and checked their open PRs before reading source on 202
 | `gfx-labs/protocol7`, `master` | `a503227b` | `docs/sdk-split.md`, `pkg/orchestration/chat/{chat,options,workflow,children,escalate,escalation,pool,recovery}.go`, `pkg/orchestration/upgrade/upgrade.go`, `pkg/domain/navi/{navi,chat,client,attributes}.go`, `proto/navi/v1/{chat,common,escalation}.proto`, `pkg/p7/tool.go` |
 | `gfx-labs/protocol7-selfdev`, `master` | `7647e4c` | `pkg/cli/wire.go`, `pkg/workflow/chat/{base,workflow,instructions}.go`, `pkg/web/{server,chats,chatservice,chatworker,scope,access,statejson,page,a2a}.go`, `pkg/integration/a2a/a2a.go`, `pkg/web/ui/src/pages/{ChatsPage,ChatView}.tsx`, UI API types |
 | `oku-trade/oku-review`, `main` | `2936313` | `pkg/chat/{register,workflow,instructions}.go`, `go.mod` |
-| `oku-trade/oku-selfdev`, `main` | `421bb67` | `pkg/chat/{register,workflow,instructions}.go`, `go.mod` |
+| `oku-trade/oku-development`, `main` | `421bb67` | `pkg/chat/{register,workflow,instructions}.go`, `go.mod` |
 
-The SDK and oku-review had no open PRs. The platform had [protocol7-selfdev#68](https://github.com/gfx-labs/protocol7-selfdev/pull/68), for navi GitHub access. oku-selfdev had [oku-selfdev#30](https://github.com/oku-trade/oku-selfdev/pull/30), for production auditing. Neither implements subchats. Recheck before each implementation PR because these repositories are active.
+The SDK and oku-review had no open PRs. The platform had [protocol7-selfdev#68](https://github.com/gfx-labs/protocol7-selfdev/pull/68), for navi GitHub access. oku-development had [oku-development#30](https://github.com/oku-trade/oku-development/pull/30), for production auditing. Neither implements subchats. Recheck before each implementation PR because these repositories are active.
 
 Also read Temporal's official child workflow, Go child workflow, continue-as-new and Parent Close Policy documentation. Checked cancellation options in the pinned Temporal Go SDK `v1.51.0`, and task metadata/card extension types in the pinned a2a-go `v2.9.0` dependency. See section 9.
 
@@ -54,7 +54,7 @@ The protobuf contract already has the relations:
 
 `SelfdevParent` already indexes the immediate parent. `SelfdevProject`, `SelfdevOwner`, `SelfdevKind` and the `contract` memo already exist. `ContractVersion` is 2. `SelfdevParent` is also used by escalations, so a relation query must restrict workflow type.
 
-The core project wraps `base.NewWorkflow(Options(...))` and registers it in `pkg/cli/wire.go`. Both oku apps call `base.Register(worker, options)` in `pkg/chat/register.go`. Their custom instructions already describe child tasks. Their fetched SDK pins are `77cb3552` for oku-review and `07ab666d` for oku-selfdev. The platform pin is `a503227b`. No app needs another app's worker image to obtain these tools.
+The core project wraps `base.NewWorkflow(Options(...))` and registers it in `pkg/cli/wire.go`. Both oku apps call `base.Register(worker, options)` in `pkg/chat/register.go`. Their custom instructions already describe child tasks. Their fetched SDK pins are `77cb3552` for oku-review and `07ab666d` for oku-development. The platform pin is `a503227b`. No app needs another app's worker image to obtain these tools.
 
 ### Gaps found by source inspection
 
@@ -222,8 +222,8 @@ This document is PR 0. User decisions were confirmed on 2026-11-20 at 11:23Z. Me
 | 2 | protocol7 | Versioned lifecycle fixes, child-start failure accounting, stop/attention semantics, descendant-aware completion, close drain and continue-as-new admission. Keep native child futures, existing tool names and bounds. Correct model-slot wording. Focused SDK regression coverage and Temporal server scenarios below |
 | 3 | protocol7-selfdev | Bump the merged SDK revision for navi and core chat. Implement project-checked family projection, combined list, action checks and A2A metadata/cancellation. Update React tree and child page controls, REST/Connect serialization and app instructions where needed. Core worker replay plus API and browser acceptance. No `kubernetes/` or `cdk8s` edits |
 | 4 | oku-review | Bump the merged SDK revision. Keep `pkg/chat/Register` and its own extensions and image. Replay its histories and run a parent/child/grandchild scenario on its worker |
-| 5 | oku-selfdev | Same dependency, replay and lifecycle acceptance for its own worker. Recheck the active audit PR before editing shared dependency files |
-| Release verification | Platform and tenant release owners | Follow normal pin commits and rollouts in core, oku-review, oku-selfdev order. Confirm chat pods roll and recorded chats still replay. No manifest migration is part of the feature |
+| 5 | oku-development | Same dependency, replay and lifecycle acceptance for its own worker. Recheck the active audit PR before editing shared dependency files |
+| Release verification | Platform and tenant release owners | Follow normal pin commits and rollouts in core, oku-review, oku-development order. Confirm chat pods roll and recorded chats still replay. No manifest migration is part of the feature |
 
 Before publication of each PR, fetch its default branch and inspect open PRs again. Coordinate dependency changes rather than overwriting another owner's pins. A server supporting the additive response may precede the UI. A UI talking to an older server falls back to `state.children` and reports unavailable live status. Existing subchats require no data migration or historical kind rewrite.
 
