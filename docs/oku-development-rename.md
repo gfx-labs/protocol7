@@ -1,6 +1,6 @@
 # oku-development rename inventory
 
-Checked on 2026-11-21 against protocol7 2079c92, protocol7-selfdev fe5ff3c, oku-selfdev 22affc0, oku-review dfd930b and baremetal 4cb960d. These repositories had no open pull requests at inventory time.
+Checked on 2026-11-21 against protocol7 2079c92, protocol7-selfdev fe5ff3c, oku-selfdev 22affc0, oku-review dfd930b and baremetal 4cb960d. Platform PR #68 was already open and was left unchanged. The other repositories had no open pull requests at inventory time.
 
 ## Rename in place
 
@@ -38,6 +38,23 @@ Checked on 2026-11-21 against protocol7 2079c92, protocol7-selfdev fe5ff3c, oku-
 - Baremetal VAPs, network policy and admission matrix use stable namespaces and generic workload labels. Their source contains no old application name requiring a rename. Run the matrix after the rollout.
 - SOPS recipient keys, encrypted secret data, tenant deploy key secret oku-deploy-key, pull-secret ghcr-pull and namespace decryption key sops-age remain. Their ownership is tied to the retained namespace and repository identity, not the repository display name.
 
+## Rollout notes
+
+- GitHub was renamed in place on 2026-11-21. The numeric repository ID remains 1461001424.
+- Application PR #43, platform PR #178, reviewer PR #50 and SDK PR #67 changed the source references. Baremetal PR #58 temporarily admitted both registry packages.
+- The pin-only gate intentionally refuses a package change, including when the proposed head already has new-package pins but the base does not. The first live PR-maker attempt confirmed that refusal before opening a PR.
+- The builder identity copied the currently deployed app and worker manifests into the new registry package and verified their digests unchanged. Application PR #44 explicitly migrated only the package paths. This established a valid base for subsequent trusted pin-only refreshes without weakening the gate.
+- Baremetal PR #60 removed the old package permission after new-path node pulls succeeded. No registry bytes or stateful data were deleted.
+- Platform PR #180 carries the optional display label through the CLI project-file loader. The stable project and Temporal namespace IDs stay oku.
+
 ## Acceptance
 
-Check all Flux Kustomizations and tenant workloads Ready, new zot image pulls, a real pin-only PR built and auto-merged with the new repository and package names, pre-existing oku chat history replay, navi project display and health, webhook bus delivery for the renamed repository, and the baremetal admission matrix.
+- Application PR #45 was created and auto-merged by the tenant PR maker on 2026-11-21 at 10:22:43 UTC. Its source change was one empty commit. The builder added only four immutable digest pins in the three app manifests. Exact-head CI passed for 9bb5eaf54453289ae5b4955ccb3f647060d492d9 before merge 92fda42acc21b2c3629677601847e5502e2fa166. No human merge command was used for this PR.
+- The webhook durable hooks-oku-build filters hooks.github.oku-trade.oku-development.push. Read-only SPIFFE-authenticated inspection showed delivery and acknowledgement of stream sequence 219704 at 10:20:53 UTC, with no pending or unacknowledged events.
+- Flux p7-oku/deploy fetched merge 92fda42acc21b2c3629677601847e5502e2fa166 from the renamed GitHub URL. The new Deployment, ServiceAccount and ConfigMap exist and the three old application resources were removed after replacement readiness.
+- The node pulled app digest sha256:37562a64474dbcc45d9797d18238ba4d67d83f64fbfb332750baffcefbc1d1ac and worker digest sha256:ed6a3cd6600e47d01802d5ab513a58b8625c26246a66120ad02f63e337301b1c from oku-trade/oku-development. The chat, implementer and session worker rolled Ready.
+- A state query of pre-existing workflow chat-01m7xxyyt5fqrt62n9kfhgzr8k succeeded on the replacement chat worker at 10:24 UTC. Its retained project and Temporal namespace are oku.
+- At 10:28 UTC all 33 Flux Kustomizations and every desired implementer, reviewer and navi workload were Ready.
+- The full admission matrix was attempted but stopped before executing cases at scripts/check-protocol7-admission.cjs:263. Concurrent reviewer capture work removed emulator-pod-template from the live reviewer-b-config, while the matrix still expects that old template. The capture owner must migrate the matrix fixture and matching policies before this check can pass. No admission expectation was skipped or weakened for the rename.
+
+- Navi /api/me reports stable project ID oku with display_name oku-development and the renamed repository. Its /api/projects/oku/health endpoint reports Temporal and worker health OK after the replacement image rolled Ready.
