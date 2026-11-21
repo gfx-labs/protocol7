@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/nexus-rpc/sdk-go/nexus"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/log"
@@ -97,6 +98,11 @@ func (w *Worker) RegisterActivities(activities any) { w.worker.RegisterActivity(
 // RegisterActivity registers one activity function under a name.
 func (w *Worker) RegisterActivity(name string, function any) {
 	w.worker.RegisterActivityWithOptions(function, activity.RegisterOptions{Name: name})
+}
+
+// RegisterNexusService serves Nexus operations on the worker's existing task queue.
+func (w *Worker) RegisterNexusService(service *nexus.Service) {
+	w.worker.RegisterNexusService(service)
 }
 
 // Temporal is the worker's Temporal client, for starting and signalling
