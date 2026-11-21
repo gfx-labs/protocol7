@@ -180,6 +180,20 @@ func TestPromptTyped(t *testing.T) {
 			if err := run.Get(ctx, &got); err != nil {
 				t.Fatal(err)
 			}
+			if test.scenario == "ok" {
+				// The workflow lists the session it opened and closed in its memo.
+				description, err := temporalClient.DescribeWorkflowExecution(ctx, run.GetID(), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				records, err := p7.SessionRecords(description.GetWorkflowExecutionInfo().GetMemo().GetFields())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(records) != 1 || records[0].ID == "" || records[0].Opened.IsZero() || records[0].Closed.IsZero() {
+					t.Errorf("the memo lists %+v, want one opened and closed session", records)
+				}
+			}
 			for _, want := range test.textHas {
 				if !strings.Contains(got.Text, want) {
 					t.Errorf("the last turn's text is %q, want it to contain %q", got.Text, want)

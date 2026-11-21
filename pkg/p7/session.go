@@ -228,6 +228,7 @@ func openSession(ctx workflow.Context, spec SessionSpec, taskQueue string) (*Ses
 		}
 		return nil, fmt.Errorf("open session %s: %w", request.ID, err)
 	}
+	recordOpened(ctx, handle.ID, spec.Models)
 	return &Session{ID: handle.ID, TaskQueue: handle.TaskQueue, Inputs: handle.Inputs, Reports: box != nil, Pod: pod.Name, Pool: spec.Pool}, nil
 }
 
@@ -446,6 +447,9 @@ func (s *Session) Close(ctx workflow.Context) error {
 	}
 	request := domain.CloseRequest{Session: s.ID}
 	closeErr := workflow.ExecuteActivity(activityCtx, domain.ActivityCloseSession, request).Get(ctx, nil)
+	if closeErr == nil || s.Pod != "" {
+		recordClosed(ctx, s.ID)
+	}
 	if s.Pod == "" {
 		if closeErr != nil {
 			return fmt.Errorf("close session %s: %w", s.ID, closeErr)
