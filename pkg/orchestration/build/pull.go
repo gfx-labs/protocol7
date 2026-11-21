@@ -37,6 +37,10 @@ type PullActivities struct {
 	GitHub       *githubapi.Client
 	Registry     string
 	Repositories []string
+	// AutoMergeRepositories opt in to pin-only merging through the PR maker.
+	AutoMergeRepositories []string
+	// CIWorkflow is a workflow filename, such as ci.yml, required before merging.
+	CIWorkflow string
 }
 
 func (a *PullActivities) enabled(repository string) bool {
