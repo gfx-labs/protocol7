@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.temporal.io/sdk/temporal"
 
@@ -43,8 +44,9 @@ type Activities struct {
 // RecordRequest is the input of ActivityRecord.
 type RecordRequest struct {
 	Entry Entry `json:"entry"`
-	// Handler says the chat is the escalation handler, whose entries are
-	// accepted at once. The chat workflow sets it from its request.
+	// Handler says the chat is the escalation handler. It once decided
+	// whether the entry was accepted at once. Nobody accepts an entry now, so
+	// it changes nothing, and stays so that a history that holds it decodes.
 	Handler bool `json:"handler,omitempty"`
 }
 
@@ -54,14 +56,12 @@ type RecordResult struct {
 	State State  `json:"state"`
 }
 
-// Record writes an entry: accepted when the handler recorded it, proposed
-// otherwise. The entry's vector, when it has one, is stored as it is.
+// Record writes an entry, open: the curator settles it, and chats read it
+// meanwhile. The entry's vector, when it has one, is stored as it is.
 func (a *Activities) Record(ctx context.Context, request RecordRequest) (RecordResult, error) {
 	entry := request.Entry
-	entry.State = Proposed
-	if request.Handler {
-		entry.State = Accepted
-	}
+	entry.State = Open
+	entry.PR, entry.Note, entry.Pass, entry.SettledBy, entry.Settled = "", "", "", "", time.Time{}
 	entry.Normalize()
 	if err := entry.Validate(); err != nil {
 		return RecordResult{}, Refuse(err)
@@ -78,10 +78,15 @@ type DecideRequest struct {
 	Decision Decision `json:"decision"`
 }
 
-// Decide accepts, rejects or retires an entry, for the handler.
+// Decide moves an entry (accept, reject, retire, apply or cover), for the
+// curator and a person's override. A decision that does not fit the state or
+// lacks what it needs is refused for good.
 func (a *Activities) Decide(ctx context.Context, request DecideRequest) (RecordResult, error) {
 	if !ValidID(request.ID) {
 		return RecordResult{}, Refuse(fmt.Errorf("%q is not a learning's ID", request.ID))
+	}
+	if err := CheckDecision(request.Decision); err != nil {
+		return RecordResult{}, Refuse(err)
 	}
 	entry, err := a.Store.Decide(ctx, request.ID, request.Decision)
 	if err != nil {

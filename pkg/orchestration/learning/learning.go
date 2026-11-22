@@ -26,12 +26,22 @@
 //   - Temporal is what navi and the selfdev worker already read and write,
 //     for each project in its own namespace, with the credentials they have.
 //     The record survives restarts of every pod. What it lacks, review in a
-//     pull request, an entry has in its state: an agent's entry is only
-//     proposed, and the handler or a person accepts it. An app's chats read
-//     only accepted entries.
+//     pull request, a change that comes from an entry has in the curator's
+//     pull request, which the entry links.
 //
-// A rejected or retired entry ends its workflow and ages out with Temporal's
-// retention. Nothing else is ever deleted.
+// # Open until settled
+//
+// Nobody accepts an entry. A recorded entry is open, and an app's chats read
+// it from then on. A curator, which an app builds on the mechanics of this
+// package (curate.go), settles it: applied, when a change in a pull request
+// carries it (the entry links the PR), covered, when a line of the code or
+// the docs says it already, or rejected, with the reason. An entry that is
+// none of these stays open, to join a later recurrence. A person may still
+// override: reject an open entry, or retire an applied one.
+//
+// A covered, rejected or retired entry ends its workflow and ages out with
+// Temporal's retention. An open, accepted or applied entry runs, and nothing
+// else is ever deleted.
 package learning
 
 import (
@@ -73,15 +83,53 @@ const (
 type State string
 
 const (
-	// Proposed is an entry that an ordinary chat recorded and nobody
-	// accepted. An app's chats do not read it.
+	// Open is an entry that is recorded and not settled. An app's chats
+	// read it, and the curator settles it.
+	Open State = "open"
+	// Proposed is what an open entry was called when a person or the handler
+	// had to accept it. The entries that were recorded then are still in the
+	// log under it, and it means Open.
 	Proposed State = "proposed"
-	// Accepted is an entry that the handler or a person accepted, or the
-	// handler recorded. An app's chats read it.
+	// Applied is an entry that the curator turned into a change. Its PR is
+	// the link. An app's chats read it, and the workflow runs on.
+	Applied State = "applied"
+	// Covered is an entry that a line of the code or the docs says already.
+	// Its Note says which. It ends.
+	Covered State = "covered"
+	// Accepted is an entry that the handler or a person accepted, before the
+	// curator. An app's chats read it.
 	Accepted State = "accepted"
-	// Rejected and Retired are the ends: the workflow completes.
+	// Rejected and Retired are the ends: the workflow completes. A
+	// rejection carries its reason in Note.
 	Rejected State = "rejected"
 	Retired  State = "retired"
+)
+
+// IsOpen says whether the state is an unsettled one: Open, or Proposed from
+// before the curator.
+func (s State) IsOpen() bool { return s == Open || s == Proposed }
+
+// Readable says whether an app's chats read an entry in this state: the open
+// ones, the applied ones and the accepted ones from before the curator.
+func (s State) Readable() bool { return s.IsOpen() || s == Applied || s == Accepted }
+
+// Ended says whether the entry's workflow completes in this state.
+func (s State) Ended() bool { return s == Covered || s == Rejected || s == Retired }
+
+// Actions of a Decision.
+const (
+	// ActionAccept keeps an open entry as accepted. A person's override from
+	// before the curator, which is still allowed.
+	ActionAccept = "accept"
+	// ActionReject ends an open entry, with a reason in the note.
+	ActionReject = "reject"
+	// ActionRetire ends an accepted or applied entry.
+	ActionRetire = "retire"
+	// ActionApply settles an open entry as applied, with the PR.
+	ActionApply = "apply"
+	// ActionCover settles an open entry as covered, with a note that names
+	// the line that says it already.
+	ActionCover = "cover"
 )
 
 // Search attributes of an entry. SelfdevKind and SelfdevProject are the
@@ -139,6 +187,15 @@ type Entry struct {
 	// State is as the search attribute says when an entry is listed, and
 	// what it started as in the memo.
 	State State `json:"state"`
+	// PR is the pull request that applied the entry, Note the reason an
+	// entry was covered or rejected, Pass the curator pass that settled it,
+	// SettledBy who decided it and Settled when. A decision sets them, and
+	// the workflow keeps them in the memo with the entry.
+	PR        string    `json:"pr,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	Pass      string    `json:"pass,omitempty"`
+	SettledBy string    `json:"settled_by,omitempty"`
+	Settled   time.Time `json:"settled,omitzero"`
 	// Vector is an embedding of the entry and VectorModel the model that
 	// made it. They are opaque to the SDK, which does not compute them: an
 	// app that curates the log sets them before it records the entry, and
@@ -259,8 +316,8 @@ func (e Entry) Validate() error {
 			return fmt.Errorf("the source %s %q is not an ID", name, ref)
 		}
 	}
-	if e.State != Proposed && e.State != Accepted {
-		return fmt.Errorf("an entry starts as proposed or accepted")
+	if e.State != Open && e.State != Proposed && e.State != Accepted {
+		return fmt.Errorf("an entry starts as open")
 	}
 	return nil
 }
@@ -278,19 +335,88 @@ func contains(list []string, item string) bool {
 func ValidID(id string) bool { return idPattern.MatchString(id) }
 
 // Decide says the state an entry moves to when the action is taken on it, or
-// why it may not be: only a proposed entry is accepted or rejected, and only
-// an accepted one is retired.
+// why it may not be: only an open entry is accepted, rejected, applied or
+// covered, and only an accepted or applied one is retired.
 func (e Entry) Decide(action string) (State, error) {
 	switch {
-	case action == "accept" && e.State == Proposed:
+	case action == ActionAccept && e.State.IsOpen():
 		return Accepted, nil
-	case action == "reject" && e.State == Proposed:
+	case action == ActionReject && e.State.IsOpen():
 		return Rejected, nil
-	case action == "retire" && e.State == Accepted:
+	case action == ActionApply && e.State.IsOpen():
+		return Applied, nil
+	case action == ActionCover && e.State.IsOpen():
+		return Covered, nil
+	case action == ActionRetire && (e.State == Accepted || e.State == Applied):
 		return Retired, nil
-	case action == "accept", action == "reject", action == "retire":
-		return e.State, fmt.Errorf("a %s learning cannot be %sed: only a proposed one is accepted or rejected, and only an accepted one retired", e.State, action)
+	case action == ActionAccept, action == ActionReject, action == ActionApply, action == ActionCover, action == ActionRetire:
+		return e.State, fmt.Errorf("a %s learning cannot be %s: only an open one is accepted, rejected, applied or covered, and only an accepted or applied one retired", e.State, past(action))
 	default:
-		return e.State, fmt.Errorf("the decision is accept, reject or retire, not %q", action)
+		return e.State, fmt.Errorf("the decision is accept, reject, retire, apply or cover, not %q", action)
 	}
+}
+
+func past(action string) string {
+	if strings.HasSuffix(action, "e") {
+		return action + "d"
+	}
+	return action + "ed"
+}
+
+// PRLimit bounds the pull request link of an entry.
+const PRLimit = 300
+
+var prPattern = regexp.MustCompile(`^https://[A-Za-z0-9.-]+/[^\s]+$`)
+
+// CheckDecision says whether the decision carries what its action needs: an apply
+// links its pull request, and a cover says which line covers the entry. Its
+// note is a short text like an entry's, with no secret.
+func CheckDecision(d Decision) error {
+	switch d.Action {
+	case ActionApply:
+		if d.PR == "" {
+			return fmt.Errorf("an applied learning links the pull request that carries the change")
+		}
+	case ActionCover:
+		if strings.TrimSpace(d.Note) == "" {
+			return fmt.Errorf("a covered learning says which line of the code or the docs covers it, in the note")
+		}
+	}
+	if d.PR != "" {
+		if d.Action != ActionApply {
+			return fmt.Errorf("only an apply links a pull request")
+		}
+		if len(d.PR) > PRLimit || !prPattern.MatchString(d.PR) {
+			return fmt.Errorf("the pull request %q is not an https link", d.PR)
+		}
+	}
+	if err := checkText("note", d.Note, FieldLimit); err != nil {
+		return err
+	}
+	for name, ref := range map[string]string{"by": d.By, "pass": d.Pass} {
+		if utf8.RuneCountInString(ref) > 120 || strings.ContainsAny(ref, "\n\r") {
+			return fmt.Errorf("the decision's %s is one short line", name)
+		}
+	}
+	return nil
+}
+
+// Settle applies the decision to the entry at the time now, or says why it
+// may not be: the action must fit the state (Decide) and carry what it needs
+// (CheckDecision). The returned entry has the new state, and for a decision
+// that settles it, the PR, note, pass, who and when.
+func (e Entry) Settle(d Decision, now time.Time) (Entry, error) {
+	next, err := e.Decide(d.Action)
+	if err != nil {
+		return e, err
+	}
+	if err := CheckDecision(d); err != nil {
+		return e, err
+	}
+	e.State = next
+	switch d.Action {
+	case ActionApply, ActionCover, ActionReject:
+		e.PR, e.Note, e.Pass, e.SettledBy, e.Settled = d.PR, strings.TrimSpace(d.Note), d.Pass, d.By, now.UTC()
+	}
+	return e, nil
 }

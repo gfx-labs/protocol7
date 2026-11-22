@@ -2,6 +2,7 @@ package learning_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 func entry(id, title string, scope learning.Scope) learning.Entry {
 	return learning.Entry{
 		ID: id, Title: title, Problem: "the push was refused", Cause: "the branch is protected", Fix: "open a pull request",
-		Scope: scope, Source: learning.Source{Chat: "c1", Escalation: "e" + id}, Recorded: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), State: learning.Accepted,
+		Scope: scope, Source: learning.Source{Chat: "c1", Escalation: "e" + id}, Recorded: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), State: learning.Open,
 	}
 }
 
@@ -67,43 +68,41 @@ func TestValidate(t *testing.T) {
 	require.NoError(t, ok.Validate())
 }
 
-// A chat's agent proposes an entry, the handler records an accepted one, and a
-// repeated call (an activity that is retried) records it once. The SDK stores
-// the entry's vector as it is and computes none.
-func TestRecordProposesAndTheHandlerAccepts(t *testing.T) {
+// Every entry is recorded open, whoever records it: nobody accepts it, and
+// the curator settles it. A repeated call (an activity that is retried)
+// records it once. The SDK stores the entry's vector as it is and computes
+// none.
+func TestRecordOpensAndDecisionsSettle(t *testing.T) {
 	log := learningtest.New(t)
 	activities := log.Activities()
 	ctx := context.Background()
 
 	proposed, err := activities.Record(ctx, learning.RecordRequest{Entry: entry("p1", "A proposal", selfdev)})
 	require.NoError(t, err)
-	assert.Equal(t, learning.Proposed, proposed.State, "an entry that says accepted is proposed unless the handler recorded it")
+	assert.Equal(t, learning.Open, proposed.State, "an entry that says accepted is open all the same")
 	withVector := entry("h1", "From the handler", selfdev)
 	withVector.Vector, withVector.VectorModel = embedding.Vector{0.5, -1}, "model"
-	accepted, err := activities.Record(ctx, learning.RecordRequest{Entry: withVector, Handler: true})
+	withVector.PR, withVector.Note = "https://example.com/pull/1", "set by the caller"
+	opened, err := activities.Record(ctx, learning.RecordRequest{Entry: withVector, Handler: true})
 	require.NoError(t, err)
-	assert.Equal(t, learning.Accepted, accepted.State)
+	assert.Equal(t, learning.Open, opened.State, "the handler's entry is open too")
 	_, err = activities.Record(ctx, learning.RecordRequest{Entry: withVector, Handler: true})
 	require.NoError(t, err)
-	assert.Len(t, log.Entries(), 2)
+	require.Len(t, log.Entries(), 2)
 	assert.Equal(t, embedding.Vector{0.5, -1}, log.Entries()[1].Vector)
 	assert.Equal(t, "model", log.Entries()[1].VectorModel)
+	assert.Empty(t, log.Entries()[1].PR, "a new entry carries no settlement")
+	assert.Empty(t, log.Entries()[1].Note)
 
 	store := log.Store()
 	got, err := store.Get(ctx, "p1")
 	require.NoError(t, err)
 	assert.Equal(t, "A proposal", got.Title)
-	assert.Equal(t, learning.Proposed, got.State)
+	assert.Equal(t, learning.Open, got.State)
 	_, err = store.Get(ctx, "nobody")
 	assert.ErrorIs(t, err, learning.ErrNotFound)
 	_, err = store.Get(ctx, "A!")
 	assert.ErrorIs(t, err, learning.ErrNotFound)
-
-	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "accept", By: "alice"}})
-	require.NoError(t, err)
-	got, err = store.Get(ctx, "p1")
-	require.NoError(t, err)
-	assert.Equal(t, learning.Accepted, got.State)
 
 	// An entry with a secret is refused for good.
 	secret := entry("s1", "Leak", selfdev)
@@ -112,16 +111,110 @@ func TestRecordProposesAndTheHandlerAccepts(t *testing.T) {
 	require.Error(t, err)
 	assert.Len(t, log.Entries(), 2)
 
-	// A retired entry leaves the log, and cannot be accepted twice.
-	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "accept"}})
-	require.Error(t, err, "an accepted entry is not accepted again")
+	// An apply links its PR and stays in the log, readable. A decision that
+	// lacks what it needs is refused for good, before the workflow.
+	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "apply"}})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "pull request")
+	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "apply", PR: "javascript:alert(1)"}})
+	require.Error(t, err)
+	applied, err := activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "apply", PR: "https://github.com/gfx-labs/protocol7/pull/9", Note: "a skill line", By: "curator", Pass: "learning-curate-1"}})
+	require.NoError(t, err)
+	assert.Equal(t, learning.Applied, applied.State)
+	got, err = store.Get(ctx, "p1")
+	require.NoError(t, err)
+	assert.Equal(t, learning.Applied, got.State)
+	assert.Equal(t, "https://github.com/gfx-labs/protocol7/pull/9", got.PR)
+	assert.Equal(t, "curator", got.SettledBy)
+	assert.False(t, got.Settled.IsZero())
+	assert.True(t, got.State.Readable())
+	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "reject", Note: "again"}})
+	require.Error(t, err, "an applied entry is not rejected")
+
+	// A cover needs its note and ends the entry, which Get still reads.
+	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "h1", Decision: learning.Decision{Action: "cover"}})
+	require.Error(t, err)
+	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "h1", Decision: learning.Decision{Action: "cover", Note: "AGENTS.md line 3 says it"}})
+	require.NoError(t, err)
+	got, err = store.Get(ctx, "h1")
+	require.NoError(t, err)
+	assert.Equal(t, learning.Covered, got.State)
+	assert.Equal(t, "AGENTS.md line 3 says it", got.Note)
+	assert.False(t, got.State.Readable())
+	require.Len(t, log.Entries(), 1)
+	assert.Len(t, log.Closed(), 1)
+
+	// A person retires an applied entry, and it leaves the log.
 	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "retire"}})
 	require.NoError(t, err)
-	assert.Len(t, log.Entries(), 1)
 	listed, err := store.List(ctx)
 	require.NoError(t, err)
-	require.Len(t, listed, 1)
-	assert.Equal(t, "h1", listed[0].ID)
+	assert.Empty(t, listed)
+	all, err := store.ListAll(ctx)
+	require.NoError(t, err)
+	assert.Len(t, all, 2, "the settled entries are read until Temporal's retention ends")
+}
+
+// Only an open entry is settled, in the states and with the details its action
+// needs.
+func TestSettle(t *testing.T) {
+	now := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	open := entry("o1", "Open", selfdev)
+	open.State = learning.Open
+	legacy := open
+	legacy.State = learning.Proposed
+
+	for _, start := range []learning.Entry{open, legacy} {
+		applied, err := start.Settle(learning.Decision{Action: "apply", PR: "https://github.com/a/b/pull/1", By: "c", Pass: "p"}, now)
+		require.NoError(t, err)
+		assert.Equal(t, learning.Applied, applied.State)
+		assert.Equal(t, "https://github.com/a/b/pull/1", applied.PR)
+		assert.Equal(t, now, applied.Settled)
+		covered, err := start.Settle(learning.Decision{Action: "cover", Note: " says it "}, now)
+		require.NoError(t, err)
+		assert.Equal(t, learning.Covered, covered.State)
+		assert.Equal(t, "says it", covered.Note)
+		rejected, err := start.Settle(learning.Decision{Action: "reject", Note: "not true any more"}, now)
+		require.NoError(t, err)
+		assert.Equal(t, learning.Rejected, rejected.State)
+		accepted, err := start.Settle(learning.Decision{Action: "accept"}, now)
+		require.NoError(t, err)
+		assert.Equal(t, learning.Accepted, accepted.State)
+		assert.True(t, accepted.Settled.IsZero(), "an accept does not settle")
+	}
+
+	applied, _ := open.Settle(learning.Decision{Action: "apply", PR: "https://github.com/a/b/pull/1"}, now)
+	for name, decision := range map[string]learning.Decision{
+		"apply again":      {Action: "apply", PR: "https://github.com/a/b/pull/2"},
+		"cover":            {Action: "cover", Note: "x"},
+		"reject":           {Action: "reject"},
+		"an unknown":       {Action: "delete"},
+		"retire with a pr": {Action: "retire", PR: "https://github.com/a/b/pull/3"},
+	} {
+		_, err := applied.Settle(decision, now)
+		assert.Error(t, err, name)
+	}
+	_, err := open.Settle(learning.Decision{Action: "retire"}, now)
+	assert.Error(t, err, "an open entry is rejected, not retired")
+	_, err = open.Settle(learning.Decision{Action: "apply", PR: "http://insecure.example/pull/1"}, now)
+	assert.Error(t, err, "a link is https")
+	_, err = open.Settle(learning.Decision{Action: "cover", Note: "token=abcdefghijklmnop1234"}, now)
+	assert.Error(t, err, "a note holds no secret")
+	_, err = open.Settle(learning.Decision{Action: "reject", PR: "https://github.com/a/b/pull/1"}, now)
+	assert.Error(t, err, "only an apply links a pull request")
+	retired, err := applied.Settle(learning.Decision{Action: "retire"}, now)
+	require.NoError(t, err)
+	assert.Equal(t, learning.Retired, retired.State)
+	assert.Equal(t, "https://github.com/a/b/pull/1", retired.PR, "a retired entry keeps its link")
+
+	for state, want := range map[learning.State]struct{ open, readable, ended bool }{
+		learning.Open: {true, true, false}, learning.Proposed: {true, true, false}, learning.Accepted: {false, true, false},
+		learning.Applied: {false, true, false}, learning.Covered: {false, false, true}, learning.Rejected: {false, false, true}, learning.Retired: {false, false, true},
+	} {
+		assert.Equal(t, want.open, state.IsOpen(), state)
+		assert.Equal(t, want.readable, state.Readable(), state)
+		assert.Equal(t, want.ended, state.Ended(), state)
+	}
 }
 
 // The log's activities and the workflow register under the names that running
@@ -142,30 +235,57 @@ type names struct{ names []string }
 func (n *names) RegisterWorkflow(name string, _ any) { n.names = append(n.names, name) }
 func (n *names) RegisterActivity(name string, _ any) { n.names = append(n.names, name) }
 
-// The workflow keeps an entry while it is proposed or accepted, takes only
-// the decisions its state allows, and ends on a rejection.
+// The workflow keeps an entry while it is open, accepted or applied, takes
+// only the decisions its state allows, rewrites its memo when one settles it,
+// and ends on a cover, a rejection or a retirement.
 func TestWorkflowDecisions(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
-	env.RegisterWorkflowWithOptions(learning.Workflow, workflow.RegisterOptions{Name: learning.WorkflowName})
-	proposed := entry("w1", "Wait", selfdev)
-	proposed.State = learning.Proposed
-	var refused, rejected error
-	update := func(name string, action string, done func(error)) {
-		env.UpdateWorkflow(learning.UpdateDecide, name, &testsuite.TestUpdateCallback{
-			OnAccept:   func() {},
-			OnReject:   done,
-			OnComplete: func(_ any, err error) { done(err) },
-		}, learning.Decision{Action: action, By: "alice"})
+	run := func(t *testing.T, decisions ...learning.Decision) (learning.Entry, []error) {
+		var suite testsuite.WorkflowTestSuite
+		env := suite.NewTestWorkflowEnvironment()
+		env.RegisterWorkflowWithOptions(learning.Workflow, workflow.RegisterOptions{Name: learning.WorkflowName})
+		open := entry("w1", "Wait", selfdev)
+		open.State = learning.Open
+		errs := make([]error, len(decisions))
+		for i, decision := range decisions {
+			env.RegisterDelayedCallback(func() {
+				env.UpdateWorkflow(learning.UpdateDecide, fmt.Sprint("update-", i), &testsuite.TestUpdateCallback{
+					OnAccept:   func() {},
+					OnReject:   func(err error) { errs[i] = err },
+					OnComplete: func(_ any, err error) { errs[i] = err },
+				}, decision)
+			}, time.Duration(i+1)*time.Minute)
+		}
+		env.ExecuteWorkflow(learning.WorkflowName, open)
+		require.True(t, env.IsWorkflowCompleted())
+		require.NoError(t, env.GetWorkflowError())
+		var result learning.Entry
+		require.NoError(t, env.GetWorkflowResult(&result))
+		return result, errs
 	}
-	env.RegisterDelayedCallback(func() { update("retire-early", "retire", func(err error) { refused = err }) }, time.Minute)
-	env.RegisterDelayedCallback(func() { update("reject", "reject", func(err error) { rejected = err }) }, 2*time.Minute)
-	env.ExecuteWorkflow(learning.WorkflowName, proposed)
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	require.Error(t, refused, "a proposed entry is not retired")
-	require.NoError(t, rejected)
-	var result learning.Entry
-	require.NoError(t, env.GetWorkflowResult(&result))
-	assert.Equal(t, learning.Rejected, result.State)
+
+	t.Run("a rejection ends it", func(t *testing.T) {
+		result, errs := run(t, learning.Decision{Action: "retire"}, learning.Decision{Action: "reject", Note: "no longer true", By: "alice"})
+		require.Error(t, errs[0], "an open entry is not retired")
+		require.NoError(t, errs[1])
+		assert.Equal(t, learning.Rejected, result.State)
+		assert.Equal(t, "no longer true", result.Note)
+	})
+	t.Run("a cover ends it", func(t *testing.T) {
+		result, errs := run(t, learning.Decision{Action: "cover"}, learning.Decision{Action: "cover", Note: "skill says it"})
+		require.Error(t, errs[0], "a cover names its line")
+		require.NoError(t, errs[1])
+		assert.Equal(t, learning.Covered, result.State)
+	})
+	t.Run("an apply keeps it until a retirement", func(t *testing.T) {
+		result, errs := run(t,
+			learning.Decision{Action: "apply", PR: "https://github.com/gfx-labs/protocol7/pull/9", By: "curator", Pass: "learning-curate-1"},
+			learning.Decision{Action: "reject", Note: "x"},
+			learning.Decision{Action: "retire", By: "alice"})
+		require.NoError(t, errs[0])
+		require.Error(t, errs[1], "an applied entry is not rejected")
+		require.NoError(t, errs[2])
+		assert.Equal(t, learning.Retired, result.State)
+		assert.Equal(t, "https://github.com/gfx-labs/protocol7/pull/9", result.PR)
+		assert.Equal(t, "learning-curate-1", result.Pass)
+	})
 }
