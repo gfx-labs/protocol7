@@ -15,10 +15,9 @@ var requestMessageTemplate string
 var requestReplyTemplate string
 
 // RequestMessageText is the first message of the chat that works on a request
-// in the target project, or a later one when the request continues an earlier
-// chat. It names the project that asked, and holds the request's words in a
+// in the target project. It names the project that asked, and holds the request's words in a
 // fence, as untrusted input that cannot run as a template or close the block.
-func RequestMessageText(origin *ProjectOrigin, request *ProjectRequest, continues bool) (string, error) {
+func RequestMessageText(origin *ProjectOrigin, request *ProjectRequest) (string, error) {
 	var asked strings.Builder
 	for _, part := range []struct{ name, text string }{
 		{"Needed", request.GetNeed()}, {"Why the requester cannot do it", request.GetWhy()},
@@ -29,7 +28,7 @@ func RequestMessageText(origin *ProjectOrigin, request *ProjectRequest, continue
 		}
 	}
 	text := prompt.New(prompt.Vars{
-		"Origin": origin.GetProject(), "Chat": origin.GetChat(), "Request": origin.GetRequest(), "Continues": continues,
+		"Origin": origin.GetProject(), "Chat": origin.GetChat(), "Request": origin.GetRequest(), "Follows": request.GetFollows(),
 	}).Template(requestMessageTemplate).
 		Fence("text", strings.TrimSpace(asked.String())).
 		P("Answer it with the tool `project_request_reply`, as your instructions say.")

@@ -88,13 +88,18 @@ export type ProjectRequest = Message<"navi.v1.ProjectRequest"> & {
 
   /**
    * follows is the id of an earlier request of this chat to the same project.
-   * Its target chat, if it still runs, gets this request as a message.
+   * The target says so in the first message of the new chat that works on this
+   * request: one chat answers one request, so a follow-up is never sent to the
+   * chat of the earlier one.
    *
    * @generated from field: string follows = 12;
    */
   follows: string;
 
   /**
+   * follows_chat is the target chat of the earlier request. It is kept for the
+   * record, and nothing is sent to it.
+   *
    * @generated from field: string follows_chat = 13;
    */
   followsChat: string;

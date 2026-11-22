@@ -11,7 +11,7 @@ import (
 // it cannot do itself, and the other project decides. The request is a
 // workflow in the asking project's namespace (RequestWorkflow). navi is the
 // only party that reaches both namespaces: it checks the asking project may
-// ask the target, starts or continues a chat in the target project, and hands
+// ask the target, starts a chat in the target project, and hands
 // that chat's answers back to the request workflow, which tells the chat that
 // asked.
 const (
