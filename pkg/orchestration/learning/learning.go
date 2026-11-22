@@ -1,6 +1,15 @@
 // Package learning is the learnings log: what went wrong, why, and what
 // worked, recorded once so that no chat finds it out again.
 //
+// The SDK provides the log and its storage: the Entry, Scope, Source and
+// State types and their validation (with the secret screen), the workflow
+// that holds an entry, the Store that records, lists, gets and decides, and
+// the Record and Decide activities, which only write the log. It holds no
+// curation and no prompt text. How a chat finds, ranks, briefs and words the
+// entries (search, a brief for a first prompt, duplicate holding, areas,
+// embeddings, the chat tools and their instructions) is for an app to build on
+// the log.
+//
 // # Where the log lives
 //
 // An entry is a workflow of the project's Temporal namespace (Workflow). A
@@ -18,8 +27,8 @@
 //     for each project in its own namespace, with the credentials they have.
 //     The record survives restarts of every pod. What it lacks, review in a
 //     pull request, an entry has in its state: an agent's entry is only
-//     proposed, and the handler or a person accepts it. Only accepted
-//     entries reach a chat.
+//     proposed, and the handler or a person accepts it. An app's chats read
+//     only accepted entries.
 //
 // A rejected or retired entry ends its workflow and ages out with Temporal's
 // retention. Nothing else is ever deleted.
@@ -65,10 +74,10 @@ type State string
 
 const (
 	// Proposed is an entry that an ordinary chat recorded and nobody
-	// accepted. Chats do not read it.
+	// accepted. An app's chats do not read it.
 	Proposed State = "proposed"
 	// Accepted is an entry that the handler or a person accepted, or the
-	// handler recorded. Chats read it.
+	// handler recorded. An app's chats read it.
 	Accepted State = "accepted"
 	// Rejected and Retired are the ends: the workflow completes.
 	Rejected State = "rejected"
@@ -130,10 +139,11 @@ type Entry struct {
 	// State is as the search attribute says when an entry is listed, and
 	// what it started as in the memo.
 	State State `json:"state"`
-	// Vector is the entry's embedding and VectorModel the model that made
-	// it. They are set when the entry is recorded, in the memo with the
-	// rest. An entry recorded before embeddings, or while the embeddings
-	// server was down, has none and is embedded when it is first needed.
+	// Vector is an embedding of the entry and VectorModel the model that
+	// made it. They are opaque to the SDK, which does not compute them: an
+	// app that curates the log sets them before it records the entry, and
+	// they are kept in the memo with the rest. An entry has none when its
+	// app did not set them.
 	Vector      embedding.Vector `json:"vector,omitempty"`
 	VectorModel string           `json:"vector_model,omitempty"`
 }
@@ -151,8 +161,8 @@ var (
 )
 
 // secrets are what an entry must not hold. This is a screen for the usual
-// mistakes, and not a guarantee: the tools tell the agent to write no
-// secrets either.
+// mistakes, and not a guarantee: an app's tools should tell the agent to
+// write no secrets either.
 var secrets = []*regexp.Regexp{
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY`),
 	regexp.MustCompile(`\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}`),

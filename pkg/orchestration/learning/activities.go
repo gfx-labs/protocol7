@@ -4,34 +4,40 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"go.temporal.io/sdk/temporal"
+
+	base "github.com/gfx-labs/protocol7/pkg/orchestration/chat"
 )
 
-// Names of the activities the chat's learning tools and first prompt call.
-// They run in the app's chat worker, which holds the Temporal client of the
-// chat's own namespace, so a project reads and writes only its own log.
+// Names of the log's two activities. They run in the app's chat worker, which
+// holds the Temporal client of the chat's own namespace, so a project reads
+// and writes only its own log. The names are recorded in the histories of
+// running chats and must not change.
+//
+// An app that curates the log (search, a brief for a first prompt, a check
+// for duplicates) registers activities of its own for those, under the names
+// "LearningSearch" and "LearningBrief" that its older histories hold. When it
+// curates records too, its own "LearningRecord" replaces Activities.Record and
+// calls it to write the entry.
 const (
 	ActivityRecord = "LearningRecord"
-	ActivitySearch = "LearningSearch"
-	ActivityBrief  = "LearningBrief"
 	ActivityDecide = "LearningDecide"
 )
 
 // ErrorRefused is the type of an error that retrying does not mend.
 const ErrorRefused = "LearningRefused"
 
-func refuse(err error) error {
+// Refuse wraps an error that retrying does not mend, with the type
+// ErrorRefused.
+func Refuse(err error) error {
 	return temporal.NewNonRetryableApplicationError(err.Error(), ErrorRefused, nil)
 }
 
-// Activities are the log's calls from a chat.
+// Activities are the log's writes from a chat. They hold no curation: an app
+// builds its own on the Store.
 type Activities struct {
 	Store Store
-	// Semantic ranks and compares entries by meaning. Nil leaves everything
-	// to word matching.
-	Semantic *Semantic
 }
 
 // RecordRequest is the input of ActivityRecord.
@@ -40,24 +46,16 @@ type RecordRequest struct {
 	// Handler says the chat is the escalation handler, whose entries are
 	// accepted at once. The chat workflow sets it from its request.
 	Handler bool `json:"handler,omitempty"`
-	// Distinct says that the entry adds to the likely duplicates that an
-	// earlier call reported, so that it is recorded all the same.
-	Distinct bool `json:"distinct,omitempty"`
 }
 
 // RecordResult says what became of the entry.
 type RecordResult struct {
 	ID    string `json:"id"`
 	State State  `json:"state"`
-	// Held is true when the entry was not recorded because it likely
-	// repeats Duplicates. The same call with Distinct set records it.
-	Held       bool            `json:"held,omitempty"`
-	Duplicates []Duplicate     `json:"duplicates,omitempty"`
-	Area       *AreaSuggestion `json:"area,omitempty"`
 }
 
 // Record writes an entry: accepted when the handler recorded it, proposed
-// otherwise.
+// otherwise. The entry's vector, when it has one, is stored as it is.
 func (a *Activities) Record(ctx context.Context, request RecordRequest) (RecordResult, error) {
 	entry := request.Entry
 	entry.State = Proposed
@@ -66,94 +64,12 @@ func (a *Activities) Record(ctx context.Context, request RecordRequest) (RecordR
 	}
 	entry.Normalize()
 	if err := entry.Validate(); err != nil {
-		return RecordResult{}, refuse(err)
-	}
-	result := RecordResult{ID: entry.ID, State: entry.State}
-	if a.Semantic != nil {
-		check := a.Semantic.Check(ctx, a.Store, entry)
-		entry.Vector, entry.VectorModel = check.Vector, check.Model
-		result.Duplicates, result.Area = check.Duplicates, check.Area
-		if len(check.Duplicates) > 0 && !request.Distinct {
-			result.Held = true
-			return result, nil
-		}
+		return RecordResult{}, Refuse(err)
 	}
 	if err := a.Store.Record(ctx, entry); err != nil && !errors.Is(err, ErrExists) {
 		return RecordResult{}, err
 	}
-	return result, nil
-}
-
-// SearchRequest is the input of ActivitySearch.
-type SearchRequest struct {
-	Query Query `json:"query"`
-	// State is accepted (the default) or proposed, which only the handler
-	// asks for.
-	State State `json:"state,omitempty"`
-}
-
-// Search answers a chat's search with entries as text, at most
-// MaxSearchBytes. A search that finds nothing says so.
-func (a *Activities) Search(ctx context.Context, request SearchRequest) (string, error) {
-	entries, err := a.Store.List(ctx)
-	if err != nil {
-		return "", err
-	}
-	want := request.State
-	if want == "" {
-		want = Accepted
-	}
-	if want != Accepted && want != Proposed {
-		return "", refuse(fmt.Errorf("state is accepted or proposed"))
-	}
-	request.Query.State = want
-	a.rank(ctx, entries, &request.Query)
-	found := Search(entries, request.Query)
-	if len(found) == 0 {
-		return "No " + string(want) + " learning matches.", nil
-	}
-	var text strings.Builder
-	for _, entry := range found {
-		note := fmt.Sprintf("id %s\n%s\n", entry.ID, Format(entry, MaxEntryBytes))
-		if text.Len()+len(note) > MaxSearchBytes {
-			break
-		}
-		text.WriteString(note)
-	}
-	return strings.TrimSpace(text.String()), nil
-}
-
-// rank gives a query that has words the entries' similarity to them. When the
-// embeddings server does not answer, the query keeps to word matching.
-func (a *Activities) rank(ctx context.Context, entries []Entry, query *Query) {
-	if a.Semantic == nil || strings.TrimSpace(query.Text) == "" {
-		return
-	}
-	similarity, err := a.Semantic.Similarities(ctx, entries, query.Text)
-	if err != nil {
-		a.Semantic.logger().WarnContext(ctx, "learning search: the embeddings server did not answer, so the search matches words", "error", err)
-		return
-	}
-	query.Similarity, query.MinSimilarity = similarity, a.Semantic.Settings.SearchMinScore
-}
-
-// BriefRequest is the input of ActivityBrief.
-type BriefRequest struct {
-	Repos []string `json:"repos"`
-	// Text is what the chat was asked, to rank the entries by.
-	Text string `json:"text,omitempty"`
-}
-
-// Brief returns the block for a new chat's first prompt, empty when no
-// accepted entry fits its repositories.
-func (a *Activities) Brief(ctx context.Context, request BriefRequest) (string, error) {
-	entries, err := a.Store.List(ctx)
-	if err != nil {
-		return "", err
-	}
-	query := Query{Text: request.Text}
-	a.rank(ctx, entries, &query)
-	return BriefRanked(entries, request.Repos, query.Similarity), nil
+	return RecordResult{ID: entry.ID, State: entry.State}, nil
 }
 
 // DecideRequest is the input of ActivityDecide.
@@ -164,16 +80,40 @@ type DecideRequest struct {
 
 // Decide accepts, rejects or retires an entry, for the handler.
 func (a *Activities) Decide(ctx context.Context, request DecideRequest) (RecordResult, error) {
-	if !idPattern.MatchString(request.ID) {
-		return RecordResult{}, refuse(fmt.Errorf("%q is not a learning's ID", request.ID))
+	if !ValidID(request.ID) {
+		return RecordResult{}, Refuse(fmt.Errorf("%q is not a learning's ID", request.ID))
 	}
 	entry, err := a.Store.Decide(ctx, request.ID, request.Decision)
 	if err != nil {
 		var application *temporal.ApplicationError
 		if errors.As(err, &application) {
-			return RecordResult{}, refuse(fmt.Errorf("%s", application.Message()))
+			return RecordResult{}, Refuse(fmt.Errorf("%s", application.Message()))
 		}
 		return RecordResult{}, err
 	}
 	return RecordResult{ID: entry.ID, State: entry.State}, nil
+}
+
+// Register registers the learning workflow and the log's two activities on
+// the registry, each under its explicit name.
+func Register(registry base.Registry, activities *Activities) error {
+	if activities == nil {
+		return fmt.Errorf("register learning: no activities")
+	}
+	if err := RegisterWorkflow(registry); err != nil {
+		return err
+	}
+	registry.RegisterActivity(ActivityRecord, activities.Record)
+	registry.RegisterActivity(ActivityDecide, activities.Decide)
+	return nil
+}
+
+// RegisterWorkflow registers only the learning workflow, for an app that
+// registers its own activities under the log's names.
+func RegisterWorkflow(registry base.Registry) error {
+	if registry == nil {
+		return fmt.Errorf("register learning: no registry")
+	}
+	registry.RegisterWorkflow(WorkflowName, Workflow)
+	return nil
 }

@@ -6,7 +6,7 @@ Status: design, revised 2026-11-19. Section 1 and PRs 1 to 6 are merged. Section
 
 A tenant (oku-trade/oku-development, oku-trade/oku-review) builds and deploys only its own images, compiled against a pinned `github.com/gfx-labs/protocol7` module. It never runs a `ghcr.io/gfx-labs/protocol7-selfdev` image. The tenant's selfdev, meaning the chat workflow worker, its session `p7-worker` and the files server, lives in the tenant's repo, binary, image and manifests. oku-review, for example, does selfdev on its own Deployment, with prompts and reviewer code from `oku-trade/oku-review/kubernetes`.
 
-Each namespace provides its own chat. The tenant's binary registers the SDK's base chat with its own extensions (tools, instructions, per-turn hooks, activities) on its own worker. protocol7 does not ship issue work, reviews, probes, the operator broker or a replay harness. It ships the learnings (`pkg/orchestration/learning`, see "Learnings in the SDK" below), because all three apps ran identical copies. An app that wants one writes it in its own repository, reusing the code of another app by copying it, not by depending on it.
+Each namespace provides its own chat. The tenant's binary registers the SDK's base chat with its own extensions (tools, instructions, per-turn hooks, activities) on its own worker. protocol7 does not ship issue work, reviews, probes, the operator broker or a replay harness. It ships the learnings log (`pkg/orchestration/learning`, see "Learnings in the SDK" below), because all three apps ran identical copies, and leaves curation and prompts to each app. An app that wants one writes it in its own repository, reusing the code of another app by copying it, not by depending on it.
 
 protocol7-selfdev stays the platform: navi web UI, PDP, grants, network, identity, the webhooks receiver and the navi project entry for its own repo. Toward a tenant it only sends messages: Temporal signals, queries and updates, NATS reads, and forwarded webhook events. A project whose namespace has no chat worker has no chat: navi says so and does not start one (section 5, PR 7b).
 
@@ -136,7 +136,7 @@ Everything else is an extension the app passes in, and stays in the app's reposi
 | --- | --- | --- |
 | issue tools (`issue_*`) and their activities | `issuetools.go`, `issueactivities.go` | each app that wants them |
 | pull request tools (`pr_*`) | `pulltools.go`, `pullactivities.go` | each app that wants them |
-| learning tools and the first-turn brief | `learningtools.go`, `pkg/workflow/learning` | each app that wants them |
+| learning tools and the first-turn brief | `learningtools.go`, `pkg/workflow/learning` | each app that wants them, on the SDK's log |
 | the escalation handler (an agent that decides before a person) | `handler.go`, `handleractivities.go`, `handlertools.go` | each app that wants one. Without it an escalation goes to a person at once |
 | operator credentials | `operator.go`, `pkg/cluster/kubeop` `Broker` | protocol7-selfdev only |
 | probes | `probes.go`, `pkg/cluster/probe` | protocol7-selfdev only |
@@ -412,8 +412,8 @@ The first version of this plan moved `learning`, `review`, `issue`, `probe` and 
 
 ## Learnings in the SDK
 
-Decided 2026-11-22 (user). The learnings log was copied unchanged into protocol7-selfdev, oku-development and oku-review, so it lives in `pkg/orchestration/learning` now, with `learningtest` beside it.
+Decided 2026-11-22 (user), and narrowed the same day (eddy). The learnings log was copied unchanged into protocol7-selfdev, oku-development and oku-review, so the log lives in `pkg/orchestration/learning` now, with `learningtest` beside it. The SDK provides the log and its storage and holds no curation and no prompt text. Each app builds its own curation on the log.
 
-- The package holds the entry types, the store, word and semantic search, the learning workflow, the four activities and the chat tools. An app registers it with `learning.Config.Activities` and `learning.Register`, and adds `learning.ChatTools`, `learning.ChatBrief` and `learning.Instructions` to its chat's options.
-- `learning.Config` is a kong struct. It carries the embedding server, the thresholds and the area descriptions, so each app keeps them in its own settings file.
-- The workflow is registered as `selfdev.Learning`, the activities as `LearningRecord`, `LearningSearch`, `LearningBrief` and `LearningDecide`, and the memo and search attributes keep their formats. Running entries and chats started on an app's own copy replay on the SDK's.
+- The SDK holds the `Entry`, `Scope`, `Source` and `State` types and their validation (with the secret check), the learning workflow (one per entry, the memo, the search attribute, the decide update), the `Store` (`Record`, `List`, `Get`, `Decide`), and the `Record` and `Decide` activities, which only write the log. `learning.Register` registers the workflow and those two activities. `learning.RegisterWorkflow` registers the workflow alone, for an app that registers its own activities under the same names. An entry may carry an opaque `Vector` and `VectorModel`, which the SDK stores and does not compute. `pkg/support/embedding` is a plain client that an app uses to compute them.
+- Each app writes the rest: search and ranking, the brief for a first prompt, scope scoring, semantic ranking, duplicate holding, area suggestion, the thresholds and areas settings, embedding entries when they are first needed, `Format`, and the chat tools (`learning_record`, `learning_search`, `learning_decide`) with their instructions and every text a model reads. protocol7-selfdev's `pkg/workflow/curation` is the first.
+- The workflow is registered as `selfdev.Learning`, the activities as `LearningRecord`, `LearningSearch`, `LearningBrief` and `LearningDecide`, and the memo and search attributes keep their formats. An app's curation activities keep those names, `LearningSearch` and `LearningBrief` and its own `LearningRecord` that replaces the SDK's and calls it to write, so that running entries and chats started on an app's own copy replay.

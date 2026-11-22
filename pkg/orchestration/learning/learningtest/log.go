@@ -1,5 +1,5 @@
 // Package learningtest is an in-memory learnings log behind a Temporal client
-// mock, so that tests of the tools, the prompt and navi's page run against the
+// mock, so that tests of an app's tools, prompts and navi's page run against the
 // real Store.
 package learningtest
 
@@ -69,6 +69,30 @@ func New(t testing.TB) *Log {
 				})
 			}
 			return response, nil
+		})
+	l.Client.On("DescribeWorkflowExecution", mock.Anything, mock.Anything, mock.Anything).Return(
+		func(_ context.Context, id, _ string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			for _, entry := range l.entries {
+				if learning.WorkflowID(entry.ID) != id {
+					continue
+				}
+				memo, err := data.ToPayload(entry)
+				if err != nil {
+					return nil, err
+				}
+				state, err := data.ToPayload(string(entry.State))
+				if err != nil {
+					return nil, err
+				}
+				return &workflowservice.DescribeWorkflowExecutionResponse{WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+					Execution:        &commonpb.WorkflowExecution{WorkflowId: id},
+					Memo:             &commonpb.Memo{Fields: map[string]*commonpb.Payload{learning.MemoEntry: memo}},
+					SearchAttributes: &commonpb.SearchAttributes{IndexedFields: map[string]*commonpb.Payload{learning.AttributeState.GetName(): state}},
+				}}, nil
+			}
+			return nil, serviceerror.NewNotFound("no such workflow")
 		})
 	l.Client.On("UpdateWorkflow", mock.Anything, mock.Anything).Return(
 		func(_ context.Context, options client.UpdateWorkflowOptions) (client.WorkflowUpdateHandle, error) {

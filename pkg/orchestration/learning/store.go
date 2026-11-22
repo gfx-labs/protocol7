@@ -9,6 +9,7 @@ import (
 	"github.com/gfx-labs/protocol7/pkg/domain/navi"
 
 	"go.temporal.io/api/serviceerror"
+	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
@@ -59,7 +60,6 @@ const listQuery = "WorkflowType = '" + WorkflowName + "' AND ExecutionStatus = '
 // ListLimit. Each entry's state is the search attribute's, which a decision
 // changes, and its text is the memo's.
 func (s Store) List(ctx context.Context) ([]Entry, error) {
-	data := converter.GetDefaultDataConverter()
 	var entries []Entry
 	var token []byte
 	for len(entries) < ListLimit {
@@ -68,17 +68,9 @@ func (s Store) List(ctx context.Context) ([]Entry, error) {
 			return nil, err
 		}
 		for _, execution := range response.GetExecutions() {
-			var entry Entry
-			if err := data.FromPayload(execution.GetMemo().GetFields()[MemoEntry], &entry); err != nil || entry.ID == "" {
-				continue
+			if entry, ok := entryOf(execution); ok {
+				entries = append(entries, entry)
 			}
-			if payload, ok := execution.GetSearchAttributes().GetIndexedFields()[AttributeState.GetName()]; ok {
-				var state string
-				if data.FromPayload(payload, &state) == nil && state != "" {
-					entry.State = State(state)
-				}
-			}
-			entries = append(entries, entry)
 		}
 		token = response.GetNextPageToken()
 		if len(token) == 0 {
@@ -90,6 +82,48 @@ func (s Store) List(ctx context.Context) ([]Entry, error) {
 	}
 	sortNewest(entries)
 	return entries, nil
+}
+
+// entryOf reads an entry from a workflow's memo and search attribute. It is
+// false for a workflow that holds no entry.
+func entryOf(execution *workflowpb.WorkflowExecutionInfo) (Entry, bool) {
+	data := converter.GetDefaultDataConverter()
+	var entry Entry
+	if err := data.FromPayload(execution.GetMemo().GetFields()[MemoEntry], &entry); err != nil || entry.ID == "" {
+		return Entry{}, false
+	}
+	if payload, ok := execution.GetSearchAttributes().GetIndexedFields()[AttributeState.GetName()]; ok {
+		var state string
+		if data.FromPayload(payload, &state) == nil && state != "" {
+			entry.State = State(state)
+		}
+	}
+	return entry, true
+}
+
+// ErrNotFound is returned by Get for an entry that is not in the log.
+var ErrNotFound = errors.New("no such learning")
+
+// Get reads one entry, in any state that Temporal still holds: the running
+// ones, and a rejected or retired one until its retention ends. Its state is
+// the search attribute's.
+func (s Store) Get(ctx context.Context, id string) (Entry, error) {
+	if !ValidID(id) {
+		return Entry{}, ErrNotFound
+	}
+	response, err := s.Client.DescribeWorkflowExecution(ctx, WorkflowID(id), "")
+	var missing *serviceerror.NotFound
+	if errors.As(err, &missing) {
+		return Entry{}, ErrNotFound
+	}
+	if err != nil {
+		return Entry{}, err
+	}
+	entry, ok := entryOf(response.GetWorkflowExecutionInfo())
+	if !ok {
+		return Entry{}, ErrNotFound
+	}
+	return entry, nil
 }
 
 func sortNewest(entries []Entry) {

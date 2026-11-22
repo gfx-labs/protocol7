@@ -26,6 +26,7 @@ Decided 2026-11-13 (user). Packages live in `pkg/` and commands in `cmd/`, group
 | `pkg/domain` | The plain types that cross a process boundary, which `pkg/p7` re-exports |
 | `pkg/execution/...` | Backends and what runs in them: the shim client, session activities, the journal decoder |
 | `pkg/orchestration/...` | Core workflows and activities |
+| `pkg/orchestration/learning` | The learnings log: the entry types and their validation, the workflow that holds an entry, the store and the activities that write the log. It provides the log and its storage and holds no curation and no prompt text |
 | `pkg/storage/...` | The ticket store and artifact storage |
 | `pkg/transport/...` | The API server, the CLI commands, the live output stream and `egress`, a process's own HTTP through PDP |
 | `pkg/support/...` | Small shared helpers |
@@ -686,7 +687,7 @@ Beyond milestone 7 they need the entries marked new in section 7, the PDP items 
 
 `protocol7-selfdev` implements request, edit, actual repository checks, independent review, revision, PR publication and configured promotion gates. Record source/prompt commits, worker builds, model/provider bindings, learnings and acceptance evidence.
 
-Learnings are optional first-class records in ticketd, not an execution dependency. Consumers may ignore them or delete individual records without breaking tickets, runs, workflow replay or reconciliation. References to learnings are non-owning and tolerate missing records, with no cascading deletion into execution records. Any learning content used by a run is captured in that run's resolved input so later deletion does not change its recorded input or replay behavior. protocol7 does not automatically inject learnings into prompts.
+Learnings are optional first-class records in ticketd, not an execution dependency. Consumers may ignore them or delete individual records without breaking tickets, runs, workflow replay or reconciliation. References to learnings are non-owning and tolerate missing records, with no cascading deletion into execution records. Any learning content used by a run is captured in that run's resolved input so later deletion does not change its recorded input or replay behavior. protocol7 does not automatically inject learnings into prompts. The SDK's `pkg/orchestration/learning` provides the log and its storage only (decided 2026-11-22, eddy). Search, ranking, a brief for a first prompt, duplicate holding, embeddings, the chat tools and every word a model reads about learnings are written by each app on top of the log, so the SDK holds no prompt text.
 
 Extraction, curation, deduplication, acceptance, expiry and application belong to user-written workflows, not protocol7. Consumers choose learning metadata and lifecycle conventions rather than following a mandatory platform state machine. `protocol7-selfdev` may use signatures, incident groups and evaluation states, and propose mechanical fixes when advice repeatedly fails.
 

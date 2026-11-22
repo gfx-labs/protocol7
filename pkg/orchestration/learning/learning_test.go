@@ -2,7 +2,6 @@ package learning_test
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/gfx-labs/protocol7/pkg/orchestration/learning"
 	"github.com/gfx-labs/protocol7/pkg/orchestration/learning/learningtest"
+	"github.com/gfx-labs/protocol7/pkg/support/embedding"
 )
 
 func entry(id, title string, scope learning.Scope) learning.Entry {
@@ -67,75 +67,9 @@ func TestValidate(t *testing.T) {
 	require.NoError(t, ok.Validate())
 }
 
-// Search finds accepted entries only. A repository scope fits the repository
-// it names, a project scope every one, and words rank title above body.
-func TestSearch(t *testing.T) {
-	proposed := entry("p", "Proposed note", wide)
-	proposed.State = learning.Proposed
-	entries := []learning.Entry{
-		entry("a", "Pushes to master are refused", selfdev),
-		entry("b", "Image build cache", protocol),
-		entry("c", "Temporal retention", wide),
-		proposed,
-	}
-	entries[2].Fix = "keep the workflow running, branch rules do not matter"
-
-	ids := func(found []learning.Entry) []string {
-		var out []string
-		for _, e := range found {
-			out = append(out, e.ID)
-		}
-		return out
-	}
-	assert.Equal(t, []string{"a", "c"}, ids(learning.Search(entries, learning.Query{Repos: []string{"GFX-labs/protocol7-selfdev"}})), "scope fit first, proposed never")
-	assert.Equal(t, []string{"b", "c"}, ids(learning.Search(entries, learning.Query{Repos: []string{"gfx-labs/protocol7"}})))
-	assert.Empty(t, learning.Search(entries, learning.Query{Text: "nothing like it"}))
-	assert.Equal(t, []string{"a", "b", "c"}, ids(learning.Search(entries, learning.Query{Text: "branch"})), "a body hit in each, ranked by scope fit and then the first by ID")
-	assert.Equal(t, []string{"c"}, ids(learning.Search(entries, learning.Query{Text: "retention"})))
-	assert.Equal(t, []string{"a"}, ids(learning.Search(entries, learning.Query{Text: "pushes", Repos: []string{"gfx-labs/protocol7-selfdev"}})))
-	assert.Empty(t, learning.Search(entries, learning.Query{Text: "pushes", Repos: []string{"gfx-labs/protocol7"}}), "a note for another repository is not found for this one")
-	assert.Equal(t, []string{"p"}, ids(learning.Search(entries, learning.Query{State: learning.Proposed})))
-}
-
-// The block in a first prompt holds the entries that fit the repositories,
-// and never more than its bound, whatever is in the log.
-func TestBriefIsBounded(t *testing.T) {
-	assert.Empty(t, learning.Brief(nil, []string{"gfx-labs/protocol7"}))
-	assert.Empty(t, learning.Brief([]learning.Entry{entry("x", "Other", protocol)}, []string{"gfx-labs/protocol7-selfdev"}), "nothing fits")
-
-	var entries []learning.Entry
-	for i := range 40 {
-		e := entry(fmt.Sprintf("e%02d", i), fmt.Sprintf("Entry %d", i), selfdev)
-		e.Problem = strings.Repeat("a long problem ", 60)
-		e.Cause = strings.Repeat("a long cause ", 60)
-		e.Fix = strings.Repeat("a long fix ", 60)
-		e.Recorded = e.Recorded.Add(time.Duration(i) * time.Hour)
-		entries = append(entries, e)
-	}
-	brief := learning.Brief(entries, []string{"gfx-labs/protocol7-selfdev"})
-	assert.LessOrEqual(t, len(brief), learning.MaxBriefBytes)
-	assert.LessOrEqual(t, strings.Count(brief, "\n- "), learning.MaxBriefEntries)
-	assert.Contains(t, brief, "Entry 39", "the newest entry is first")
-	assert.Contains(t, brief, "learning_search")
-	assert.Contains(t, brief, "more: call learning_search")
-
-	// Each entry has its own bound, and a cut keeps the text valid.
-	e := entry("u", "Unicode", wide)
-	e.Fix = strings.Repeat("é", 900)
-	note := learning.Format(e, 200)
-	assert.LessOrEqual(t, len(note), 200)
-	assert.True(t, strings.ToValidUTF8(note, "") == note)
-
-	// A few small entries are all there, with the source.
-	few := learning.Brief([]learning.Entry{entry("1", "One", selfdev), entry("2", "Two", wide)}, []string{"gfx-labs/protocol7-selfdev"})
-	assert.Contains(t, few, "One")
-	assert.Contains(t, few, "Two")
-	assert.Contains(t, few, "escalation e1")
-	assert.NotContains(t, few, "more: call")
-}
-
 // A chat's agent proposes an entry, the handler records an accepted one, and a
-// repeated call (an activity that is retried) records it once.
+// repeated call (an activity that is retried) records it once. The SDK stores
+// the entry's vector as it is and computes none.
 func TestRecordProposesAndTheHandlerAccepts(t *testing.T) {
 	log := learningtest.New(t)
 	activities := log.Activities()
@@ -144,24 +78,32 @@ func TestRecordProposesAndTheHandlerAccepts(t *testing.T) {
 	proposed, err := activities.Record(ctx, learning.RecordRequest{Entry: entry("p1", "A proposal", selfdev)})
 	require.NoError(t, err)
 	assert.Equal(t, learning.Proposed, proposed.State, "an entry that says accepted is proposed unless the handler recorded it")
-	accepted, err := activities.Record(ctx, learning.RecordRequest{Entry: entry("h1", "From the handler", selfdev), Handler: true})
+	withVector := entry("h1", "From the handler", selfdev)
+	withVector.Vector, withVector.VectorModel = embedding.Vector{0.5, -1}, "model"
+	accepted, err := activities.Record(ctx, learning.RecordRequest{Entry: withVector, Handler: true})
 	require.NoError(t, err)
 	assert.Equal(t, learning.Accepted, accepted.State)
-	_, err = activities.Record(ctx, learning.RecordRequest{Entry: entry("h1", "From the handler", selfdev), Handler: true})
+	_, err = activities.Record(ctx, learning.RecordRequest{Entry: withVector, Handler: true})
 	require.NoError(t, err)
 	assert.Len(t, log.Entries(), 2)
+	assert.Equal(t, embedding.Vector{0.5, -1}, log.Entries()[1].Vector)
+	assert.Equal(t, "model", log.Entries()[1].VectorModel)
 
-	// Chats read accepted entries only, until the proposal is accepted.
-	found, err := activities.Search(ctx, learning.SearchRequest{Query: learning.Query{Repos: []string{"gfx-labs/protocol7-selfdev"}}})
+	store := log.Store()
+	got, err := store.Get(ctx, "p1")
 	require.NoError(t, err)
-	assert.Contains(t, found, "From the handler")
-	assert.NotContains(t, found, "A proposal")
+	assert.Equal(t, "A proposal", got.Title)
+	assert.Equal(t, learning.Proposed, got.State)
+	_, err = store.Get(ctx, "nobody")
+	assert.ErrorIs(t, err, learning.ErrNotFound)
+	_, err = store.Get(ctx, "A!")
+	assert.ErrorIs(t, err, learning.ErrNotFound)
+
 	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "accept", By: "alice"}})
 	require.NoError(t, err)
-	found, err = activities.Search(ctx, learning.SearchRequest{Query: learning.Query{Text: "proposal"}})
+	got, err = store.Get(ctx, "p1")
 	require.NoError(t, err)
-	assert.Contains(t, found, "A proposal")
-	assert.Contains(t, found, "id p1")
+	assert.Equal(t, learning.Accepted, got.State)
 
 	// An entry with a secret is refused for good.
 	secret := entry("s1", "Leak", selfdev)
@@ -176,11 +118,29 @@ func TestRecordProposesAndTheHandlerAccepts(t *testing.T) {
 	_, err = activities.Decide(ctx, learning.DecideRequest{ID: "p1", Decision: learning.Decision{Action: "retire"}})
 	require.NoError(t, err)
 	assert.Len(t, log.Entries(), 1)
-	brief, err := activities.Brief(ctx, learning.BriefRequest{Repos: []string{"gfx-labs/protocol7-selfdev"}})
+	listed, err := store.List(ctx)
 	require.NoError(t, err)
-	assert.Contains(t, brief, "From the handler")
-	assert.NotContains(t, brief, "A proposal")
+	require.Len(t, listed, 1)
+	assert.Equal(t, "h1", listed[0].ID)
 }
+
+// The log's activities and the workflow register under the names that running
+// histories hold.
+func TestRegisterNames(t *testing.T) {
+	r := &names{}
+	require.NoError(t, learning.Register(r, &learning.Activities{}))
+	assert.Equal(t, []string{"selfdev.Learning", "LearningRecord", "LearningDecide"}, r.names)
+	r = &names{}
+	require.NoError(t, learning.RegisterWorkflow(r))
+	assert.Equal(t, []string{"selfdev.Learning"}, r.names)
+	assert.Error(t, learning.Register(nil, &learning.Activities{}))
+	assert.Error(t, learning.Register(r, nil))
+}
+
+type names struct{ names []string }
+
+func (n *names) RegisterWorkflow(name string, _ any) { n.names = append(n.names, name) }
+func (n *names) RegisterActivity(name string, _ any) { n.names = append(n.names, name) }
 
 // The workflow keeps an entry while it is proposed or accepted, takes only
 // the decisions its state allows, and ends on a rejection.
