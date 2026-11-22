@@ -43,6 +43,9 @@ const (
 	// stopSnapshotTimeout bounds the snapshots written when the worker stops.
 	// The process that stops the worker may give up sooner.
 	stopSnapshotTimeout = 10 * time.Minute
+	// sweepInterval is how often the worker looks for closed sessions whose
+	// retention has run out.
+	sweepInterval = 10 * time.Minute
 )
 
 // Worker is the core worker of one machine.
@@ -54,6 +57,9 @@ type Worker struct {
 	// session is the one session that Start restores.
 	session   string
 	snapshots bool
+	// stopSweep ends the sweep of closed sessions, and sweeping is done when
+	// it returns.
+	stopSweep func()
 }
 
 // New returns a core worker that serves sessions' activities. It does not
@@ -107,6 +113,14 @@ func (w *Worker) Start() error {
 	if err := w.worker.Start(); err != nil {
 		return fmt.Errorf("start core worker on %s: %w", w.taskQueue, err)
 	}
+	// The directories of closed sessions are removed after their retention.
+	sweepCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.sessions.Manager().Retain(sweepCtx, sweepInterval)
+	}()
+	w.stopSweep = func() { cancel(); <-done }
 	w.logger.Info("core worker started", "task_queue", w.taskQueue)
 	return nil
 }
@@ -115,6 +129,9 @@ func (w *Worker) Start() error {
 // snapshots it then writes a snapshot of every session of the machine whose
 // directory changed since its last.
 func (w *Worker) Stop() {
+	if w.stopSweep != nil {
+		w.stopSweep()
+	}
 	w.worker.Stop()
 	if !w.snapshots {
 		return

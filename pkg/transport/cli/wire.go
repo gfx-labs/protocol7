@@ -2,6 +2,7 @@ package cli
 
 import (
 	"log/slog"
+	"time"
 
 	"go.temporal.io/sdk/client"
 	"go.uber.org/fx"
@@ -32,6 +33,9 @@ type hostSessions struct {
 	// then in PATH.
 	Shim    string
 	Harness session.Harness
+	// Retention is how long a closed session's directory stays. Zero is
+	// session.DefaultRetention.
+	Retention time.Duration
 }
 
 // natsURL is the NATS server that session frames are published to.
@@ -72,6 +76,7 @@ func newSessionManager(params sessionManagerParams) (*session.Manager, error) {
 	params.Logger.Info("sessions of this machine", "state_dir", params.Sessions.StateDir, "shim", shim)
 	return session.NewManager(session.Config{
 		Root: params.Sessions.StateDir, ShimBinary: shim, Harness: params.Sessions.Harness,
+		Retention: params.Sessions.Retention,
 		Publisher: params.Publisher, Tools: coreworker.ToolCalls{Temporal: params.Temporal}, Logger: params.Logger,
 	})
 }

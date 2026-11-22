@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
 )
@@ -34,6 +35,11 @@ type record struct {
 	// runs a new harness process, which has to load the conversation first.
 	ShimPid int  `json:"shim_pid,omitempty"`
 	Closed  bool `json:"closed,omitempty"`
+	// ClosedAt is when Close marked the session closed.
+	ClosedAt time.Time `json:"closed_at,omitzero"`
+	// Purged says that the session's files were removed after its retention.
+	// The record stays, with the ID and the close, and nothing else.
+	Purged bool `json:"purged,omitempty"`
 }
 
 // The ID is a directory name, part of a unix socket path, which Linux limits

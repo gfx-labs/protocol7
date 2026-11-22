@@ -80,6 +80,15 @@ type Config struct {
 	// tools to any session.
 	Tools  ToolCaller
 	Logger *slog.Logger
+	// Retention is how long a closed session's directory (its workspace,
+	// journal and shim files) stays on disk after Close, so that its journal
+	// stays readable for a while. Zero is DefaultRetention. A negative value
+	// keeps the directories for ever. Close removes the directory once the
+	// time has run out, and Sweep and Retain do it for the sessions that no
+	// Close visits again. A session that is open is never removed.
+	Retention time.Duration
+	// Now is the clock. Nil is time.Now. Tests set it.
+	Now func() time.Time
 }
 
 // Manager runs sessions on this machine.
@@ -525,12 +534,20 @@ func (m *Manager) Close(ctx context.Context, request domain.CloseRequest) error 
 		return fmt.Errorf("close session %s: %w", rec.ID, err)
 	}
 	if !rec.Closed {
-		rec.Closed = true
+		rec.Closed, rec.ClosedAt = true, m.now()
 		if err := m.save(rec); err != nil {
 			return err
 		}
 	}
-	return m.deleteSnapshot(ctx, rec.ID)
+	if err := m.deleteSnapshot(ctx, rec.ID); err != nil {
+		return err
+	}
+	// A close that comes after the retention (a repeated one) removes the
+	// files at once, and the sweep does the rest.
+	if _, err := m.purgeIfDue(ctx, rec); err != nil {
+		m.log.Warn("remove a closed session from disk failed", "session", rec.ID, "error", err)
+	}
+	return nil
 }
 
 func (m *Manager) deleteSnapshot(ctx context.Context, id string) error {

@@ -121,6 +121,8 @@ type workerCommand struct {
 	Shim      string        `name:"shim" env:"P7_SHIM" help:"Path of p7acpshim. Default: beside this executable, then PATH."`
 	Harness   harnessFlags  `embed:""`
 	Snapshots snapshotFlags `embed:""`
+	// SessionRetention is how long a closed session's directory stays.
+	SessionRetention time.Duration `name:"session-retention" default:"24h" env:"P7_SESSION_RETENTION" help:"How long a closed session's directory (workspace, journal) stays on disk, so that its journal stays readable. A negative value keeps it for ever. A session that is open is never removed."`
 
 	// session names the session of a session's pod, whose snapshot is
 	// restored before the worker polls.
@@ -156,7 +158,7 @@ func (c *workerCommand) options() (fx.Option, error) {
 			coreworker.Config{Host: host, TaskQueue: c.taskQueue, Session: c.session, Snapshots: snapshots},
 		),
 		p7fx.TemporalClient,
-		coreModule(hostSessions{StateDir: stateDir, Shim: c.Shim, Harness: c.Harness.harness()}),
+		coreModule(hostSessions{StateDir: stateDir, Shim: c.Shim, Harness: c.Harness.harness(), Retention: c.SessionRetention}),
 	}
 	if c.NATSURL != "" {
 		options = append(options, fx.Supply(natsURL(c.NATSURL)), framesModule)
