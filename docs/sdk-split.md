@@ -6,7 +6,7 @@ Status: design, revised 2026-11-19. Section 1 and PRs 1 to 6 are merged. Section
 
 A tenant (oku-trade/oku-development, oku-trade/oku-review) builds and deploys only its own images, compiled against a pinned `github.com/gfx-labs/protocol7` module. It never runs a `ghcr.io/gfx-labs/protocol7-selfdev` image. The tenant's selfdev, meaning the chat workflow worker, its session `p7-worker` and the files server, lives in the tenant's repo, binary, image and manifests. oku-review, for example, does selfdev on its own Deployment, with prompts and reviewer code from `oku-trade/oku-review/kubernetes`.
 
-Each namespace provides its own chat. The tenant's binary registers the SDK's base chat with its own extensions (tools, instructions, per-turn hooks, activities) on its own worker. protocol7 does not ship issue work, reviews, learnings, probes, the operator broker or a replay harness. An app that wants one writes it in its own repository, reusing the code of another app by copying it, not by depending on it.
+Each namespace provides its own chat. The tenant's binary registers the SDK's base chat with its own extensions (tools, instructions, per-turn hooks, activities) on its own worker. protocol7 does not ship issue work, reviews, probes, the operator broker or a replay harness. It ships the learnings (`pkg/orchestration/learning`, see "Learnings in the SDK" below), because all three apps ran identical copies. An app that wants one writes it in its own repository, reusing the code of another app by copying it, not by depending on it.
 
 protocol7-selfdev stays the platform: navi web UI, PDP, grants, network, identity, the webhooks receiver and the navi project entry for its own repo. Toward a tenant it only sends messages: Temporal signals, queries and updates, NATS reads, and forwarded webhook events. A project whose namespace has no chat worker has no chat: navi says so and does not start one (section 5, PR 7b).
 
@@ -409,3 +409,11 @@ Each PR merges alone and leaves every deployment working.
 PRs 1 to 6 changed no behavior. PR 7 adds code no one runs yet. PR 8 makes protocol7-selfdev the first consumer of the base chat, which tests it before a tenant depends on it. PRs 9 to 12 cut each tenant over one namespace at a time, each with its own extensions written in its own repository.
 
 The first version of this plan moved `learning`, `review`, `issue`, `probe` and the whole chat into protocol7 (protocol7 PR #43). That PR was closed: those workflows are app code, and each app reimplements the ones it needs.
+
+## Learnings in the SDK
+
+Decided 2026-11-22 (user). The learnings log was copied unchanged into protocol7-selfdev, oku-development and oku-review, so it lives in `pkg/orchestration/learning` now, with `learningtest` beside it.
+
+- The package holds the entry types, the store, word and semantic search, the learning workflow, the four activities and the chat tools. An app registers it with `learning.Config.Activities` and `learning.Register`, and adds `learning.ChatTools`, `learning.ChatBrief` and `learning.Instructions` to its chat's options.
+- `learning.Config` is a kong struct. It carries the embedding server, the thresholds and the area descriptions, so each app keeps them in its own settings file.
+- The workflow is registered as `selfdev.Learning`, the activities as `LearningRecord`, `LearningSearch`, `LearningBrief` and `LearningDecide`, and the memo and search attributes keep their formats. Running entries and chats started on an app's own copy replay on the SDK's.
