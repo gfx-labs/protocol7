@@ -30,10 +30,10 @@ func (a *CurateActivities) now() time.Time {
 const (
 	passesRunning   = "WorkflowType = '" + CurateWorkflowName + "' AND ExecutionStatus = 'Running'"
 	passesCompleted = "WorkflowType = '" + CurateWorkflowName + "' AND ExecutionStatus = 'Completed'"
-	// lastPassWindow is how many completed passes are read to find the last
-	// that ran: the ones that skipped hold no result, and the runs of a
-	// schedule are many.
-	lastPassWindow = 50
+	// lastPassPage and lastPassPages bound the read of the completed runs that
+	// finds the last pass that ran: 100 a page, at most 20 pages.
+	lastPassPage  = 100
+	lastPassPages = 20
 )
 
 // Check says whether a pass is due: no earlier pass runs, an entry is open
@@ -100,25 +100,34 @@ func sinceText(t time.Time) string {
 }
 
 // lastPass is the cursor of the newest completed pass that ran, or the zero
-// time.
+// time. The completed runs are read newest first, a page at a time, until one
+// holds a result: the runs that skipped hold none, and a schedule makes many.
+// Temporal forgets a closed run after its retention, and with it the cursor:
+// a namespace that ran no pass within the retention starts again from every
+// open entry, which one pass repairs.
 func (a *CurateActivities) lastPass(ctx context.Context) (time.Time, error) {
-	response, err := a.Store.Client.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{PageSize: lastPassWindow, Query: passesCompleted})
-	if err != nil {
-		return time.Time{}, err
-	}
 	data := converter.GetDefaultDataConverter()
 	var last time.Time
-	for _, execution := range response.GetExecutions() {
-		payload, ok := execution.GetMemo().GetFields()[MemoCurate]
-		if !ok {
-			continue
+	var token []byte
+	for range lastPassPages {
+		response, err := a.Store.Client.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{PageSize: lastPassPage, NextPageToken: token, Query: passesCompleted})
+		if err != nil {
+			return time.Time{}, err
 		}
-		var result CurateResult
-		if data.FromPayload(payload, &result) != nil {
-			continue
+		for _, execution := range response.GetExecutions() {
+			payload, ok := execution.GetMemo().GetFields()[MemoCurate]
+			if !ok {
+				continue
+			}
+			var result CurateResult
+			if data.FromPayload(payload, &result) == nil && result.Cursor.After(last) {
+				last = result.Cursor
+			}
 		}
-		if result.Cursor.After(last) {
-			last = result.Cursor
+		// Newest first: the first page with a result holds the newest.
+		token = response.GetNextPageToken()
+		if !last.IsZero() || len(token) == 0 {
+			break
 		}
 	}
 	return last, nil

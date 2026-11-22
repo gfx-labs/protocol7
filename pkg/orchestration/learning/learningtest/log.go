@@ -60,7 +60,9 @@ func New(t testing.TB) *Log {
 			l.Queries = append(l.Queries, request.GetQuery())
 			response := &workflowservice.ListWorkflowExecutionsResponse{}
 			listed := l.entries
-			if !strings.Contains(request.GetQuery(), "ExecutionStatus") {
+			// The query names the statuses it wants: only Running, or Running
+			// and Completed, which is every entry Temporal still holds.
+			if strings.Contains(request.GetQuery(), "ExecutionStatus = 'Completed'") {
 				listed = append(append([]learning.Entry(nil), l.entries...), l.closed...)
 			}
 			for _, entry := range listed {

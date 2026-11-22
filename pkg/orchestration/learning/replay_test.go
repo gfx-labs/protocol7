@@ -12,11 +12,19 @@ import (
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
 
-// A learning entry that ran in a deployed namespace, recorded with
-// `temporal workflow show --output json` and stripped of its text, replays on
-// the SDK's workflow under its registered name. Every app's running entries
-// replay on it after the move from the app's own copy, so a change that breaks
-// this breaks them.
+// Learning entries that ran, recorded as Temporal's history JSON, replay on the
+// SDK's workflow under its registered name. Every app's running entries replay
+// on it, so a change that breaks this breaks them.
+//
+//   - live-learning-sanitized.json ran in a deployed namespace, stripped of its
+//     text. It holds a start and timers.
+//   - decided-before-the-curator.json was recorded on a Temporal dev server from
+//     the workflow as it was before the curator (protocol7 ab4776d): a proposed
+//     entry that a person accepted and then retired, two updates. The settle
+//     handler replays it without the memo command, since it has no marker.
+//   - settled-by-the-curator.json was recorded from the workflow as it is: an
+//     open entry that the curator applied and a person retired. It holds the
+//     version marker and the memo upsert.
 func TestLiveLearningsReplay(t *testing.T) {
 	files, err := filepath.Glob("testdata/*.json")
 	require.NoError(t, err)

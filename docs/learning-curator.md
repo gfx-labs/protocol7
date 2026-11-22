@@ -34,7 +34,7 @@ A decision that settles an entry (`apply`, `cover`, `reject`) rewrites the entry
 ## What the SDK holds
 
 - The states, the actions (`accept`, `reject`, `retire`, `apply`, `cover`), `Entry.Settle` and `CheckDecision`: an apply needs an https PR link, a cover needs a note, a note holds no secret.
-- The learning workflow with the settle update, and `Store.Open`, `Store.ListAll`.
+- The learning workflow with the settle update, and `Store.Open`, `Store.ListAll`. A listing leaves out the runs that continued as new, which keep an older state under the same workflow ID, and shows each entry once.
 - `CurateWorkflow`, `CurateActivities` (`LearningCurateCheck`, `LearningCurateOutcome`), `RegisterCurate`, `EnsureSchedule`, `StartPass`, `CurateConfig` (`Every`, `MinNew`, `MaxEntries`, `TurnBudget`), `IsCuratorChat`.
 - `Lanes`, `Match`, `Protected`.
 - `learningtest`, the in-memory log.
@@ -61,9 +61,10 @@ oku-review builds its own worker from its own repository against a pinned protoc
 
 ## Tests
 
-`pkg/orchestration/learning`: the states and `Settle`, the workflow's decisions (a cover, a rejection, an apply then retire, the memo), the check (nothing open, nothing new, an earlier pass running, the last pass found among skipped ones, a manual run, the backlog cut and its cursor), the pass over Temporal's test environment with a stub chat (a skip, a run that reports its turn and closes the chat, the chat's request, the budget, no note, a failed turn), the schedule's create and update, and the lanes. `TestLiveLearningsReplay` replays a recorded entry on the changed workflow.
+`pkg/orchestration/learning`: the states and `Settle`, the workflow's decisions (a cover, a rejection, an apply then retire, the memo), the check (nothing open, nothing new, an earlier pass running, the last pass found among skipped ones, a manual run, the backlog cut and its cursor), the pass over Temporal's test environment with a stub chat (a skip, a run that reports its turn and closes the chat, the chat's request, the budget, no note, a failed turn), the schedule's create and update, and the lanes. `TestLiveLearningsReplay` replays three recorded histories on the changed workflow: a live entry, one recorded on a Temporal dev server from the workflow before the curator (a proposed entry accepted and retired, so its updates replay without the memo command), and one recorded from the workflow as it is (applied, then retired). Removing the `settle-memo` version guard makes the second fail.
 
 ## Not built
 
+- The cursor of the last pass lives in the memo of the pass's run, so Temporal's retention (seven days by default) ends it. A namespace that ran no pass in that time starts again from every open entry, and one pass repairs it. The read pages through the completed runs, so the many runs that skipped do not hide it.
 - A reviewed-lane pull request that is closed unmerged leaves its entry applied. A later pass could look at applied entries whose PR was closed and reopen them.
 - No page action starts a manual pass. `learning.StartPass` is the function.

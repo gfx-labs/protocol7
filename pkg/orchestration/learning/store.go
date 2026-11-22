@@ -55,10 +55,11 @@ func (s Store) Record(ctx context.Context, entry Entry) error {
 
 // listQuery lists the entries whose workflow runs: the open, accepted and
 // applied ones. allQuery lists the covered, rejected and retired ones too,
-// while Temporal's retention holds them.
+// while Temporal's retention holds them. It leaves out the runs that continued
+// as new, which hold an older state under the same workflow ID.
 const (
 	listQuery = "WorkflowType = '" + WorkflowName + "' AND ExecutionStatus = 'Running'"
-	allQuery  = "WorkflowType = '" + WorkflowName + "'"
+	allQuery  = "WorkflowType = '" + WorkflowName + "' AND (ExecutionStatus = 'Running' OR ExecutionStatus = 'Completed')"
 )
 
 // List reads the entries that run (open, accepted and applied), newest first,
@@ -97,7 +98,8 @@ func (s Store) list(ctx context.Context, query string) ([]Entry, error) {
 			return nil, err
 		}
 		for _, execution := range response.GetExecutions() {
-			if entry, ok := entryOf(execution); ok {
+			// A workflow ID is one entry: the first run listed is the newest.
+			if entry, ok := entryOf(execution); ok && !slices.ContainsFunc(entries, func(have Entry) bool { return have.ID == entry.ID }) {
 				entries = append(entries, entry)
 			}
 		}
