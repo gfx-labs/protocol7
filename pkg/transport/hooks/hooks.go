@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -132,4 +133,48 @@ func deliveryFrom(msg jetstream.Msg) Delivery {
 		Subject:      msg.Subject(),
 		Body:         msg.Data(),
 	}
+}
+
+const (
+	// retryMin and retryMax bound the wait between attempts of
+	// SubscribeRetrying.
+	retryMin = 5 * time.Second
+	retryMax = 5 * time.Minute
+	// retryStable is how long a subscription must run for the next wait to
+	// start from the least again.
+	retryStable = time.Minute
+)
+
+// SubscribeRetrying is Subscribe for a consumer that can do without the bus
+// for a while: it logs a failure (no route to the bus, a refused identity, a
+// consumer not granted yet) and tries again after a wait that grows from five
+// seconds to five minutes, and it returns only when ctx ends. A caller that
+// has other work, such as a builder that also serves the build queue, stays
+// up while the bus is not reachable and takes its deliveries once it is.
+func SubscribeRetrying(ctx context.Context, logger *slog.Logger, config SubscriberConfig, handle func(context.Context, Delivery) error) error {
+	return retry(ctx, logger, retryMin, retryMax, func(ctx context.Context) error {
+		return Subscribe(ctx, config, handle)
+	})
+}
+
+func retry(ctx context.Context, logger *slog.Logger, shortest, longest time.Duration, run func(context.Context) error) error {
+	wait := shortest
+	for ctx.Err() == nil {
+		started := time.Now()
+		err := run(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if time.Since(started) >= retryStable {
+			wait = shortest
+		}
+		logger.Warn("webhook bus: subscription ended, trying again", "error", err, "wait", wait)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, longest)
+	}
+	return nil
 }
