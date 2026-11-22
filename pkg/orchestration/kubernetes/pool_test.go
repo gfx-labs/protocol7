@@ -265,7 +265,7 @@ func (r *poolRig) podCount(pool string) int {
 // labelled with the pool and not a session, serving the queue of its slot.
 func TestAPoolScalesUpPlacesAndQueues(t *testing.T) {
 	rig := startPoolRig(t)
-	spec := domain.PoolSpec{Name: poolA, MaxWorkers: 3, SessionsPerWorker: 3, IdleTimeout: time.Minute, Pod: domain.PodSpec{Image: "other", Limits: map[string]string{"memory": "2Gi"}}}
+	spec := domain.PoolSpec{Name: poolA, MaxWorkers: 3, SessionsPerWorker: 3, IdleTimeout: time.Minute, Pod: domain.PodSpec{Image: "other", Limits: map[string]string{"memory": "2Gi"}, Env: map[string]string{"KEEP": "2"}}}
 	perSlot := map[int][]string{}
 	for index := 1; index <= 9; index++ {
 		session := "s" + strconv.Itoa(index)
@@ -306,7 +306,7 @@ func TestAPoolScalesUpPlacesAndQueues(t *testing.T) {
 		named := variable.(map[string]any)
 		env[named["name"].(string)] = named["value"].(string)
 	}
-	if _, has := env[kubernetes.EnvSession]; has || env[kubernetes.EnvPool] != poolA || env[kubernetes.EnvWorker] != "1" || env[kubernetes.EnvTaskQueue] != domain.PoolQueue(poolA, 1) || env["KEEP"] != "1" {
+	if _, has := env[kubernetes.EnvSession]; has || env[kubernetes.EnvPool] != poolA || env[kubernetes.EnvWorker] != "1" || env[kubernetes.EnvTaskQueue] != domain.PoolQueue(poolA, 1) || env["KEEP"] != "2" {
 		t.Errorf("env %v", env)
 	}
 	resources := container["resources"].(map[string]any)

@@ -121,6 +121,9 @@ func (p *Pods) renderWorker(request domain.PoolWorkerRequest, placement domain.P
 	if image := request.Pool.Pod.Image; image != "" {
 		container["image"] = image
 	}
+	if err := replaceEnv(container, request.Pool.Pod.Env); err != nil {
+		return nil, fmt.Errorf("pool %s: %w", request.Pool.Name, err)
+	}
 	if len(request.Pool.Pod.Requests) > 0 || len(request.Pool.Pod.Limits) > 0 {
 		resources := object(container, "resources")
 		for field, values := range map[string]map[string]string{"requests": request.Pool.Pod.Requests, "limits": request.Pool.Pod.Limits} {
@@ -134,6 +137,32 @@ func (p *Pods) renderWorker(request domain.PoolWorkerRequest, placement domain.P
 		}
 	}
 	return pod, nil
+}
+
+// replaceEnv gives the variables of the container that the template has the
+// values of a pool's Env. It refuses a variable the template lacks, so that a
+// misspelled name does not leave the pool with the template's value, and the
+// variables that the pool sets itself.
+func replaceEnv(container map[string]any, values map[string]string) error {
+	env, _ := container["env"].([]any)
+	for name, value := range values {
+		switch name {
+		case EnvSession, EnvPool, EnvWorker, EnvTaskQueue:
+			return fmt.Errorf("the variable %s is the pool's own", name)
+		}
+		replaced := false
+		for _, variable := range env {
+			if named, ok := variable.(map[string]any); ok && named["name"] == name {
+				named["value"] = value
+				delete(named, "valueFrom")
+				replaced = true
+			}
+		}
+		if !replaced {
+			return fmt.Errorf("the template has no variable %s to replace", name)
+		}
+	}
+	return nil
 }
 
 // DeleteWorker deletes a worker's pod. A pod that is gone is not an error.

@@ -58,6 +58,11 @@ type PodSpec struct {
 	// such as {"cpu": "500m", "memory": "2Gi"}.
 	Requests map[string]string `json:"requests,omitempty"`
 	Limits   map[string]string `json:"limits,omitempty"`
+	// Env replaces the value of environment variables that the template's
+	// session container already has, such as the placeholder of a token that
+	// a pool of another reach sends. A variable the template lacks, and the
+	// variables of the pool itself, are refused.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // PoolSpec says how a pool is made. The workflow that opens a session
