@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 
 	"github.com/gfx-labs/protocol7/pkg/domain"
 	"github.com/gfx-labs/protocol7/pkg/domain/navi"
@@ -396,3 +398,27 @@ func TestAFollowUpRequestNamesTheEarlierChat(t *testing.T) {
 		t.Errorf("the follow-up is %+v, want it to follow %s in pr-x", got, first)
 	}
 }
+
+// Histories recorded from this package's chat workflow before project requests
+// existed, on a Temporal dev server with the code of protocol7 81909bd, replay
+// with the current code. The first is a chat with two turns, an escalation that
+// a person answered, a child chat that it started and a close. The second is
+// that child. Replay fails on any change of the commands a chat issues for these
+// histories, so a change that needs a version marker is caught here.
+func TestHistoriesFromBeforeProjectRequestsReplay(t *testing.T) {
+	for _, file := range []string{"chat-before-project-requests.json", "child-chat-before-project-requests.json"} {
+		replayer := worker.NewWorkflowReplayer()
+		replayer.RegisterWorkflowWithOptions(chat.NewWorkflow(chat.Options{}), workflow.RegisterOptions{Name: chat.WorkflowName})
+		if err := replayer.ReplayWorkflowHistoryFromJSONFile(replayLogger{}, "testdata/"+file); err != nil {
+			t.Errorf("%s: %v", file, err)
+		}
+	}
+}
+
+// replayLogger drops the replayer's log lines.
+type replayLogger struct{}
+
+func (replayLogger) Debug(string, ...any) {}
+func (replayLogger) Info(string, ...any)  {}
+func (replayLogger) Warn(string, ...any)  {}
+func (replayLogger) Error(string, ...any) {}

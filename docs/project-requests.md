@@ -28,11 +28,11 @@ Nexus was the alternative. A Nexus operation from a chat to a handler in the tar
 
 Nothing for a chat that has no targets and no request: the new signal channel, the new tools and the new statuses do not exist for it. The commands a request adds (the child workflow, the cancellation at close, the reminders and the close after the final answer) are reached only from the new tools and a request chat. The reminders and the close are behind `workflow.GetVersion("project-request")`. A chat's `idleStatus`, and a child chat's close, count waiting requests with waiting escalations, and a chat that sent none counts as before. Escalations are untouched.
 
-The replay of a recorded history was not run (no history of a chat from before this change is kept in the repository, and tests need a Temporal CLI that CI does not have). The test environment covers the new behavior, and the existing tests cover the old.
+Two histories recorded from the chat workflow of protocol7 81909bd, before this change, replay with the current code (`TestHistoriesFromBeforeProjectRequestsReplay`, `pkg/orchestration/chat/testdata`): a chat with two turns, an escalation that a person answered, a child chat and a close, and that child. They were recorded on a Temporal dev server with the CLI (`temporal workflow show --output json`) from a test run against that commit with fake session activities. A change to the commands such a chat issues fails the replay (checked by adding a timer to the loop).
 
 ## Tests
 
-`pkg/orchestration/chat/request_test.go`, over Temporal's test environment: the full path (tool, delivery, accepted, done, the messages that the chat gets, their fences and restriction, the status while waiting), a target that is not listed and a request with no reason, a chat with no targets (no tool, no instructions), the reply tool's transitions and the close, the reminders and the decline of a chat that never answers, the deadline for delivery and the withdrawal at close, and a follow-up.
+`pkg/orchestration/chat/request_test.go`, over Temporal's test environment: the full path (tool, delivery, accepted, done, the messages that the chat gets, their fences and restriction, the status while waiting), a target that is not listed and a request with no reason, a chat with no targets (no tool, no instructions), the reply tool's transitions and the close, the reminders and the decline of a chat that never answers, the deadline for delivery and the withdrawal at close, and a follow-up, and the replay of the recorded histories.
 
 ## Not built
 
