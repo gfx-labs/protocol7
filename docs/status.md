@@ -110,6 +110,15 @@ A workflow decides the permission requests of its session's agent with `SessionS
 - The report is the tool call. Text in the agent's message is never parsed.
 - It was run with a scripted agent, the real shim, the core worker and a Temporal development server (`pkg/p7/report_test.go`). It was not run with a real harness, so whether a model calls the tool reliably from the prompt is not known.
 
+## Closed sessions on disk
+
+`Manager.Close` stops the shim, marks the session closed (`closed_at` in `session.json`) and deletes its snapshot, and leaves the directory, the workspace and the journal, for a while: a person may come back to a chat, and the journal is how the page shows what happened. The workspace is a clone of each repository and what builds left in it, 2.5 to 3 GB for a session in practice, and nothing removed it, so a worker's volume filled (oku-review's 50 GB, with 35 closed sessions).
+
+- Retention: `session.Config.Retention`, the flag `--session-retention` (`P7_SESSION_RETENTION`) of `p7 worker` and `p7-worker`, default 24h, negative keeps for ever. After it, everything in the session's directory is removed except `session.json`, which stays as a tombstone (`purged`, the ID and the close): the session is still closed, `State` says so, and its ID is not opened again.
+- When: `Close` removes what is due (a repeated close after the retention does), and `Manager.Retain`, which the core worker runs from `Start` to `Stop` every 10 minutes, calls `Sweep` for the sessions no `Close` visits again. A record from before `closed_at` is aged by its file's modification time, which was its close. A session that is open is never removed, nor a directory with no record, nor one whose record cannot be read. Directories that are not writable (a Go module cache) are made writable to remove them.
+- Tests: `pkg/execution/session/retention_test.go` (open never, closed after the retention, tombstone, a close after the retention, off and the default, a record without `closed_at`, the timer).
+- Not done: the tombstones themselves stay (a few hundred bytes each), and a machine that never runs the new build keeps its old closed directories until it does.
+
 ## Session snapshots
 
 A session's directory can be kept in S3-compatible object storage, so that a session whose machine or pod is lost goes on somewhere else. It is in p7, for the host and the kubernetes backend alike. With no `--snapshot-bucket` there are no snapshots and nothing changes.

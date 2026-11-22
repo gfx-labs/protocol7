@@ -162,7 +162,10 @@ type fixture struct {
 	log     string
 }
 
-func open(t *testing.T) *fixture {
+func open(t *testing.T) *fixture { return openWith(t, nil) }
+
+// openWith is open with changes to the manager's configuration.
+func openWith(t *testing.T, change func(*session.Config)) *fixture {
 	t.Helper()
 	binary, err := os.Executable()
 	if err != nil {
@@ -175,10 +178,14 @@ func open(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{t: t, root: root, log: filepath.Join(root, "agent.log")}
-	f.manager, err = session.NewManager(session.Config{
+	config := session.Config{
 		Root: root, ShimBinary: binary,
 		Harness: session.Harness{Command: binary, Env: []string{agentLogEnv + "=" + f.log}},
-	})
+	}
+	if change != nil {
+		change(&config)
+	}
+	f.manager, err = session.NewManager(config)
 	if err != nil {
 		t.Fatal(err)
 	}
