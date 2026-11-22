@@ -192,23 +192,9 @@ type Result[P any] struct {
 	Detail string    `json:"detail,omitempty"`
 	Failed []Failure `json:"failed,omitempty"`
 	Spent  Money     `json:"spent"`
-}
-
-// Latest is each participant's newest position, in the order of the
-// participants. A participant that never answered has none.
-func (r Result[P]) Latest() []Position[P] {
-	var latest []Position[P]
-	seen := make(map[string]bool)
-	for index := len(r.Rounds) - 1; index >= 0; index-- {
-		for _, position := range r.Rounds[index] {
-			if !seen[position.Participant] {
-				seen[position.Participant] = true
-				latest = append(latest, position)
-			}
-		}
-	}
-	slices.Reverse(latest)
-	return latest
+	// Latest is each participant's newest position, in participant order. A
+	// participant that never answered has none.
+	Latest []Position[P] `json:"latest,omitempty"`
 }
 
 func (c Config[P]) validate() error {
@@ -301,7 +287,7 @@ func (r *runner[P]) ceiling(round int) Money {
 func (r *runner[P]) finish(ctx workflow.Context, stop, detail string) (Result[P], error) {
 	r.status.Phase, r.status.Stop = "done", stop
 	r.publish(ctx)
-	return Result[P]{Rounds: r.state.Rounds, Stop: stop, Detail: detail, Failed: r.state.Failed, Spent: r.state.Spent}, nil
+	return Result[P]{Rounds: r.state.Rounds, Stop: stop, Detail: detail, Failed: r.state.Failed, Spent: r.state.Spent, Latest: r.newest(r.config.Participants)}, nil
 }
 
 func (r *runner[P]) run(ctx workflow.Context) (Result[P], error) {
@@ -355,9 +341,12 @@ func (r *runner[P]) stopped() bool {
 }
 
 // latest is each live participant's newest position.
-func (r *runner[P]) latest() []Position[P] {
+func (r *runner[P]) latest() []Position[P] { return r.newest(r.live) }
+
+// newest is the newest position of each of the participants, in their order.
+func (r *runner[P]) newest(participants []Participant) []Position[P] {
 	var latest []Position[P]
-	for _, p := range r.live {
+	for _, p := range participants {
 		for index := len(r.state.Rounds) - 1; index >= 0; index-- {
 			found := false
 			for _, position := range r.state.Rounds[index] {

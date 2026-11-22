@@ -355,3 +355,25 @@ func TestQueryReportsTheFinishedPanel(t *testing.T) {
 		t.Errorf("status = %+v, want done at round 0 with 2000000 spent and both live", status)
 	}
 }
+
+// The result's latest positions come in the order of the participants, with a
+// participant that failed in the last round at its earlier position.
+func TestTheResultsLatestPositionsAreInParticipantOrder(t *testing.T) {
+	plan := Plan{
+		Participants: []panel.Participant{{Name: "A", Vendor: "anthropic"}, {Name: "B", Vendor: "openai"}, {Name: "C", Vendor: "anthropic"}},
+		MinVendors:   1, MaxRounds: 2,
+		Budget: panel.Budget{Cap: 100e6, Reserve: 10e6}, Ceiling: 5e6,
+		Script: map[string][]Say{
+			"A": {{Decision: "build"}, {Decision: "hold"}},
+			"B": {{Decision: "decline"}, {Fail: true}},
+			"C": {{Decision: "build"}, {Decision: "hold"}},
+		},
+	}
+	result, err := execute(t, environment(t), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decisions(result.Latest); got != "A=hold B=decline C=hold" {
+		t.Errorf("latest = %q, want A and C from round 1 and B from round 0, in participant order", got)
+	}
+}
