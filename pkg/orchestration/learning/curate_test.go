@@ -327,6 +327,7 @@ func TestCurateWorkflowRunsTheCurator(t *testing.T) {
 	assert.Equal(t, learning.TriggerManual, check.Trigger)
 	assert.Len(t, brief.Entries, 2)
 	assert.Equal(t, 1, brief.Left, "the entries the pass is not given")
+	assert.Equal(t, chatID, brief.Chat, "the brief names the chat it is for")
 }
 
 // The curator's chat is the session's request, with the pass as its owner and
@@ -453,6 +454,24 @@ func TestEnsureSchedule(t *testing.T) {
 		c, _, _ := scheduleMocks()
 		require.Error(t, learning.EnsureSchedule(ctx, c, learning.CurateInput{}))
 	})
+}
+
+// Turning the curator off deletes its schedule, and a namespace without one
+// is not an error.
+func TestRemoveSchedule(t *testing.T) {
+	ctx := context.Background()
+	c, _, handle := scheduleMocks()
+	handle.On("Delete", mock.Anything).Return(nil).Once()
+	removed, err := learning.RemoveSchedule(ctx, c)
+	require.NoError(t, err)
+	assert.True(t, removed)
+	handle.On("Delete", mock.Anything).Return(serviceerror.NewNotFound("none")).Once()
+	removed, err = learning.RemoveSchedule(ctx, c)
+	require.NoError(t, err)
+	assert.False(t, removed)
+	handle.On("Delete", mock.Anything).Return(assert.AnError).Once()
+	_, err = learning.RemoveSchedule(ctx, c)
+	assert.Error(t, err)
 }
 
 func scheduleMocks() (*mocks.Client, *mocks.ScheduleClient, *mocks.ScheduleHandle) {

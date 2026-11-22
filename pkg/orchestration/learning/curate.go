@@ -141,7 +141,10 @@ type CheckInput struct {
 // BriefRequest is the input of ActivityCurateBrief, which the app answers
 // with the curator's first message.
 type BriefRequest struct {
-	Pass    string    `json:"pass"`
+	Pass string `json:"pass"`
+	// Chat is the ID the curator's chat will have, so that the brief can
+	// name its branch.
+	Chat    string    `json:"chat"`
 	Trigger string    `json:"trigger,omitempty"`
 	Since   time.Time `json:"since,omitzero"`
 	// Entries are the open entries the pass is given, oldest first. Their
@@ -261,14 +264,14 @@ func CurateWorkflow(ctx workflow.Context, input CurateInput) (CurateResult, erro
 	}
 	result.Cursor = plan.Cursor
 
-	var brief Brief
-	request := BriefRequest{Pass: result.Pass, Trigger: result.Trigger, Since: plan.Since, Entries: plan.Open, Left: plan.OpenTotal - len(plan.Open)}
-	if err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, briefOptions), ActivityCurateBrief, request).Get(ctx, &brief); err != nil {
-		return result, fmt.Errorf("write the curator's brief: %s", base.Cause(err))
-	}
 	chatID, err := base.NewID(ctx)
 	if err != nil {
 		return result, err
+	}
+	var brief Brief
+	request := BriefRequest{Pass: result.Pass, Chat: chatID, Trigger: result.Trigger, Since: plan.Since, Entries: plan.Open, Left: plan.OpenTotal - len(plan.Open)}
+	if err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, briefOptions), ActivityCurateBrief, request).Get(ctx, &brief); err != nil {
+		return result, fmt.Errorf("write the curator's brief: %s", base.Cause(err))
 	}
 	result.Chat = chatID
 	chat := proto.Clone(input.Session).(*base.Request)

@@ -80,3 +80,15 @@ func StartPass(ctx context.Context, temporalClient client.Client, input CurateIn
 	}
 	return id, nil
 }
+
+// RemoveSchedule deletes the curator schedule, for a process that has the
+// curator off, so that turning it off sticks. It is not an error that there is
+// none. A pass that runs is left to end.
+func RemoveSchedule(ctx context.Context, temporalClient client.Client) (removed bool, err error) {
+	err = temporalClient.ScheduleClient().GetHandle(ctx, CurateScheduleID).Delete(ctx)
+	var missing *serviceerror.NotFound
+	if errors.As(err, &missing) {
+		return false, nil
+	}
+	return err == nil, err
+}
