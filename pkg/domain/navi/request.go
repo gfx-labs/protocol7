@@ -32,6 +32,11 @@ const (
 	KindProjectRequest Kind = "project-request"
 	// MemoTarget is the memo field that names the project a request asks.
 	MemoTarget = "target"
+	// MemoRequestTargets is the memo field that holds the projects a chat's
+	// project may ask. navi sends them there and not in the chat's input: a
+	// worker that predates the field in ChatRequest cannot decode an input that
+	// carries it, and a chat start must work whatever build the tenant runs.
+	MemoRequestTargets = "request_targets"
 	// RequestChatPrefix starts the id of a chat that a request started in the
 	// target project.
 	RequestChatPrefix = "pr"

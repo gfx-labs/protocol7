@@ -13,7 +13,10 @@ import (
 
 // DataConverter is the Temporal data converter that NewTemporalClient sets
 // when the options carry none. It encodes as the SDK's default converter
-// does. It also decodes a json/plain payload into a protobuf message with
+// does, and it ignores fields of a message that it does not know: navi and a
+// tenant's worker deploy separately, so a payload may come from a newer
+// contract than the worker's, and a field added to a navi.v1 message must not
+// stop an older worker from starting a chat. It also decodes a json/plain payload into a protobuf message with
 // protojson. Workflows whose payload types became navi.v1 messages recorded
 // their earlier payloads as json/plain from Go structs, and encoding/json
 // cannot read those into a message (an RFC 3339 time into a
@@ -24,7 +27,7 @@ func DataConverter() converter.DataConverter {
 	return converter.NewCompositeDataConverter(
 		converter.NewNilPayloadConverter(),
 		converter.NewByteSlicePayloadConverter(),
-		converter.NewProtoJSONPayloadConverter(),
+		converter.NewProtoJSONPayloadConverterWithOptions(converter.ProtoJSONPayloadConverterOptions{AllowUnknownFields: true}),
 		converter.NewProtoPayloadConverter(),
 		legacyJSONPayloadConverter{JSONPayloadConverter: converter.NewJSONPayloadConverter()},
 	)

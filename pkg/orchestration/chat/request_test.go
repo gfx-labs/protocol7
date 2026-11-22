@@ -491,3 +491,38 @@ func TestAnAcceptedRequestChatIsRemindedOnce(t *testing.T) {
 		t.Errorf("replies %+v, want only the acceptance", state.ProjectReplies)
 	}
 }
+
+// navi starts a chat with the projects it may ask in the memo, not in the
+// input, so that a worker that predates the field can decode the input. The
+// chat takes them from the memo, and offers project_request as if they had come
+// in the input.
+func TestAChatStartedWithItsTargetsInTheMemoCanAsk(t *testing.T) {
+	env, fake := newEnvironment(t)
+	state := newChat("hello")
+	state.Request.Project = "oku-review"
+	input := navi.ChatInput(&navi.ChatState{Request: &navi.ChatRequest{Id: "c1", Title: "t", Host: "test", Project: "oku-review", RequestTargets: []string{"selfdev"}}, Pending: state.Pending})
+	if len(input.Request.RequestTargets) != 0 {
+		t.Fatalf("the input carries %v", input.Request.RequestTargets)
+	}
+	input.Request.Repositories = state.Request.Repositories
+	env.SetMemoOnStart(navi.ChatMemo(&navi.ChatRequest{Title: "t", RequestTargets: []string{"selfdev"}}))
+	var seen []string
+	env.RegisterDelayedCallback(func() {
+		seen = queryState(t, env).Request.RequestTargets
+		env.SignalWorkflow(chat.SignalClose, &chat.Action{})
+	}, time.Minute)
+	env.ExecuteWorkflow(chat.WorkflowName, input)
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0] != "selfdev" {
+		t.Errorf("the chat's targets %v, want selfdev from the memo", seen)
+	}
+	var offered []string
+	for _, tool := range fake.opened[0].Tools {
+		offered = append(offered, tool.Name)
+	}
+	if got := strings.Join(offered, ","); !strings.HasSuffix(got, "project_request") {
+		t.Errorf("offered tools %s, want project_request", got)
+	}
+}
