@@ -177,6 +177,31 @@ type TurnResult struct {
 	FirstSeq  int64        `json:"first_seq"`
 	LastSeq   int64        `json:"last_seq"`
 	Failure   *TurnFailure `json:"failure,omitempty"`
+	// Usage is what the turn's model requests used. Nil when the harness
+	// reported none.
+	Usage *TurnUsage `json:"usage,omitempty"`
+}
+
+// TurnUsage sums the usage updates of one turn.
+type TurnUsage struct {
+	// Requests is how many model requests reported usage.
+	Requests int `json:"requests"`
+	// Tokens is the sum over the requests of the tokens each filled in its
+	// context (see UsageEvent.Tokens).
+	Tokens int64 `json:"tokens"`
+	// ByModel is the same count for each model that the harness named.
+	ByModel map[string]ModelUsage `json:"by_model,omitempty"`
+	// SessionCost is the session's cumulative cost after the turn's last
+	// request, when the harness knew every price. The cost of this turn alone
+	// is the difference from the last turn's value, which only the caller
+	// that ran both can take.
+	SessionCost *Cost `json:"session_cost,omitempty"`
+}
+
+// ModelUsage is the usage of one model in a turn.
+type ModelUsage struct {
+	Requests int   `json:"requests"`
+	Tokens   int64 `json:"tokens"`
 }
 
 // TextLimit bounds TurnResult.Text so a result stays far below Temporal's
