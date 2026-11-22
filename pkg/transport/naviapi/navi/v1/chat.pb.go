@@ -1993,23 +1993,30 @@ type ChatState struct {
 	Request     *ChatRequest           `protobuf:"bytes,8,opt,name=request,proto3" json:"request,omitempty"`
 	// status is a ChatStatus: opening, idle, running, escalated, closing,
 	// closed or failed.
-	Status        string            `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"`
-	Session       *Session          `protobuf:"bytes,10,opt,name=session,proto3" json:"session,omitempty"`
-	Pending       []*Message        `protobuf:"bytes,11,rep,name=pending,proto3" json:"pending,omitempty"`
-	Current       *Message          `protobuf:"bytes,12,opt,name=current,proto3" json:"current,omitempty"`
-	Turns         int32             `protobuf:"varint,13,opt,name=turns,proto3" json:"turns,omitempty"`
-	Closing       bool              `protobuf:"varint,14,opt,name=closing,proto3" json:"closing,omitempty"`
-	Resumes       int32             `protobuf:"varint,15,opt,name=resumes,proto3" json:"resumes,omitempty"`
-	Senders       map[string]string `protobuf:"bytes,16,rep,name=senders,proto3" json:"senders,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	StoppedBy     *Person           `protobuf:"bytes,17,opt,name=stopped_by,json=stoppedBy,proto3" json:"stopped_by,omitempty"`
-	ClosedBy      *Person           `protobuf:"bytes,18,opt,name=closed_by,json=closedBy,proto3" json:"closed_by,omitempty"`
-	Briefed       bool              `protobuf:"varint,19,opt,name=briefed,proto3" json:"briefed,omitempty"`
-	Learnings     int32             `protobuf:"varint,20,opt,name=learnings,proto3" json:"learnings,omitempty"`
-	LastLearning  string            `protobuf:"bytes,21,opt,name=last_learning,json=lastLearning,proto3" json:"last_learning,omitempty"`
-	Archived      bool              `protobuf:"varint,22,opt,name=archived,proto3" json:"archived,omitempty"`
-	Board         *Board            `protobuf:"bytes,23,opt,name=board,proto3" json:"board,omitempty"`
-	LastStop      string            `protobuf:"bytes,24,opt,name=last_stop,json=lastStop,proto3" json:"last_stop,omitempty"`
-	Error         string            `protobuf:"bytes,25,opt,name=error,proto3" json:"error,omitempty"`
+	Status       string            `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"`
+	Session      *Session          `protobuf:"bytes,10,opt,name=session,proto3" json:"session,omitempty"`
+	Pending      []*Message        `protobuf:"bytes,11,rep,name=pending,proto3" json:"pending,omitempty"`
+	Current      *Message          `protobuf:"bytes,12,opt,name=current,proto3" json:"current,omitempty"`
+	Turns        int32             `protobuf:"varint,13,opt,name=turns,proto3" json:"turns,omitempty"`
+	Closing      bool              `protobuf:"varint,14,opt,name=closing,proto3" json:"closing,omitempty"`
+	Resumes      int32             `protobuf:"varint,15,opt,name=resumes,proto3" json:"resumes,omitempty"`
+	Senders      map[string]string `protobuf:"bytes,16,rep,name=senders,proto3" json:"senders,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	StoppedBy    *Person           `protobuf:"bytes,17,opt,name=stopped_by,json=stoppedBy,proto3" json:"stopped_by,omitempty"`
+	ClosedBy     *Person           `protobuf:"bytes,18,opt,name=closed_by,json=closedBy,proto3" json:"closed_by,omitempty"`
+	Briefed      bool              `protobuf:"varint,19,opt,name=briefed,proto3" json:"briefed,omitempty"`
+	Learnings    int32             `protobuf:"varint,20,opt,name=learnings,proto3" json:"learnings,omitempty"`
+	LastLearning string            `protobuf:"bytes,21,opt,name=last_learning,json=lastLearning,proto3" json:"last_learning,omitempty"`
+	Archived     bool              `protobuf:"varint,22,opt,name=archived,proto3" json:"archived,omitempty"`
+	Board        *Board            `protobuf:"bytes,23,opt,name=board,proto3" json:"board,omitempty"`
+	LastStop     string            `protobuf:"bytes,24,opt,name=last_stop,json=lastStop,proto3" json:"last_stop,omitempty"`
+	Error        string            `protobuf:"bytes,25,opt,name=error,proto3" json:"error,omitempty"`
+	// project_requests are the requests this chat sent to other projects.
+	ProjectRequests []*ProjectRequestRef `protobuf:"bytes,26,rep,name=project_requests,json=projectRequests,proto3" json:"project_requests,omitempty"`
+	// project_replies are the answers a chat that a project request started
+	// gave, in order. navi reads them and hands them to the requesting chat.
+	ProjectReplies []*ProjectReply `protobuf:"bytes,27,rep,name=project_replies,json=projectReplies,proto3" json:"project_replies,omitempty"`
+	// request_nudges counts the reminders to answer that a request chat got.
+	RequestNudges int32 `protobuf:"varint,28,opt,name=request_nudges,json=requestNudges,proto3" json:"request_nudges,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2219,32 +2226,61 @@ func (x *ChatState) GetError() string {
 	return ""
 }
 
+func (x *ChatState) GetProjectRequests() []*ProjectRequestRef {
+	if x != nil {
+		return x.ProjectRequests
+	}
+	return nil
+}
+
+func (x *ChatState) GetProjectReplies() []*ProjectReply {
+	if x != nil {
+		return x.ProjectReplies
+	}
+	return nil
+}
+
+func (x *ChatState) GetRequestNudges() int32 {
+	if x != nil {
+		return x.RequestNudges
+	}
+	return 0
+}
+
 // ChatRequest describes a chat as it was started.
 type ChatRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
-	StartedBy     *Person                `protobuf:"bytes,3,opt,name=started_by,json=startedBy,proto3" json:"started_by,omitempty"`
-	Host          string                 `protobuf:"bytes,4,opt,name=host,proto3" json:"host,omitempty"`
-	Backend       string                 `protobuf:"bytes,5,opt,name=backend,proto3" json:"backend,omitempty"`
-	Model         string                 `protobuf:"bytes,6,opt,name=model,proto3" json:"model,omitempty"`
-	Models        []string               `protobuf:"bytes,7,rep,name=models,proto3" json:"models,omitempty"`
-	Repositories  []*Repository          `protobuf:"bytes,8,rep,name=repositories,proto3" json:"repositories,omitempty"`
-	Issue         *Issue                 `protobuf:"bytes,9,opt,name=issue,proto3" json:"issue,omitempty"`
-	Owner         string                 `protobuf:"bytes,10,opt,name=owner,proto3" json:"owner,omitempty"`
-	Escalation    *Escalation            `protobuf:"bytes,11,opt,name=escalation,proto3" json:"escalation,omitempty"`
-	Project       string                 `protobuf:"bytes,12,opt,name=project,proto3" json:"project,omitempty"`
-	Restricted    bool                   `protobuf:"varint,13,opt,name=restricted,proto3" json:"restricted,omitempty"`
-	Scope         *Scope                 `protobuf:"bytes,14,opt,name=scope,proto3" json:"scope,omitempty"`
-	Parent        string                 `protobuf:"bytes,15,opt,name=parent,proto3" json:"parent,omitempty"`
-	Depth         int32                  `protobuf:"varint,16,opt,name=depth,proto3" json:"depth,omitempty"`
-	Handler       bool                   `protobuf:"varint,17,opt,name=handler,proto3" json:"handler,omitempty"`
-	PoolScope     string                 `protobuf:"bytes,18,opt,name=pool_scope,json=poolScope,proto3" json:"pool_scope,omitempty"`
-	Pool          string                 `protobuf:"bytes,19,opt,name=pool,proto3" json:"pool,omitempty"`
-	Serves        *Serving               `protobuf:"bytes,20,opt,name=serves,proto3" json:"serves,omitempty"`
-	ReviewHint    string                 `protobuf:"bytes,21,opt,name=review_hint,json=reviewHint,proto3" json:"review_hint,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Title        string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	StartedBy    *Person                `protobuf:"bytes,3,opt,name=started_by,json=startedBy,proto3" json:"started_by,omitempty"`
+	Host         string                 `protobuf:"bytes,4,opt,name=host,proto3" json:"host,omitempty"`
+	Backend      string                 `protobuf:"bytes,5,opt,name=backend,proto3" json:"backend,omitempty"`
+	Model        string                 `protobuf:"bytes,6,opt,name=model,proto3" json:"model,omitempty"`
+	Models       []string               `protobuf:"bytes,7,rep,name=models,proto3" json:"models,omitempty"`
+	Repositories []*Repository          `protobuf:"bytes,8,rep,name=repositories,proto3" json:"repositories,omitempty"`
+	Issue        *Issue                 `protobuf:"bytes,9,opt,name=issue,proto3" json:"issue,omitempty"`
+	Owner        string                 `protobuf:"bytes,10,opt,name=owner,proto3" json:"owner,omitempty"`
+	Escalation   *Escalation            `protobuf:"bytes,11,opt,name=escalation,proto3" json:"escalation,omitempty"`
+	Project      string                 `protobuf:"bytes,12,opt,name=project,proto3" json:"project,omitempty"`
+	Restricted   bool                   `protobuf:"varint,13,opt,name=restricted,proto3" json:"restricted,omitempty"`
+	Scope        *Scope                 `protobuf:"bytes,14,opt,name=scope,proto3" json:"scope,omitempty"`
+	Parent       string                 `protobuf:"bytes,15,opt,name=parent,proto3" json:"parent,omitempty"`
+	Depth        int32                  `protobuf:"varint,16,opt,name=depth,proto3" json:"depth,omitempty"`
+	Handler      bool                   `protobuf:"varint,17,opt,name=handler,proto3" json:"handler,omitempty"`
+	PoolScope    string                 `protobuf:"bytes,18,opt,name=pool_scope,json=poolScope,proto3" json:"pool_scope,omitempty"`
+	Pool         string                 `protobuf:"bytes,19,opt,name=pool,proto3" json:"pool,omitempty"`
+	Serves       *Serving               `protobuf:"bytes,20,opt,name=serves,proto3" json:"serves,omitempty"`
+	ReviewHint   string                 `protobuf:"bytes,21,opt,name=review_hint,json=reviewHint,proto3" json:"review_hint,omitempty"`
+	// request_targets are the projects this chat may send requests to
+	// (project_request). navi sets them from its configuration when it starts
+	// the chat, and a child holds its parent's.
+	RequestTargets []string `protobuf:"bytes,22,rep,name=request_targets,json=requestTargets,proto3" json:"request_targets,omitempty"`
+	// project_request is set on a chat that a request from another project
+	// started. Its input is untrusted, and it answers with
+	// project_request_reply.
+	ProjectRequest *ProjectOrigin `protobuf:"bytes,23,opt,name=project_request,json=projectRequest,proto3" json:"project_request,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ChatRequest) Reset() {
@@ -2424,6 +2460,272 @@ func (x *ChatRequest) GetReviewHint() string {
 	return ""
 }
 
+func (x *ChatRequest) GetRequestTargets() []string {
+	if x != nil {
+		return x.RequestTargets
+	}
+	return nil
+}
+
+func (x *ChatRequest) GetProjectRequest() *ProjectOrigin {
+	if x != nil {
+		return x.ProjectRequest
+	}
+	return nil
+}
+
+// ProjectOrigin names the request from another project that started a chat.
+// navi sets it from the namespace it read the request in, never from what the
+// requesting chat claims.
+type ProjectOrigin struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// project is the requesting project.
+	Project string `protobuf:"bytes,1,opt,name=project,proto3" json:"project,omitempty"`
+	// request is the id of the request in the requesting project.
+	Request string `protobuf:"bytes,2,opt,name=request,proto3" json:"request,omitempty"`
+	// chat is the requesting chat's id there.
+	Chat          string `protobuf:"bytes,3,opt,name=chat,proto3" json:"chat,omitempty"`
+	Title         string `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProjectOrigin) Reset() {
+	*x = ProjectOrigin{}
+	mi := &file_navi_v1_chat_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectOrigin) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectOrigin) ProtoMessage() {}
+
+func (x *ProjectOrigin) ProtoReflect() protoreflect.Message {
+	mi := &file_navi_v1_chat_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectOrigin.ProtoReflect.Descriptor instead.
+func (*ProjectOrigin) Descriptor() ([]byte, []int) {
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ProjectOrigin) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *ProjectOrigin) GetRequest() string {
+	if x != nil {
+		return x.Request
+	}
+	return ""
+}
+
+func (x *ProjectOrigin) GetChat() string {
+	if x != nil {
+		return x.Chat
+	}
+	return ""
+}
+
+func (x *ProjectOrigin) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+// ProjectReply is one answer to a project request.
+type ProjectReply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// seq counts the answers to one request from 1.
+	Seq int32 `protobuf:"varint,1,opt,name=seq,proto3" json:"seq,omitempty"`
+	// outcome is accepted, redirected, declined or done.
+	Outcome string `protobuf:"bytes,2,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	Text    string `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
+	// reference is the issue or pull request the target delivers with.
+	Reference string `protobuf:"bytes,4,opt,name=reference,proto3" json:"reference,omitempty"`
+	// by names who answered: the target's chat, or navi.
+	By            string                 `protobuf:"bytes,5,opt,name=by,proto3" json:"by,omitempty"`
+	At            *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=at,proto3" json:"at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProjectReply) Reset() {
+	*x = ProjectReply{}
+	mi := &file_navi_v1_chat_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectReply) ProtoMessage() {}
+
+func (x *ProjectReply) ProtoReflect() protoreflect.Message {
+	mi := &file_navi_v1_chat_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectReply.ProtoReflect.Descriptor instead.
+func (*ProjectReply) Descriptor() ([]byte, []int) {
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ProjectReply) GetSeq() int32 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *ProjectReply) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *ProjectReply) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ProjectReply) GetReference() string {
+	if x != nil {
+		return x.Reference
+	}
+	return ""
+}
+
+func (x *ProjectReply) GetBy() string {
+	if x != nil {
+		return x.By
+	}
+	return ""
+}
+
+func (x *ProjectReply) GetAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.At
+	}
+	return nil
+}
+
+// ProjectRequestRef is what a chat keeps of a request it sent to another
+// project.
+type ProjectRequestRef struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Id     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Title  string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Target string                 `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// status is a ProjectRequestStatus.
+	Status string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	// target_chat is the chat that works on it in the target project.
+	TargetChat string `protobuf:"bytes,5,opt,name=target_chat,json=targetChat,proto3" json:"target_chat,omitempty"`
+	// last_reply is the number of the last answer the chat took.
+	LastReply     int32 `protobuf:"varint,6,opt,name=last_reply,json=lastReply,proto3" json:"last_reply,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProjectRequestRef) Reset() {
+	*x = ProjectRequestRef{}
+	mi := &file_navi_v1_chat_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProjectRequestRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProjectRequestRef) ProtoMessage() {}
+
+func (x *ProjectRequestRef) ProtoReflect() protoreflect.Message {
+	mi := &file_navi_v1_chat_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProjectRequestRef.ProtoReflect.Descriptor instead.
+func (*ProjectRequestRef) Descriptor() ([]byte, []int) {
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *ProjectRequestRef) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ProjectRequestRef) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ProjectRequestRef) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *ProjectRequestRef) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ProjectRequestRef) GetTargetChat() string {
+	if x != nil {
+		return x.TargetChat
+	}
+	return ""
+}
+
+func (x *ProjectRequestRef) GetLastReply() int32 {
+	if x != nil {
+		return x.LastReply
+	}
+	return 0
+}
+
 // Repository is one repository cloned into a chat's session.
 type Repository struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2435,7 +2737,7 @@ type Repository struct {
 
 func (x *Repository) Reset() {
 	*x = Repository{}
-	mi := &file_navi_v1_chat_proto_msgTypes[38]
+	mi := &file_navi_v1_chat_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2447,7 +2749,7 @@ func (x *Repository) String() string {
 func (*Repository) ProtoMessage() {}
 
 func (x *Repository) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[38]
+	mi := &file_navi_v1_chat_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2460,7 +2762,7 @@ func (x *Repository) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Repository.ProtoReflect.Descriptor instead.
 func (*Repository) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{38}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *Repository) GetName() string {
@@ -2489,7 +2791,7 @@ type Issue struct {
 
 func (x *Issue) Reset() {
 	*x = Issue{}
-	mi := &file_navi_v1_chat_proto_msgTypes[39]
+	mi := &file_navi_v1_chat_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2501,7 +2803,7 @@ func (x *Issue) String() string {
 func (*Issue) ProtoMessage() {}
 
 func (x *Issue) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[39]
+	mi := &file_navi_v1_chat_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2514,7 +2816,7 @@ func (x *Issue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Issue.ProtoReflect.Descriptor instead.
 func (*Issue) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{39}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *Issue) GetRepo() string {
@@ -2542,7 +2844,7 @@ type Escalation struct {
 
 func (x *Escalation) Reset() {
 	*x = Escalation{}
-	mi := &file_navi_v1_chat_proto_msgTypes[40]
+	mi := &file_navi_v1_chat_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2554,7 +2856,7 @@ func (x *Escalation) String() string {
 func (*Escalation) ProtoMessage() {}
 
 func (x *Escalation) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[40]
+	mi := &file_navi_v1_chat_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2567,7 +2869,7 @@ func (x *Escalation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Escalation.ProtoReflect.Descriptor instead.
 func (*Escalation) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{40}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *Escalation) GetReason() string {
@@ -2588,7 +2890,7 @@ type Serving struct {
 
 func (x *Serving) Reset() {
 	*x = Serving{}
-	mi := &file_navi_v1_chat_proto_msgTypes[41]
+	mi := &file_navi_v1_chat_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2600,7 +2902,7 @@ func (x *Serving) String() string {
 func (*Serving) ProtoMessage() {}
 
 func (x *Serving) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[41]
+	mi := &file_navi_v1_chat_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2613,7 +2915,7 @@ func (x *Serving) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Serving.ProtoReflect.Descriptor instead.
 func (*Serving) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{41}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *Serving) GetEscalation() string {
@@ -2644,7 +2946,7 @@ type Scope struct {
 
 func (x *Scope) Reset() {
 	*x = Scope{}
-	mi := &file_navi_v1_chat_proto_msgTypes[42]
+	mi := &file_navi_v1_chat_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2656,7 +2958,7 @@ func (x *Scope) String() string {
 func (*Scope) ProtoMessage() {}
 
 func (x *Scope) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[42]
+	mi := &file_navi_v1_chat_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2669,7 +2971,7 @@ func (x *Scope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Scope.ProtoReflect.Descriptor instead.
 func (*Scope) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{42}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *Scope) GetProject() string {
@@ -2707,7 +3009,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_navi_v1_chat_proto_msgTypes[43]
+	mi := &file_navi_v1_chat_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2719,7 +3021,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[43]
+	mi := &file_navi_v1_chat_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2732,7 +3034,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{43}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *Message) GetId() string {
@@ -2787,7 +3089,7 @@ type Pick struct {
 
 func (x *Pick) Reset() {
 	*x = Pick{}
-	mi := &file_navi_v1_chat_proto_msgTypes[44]
+	mi := &file_navi_v1_chat_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2799,7 +3101,7 @@ func (x *Pick) String() string {
 func (*Pick) ProtoMessage() {}
 
 func (x *Pick) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[44]
+	mi := &file_navi_v1_chat_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2812,7 +3114,7 @@ func (x *Pick) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pick.ProtoReflect.Descriptor instead.
 func (*Pick) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{44}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *Pick) GetArtboard() string {
@@ -2895,7 +3197,7 @@ type Report struct {
 
 func (x *Report) Reset() {
 	*x = Report{}
-	mi := &file_navi_v1_chat_proto_msgTypes[45]
+	mi := &file_navi_v1_chat_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2907,7 +3209,7 @@ func (x *Report) String() string {
 func (*Report) ProtoMessage() {}
 
 func (x *Report) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[45]
+	mi := &file_navi_v1_chat_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2920,7 +3222,7 @@ func (x *Report) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Report.ProtoReflect.Descriptor instead.
 func (*Report) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{45}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *Report) GetChatId() string {
@@ -3036,7 +3338,7 @@ type EscalationRef struct {
 
 func (x *EscalationRef) Reset() {
 	*x = EscalationRef{}
-	mi := &file_navi_v1_chat_proto_msgTypes[46]
+	mi := &file_navi_v1_chat_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3048,7 +3350,7 @@ func (x *EscalationRef) String() string {
 func (*EscalationRef) ProtoMessage() {}
 
 func (x *EscalationRef) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[46]
+	mi := &file_navi_v1_chat_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3061,7 +3363,7 @@ func (x *EscalationRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EscalationRef.ProtoReflect.Descriptor instead.
 func (*EscalationRef) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{46}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *EscalationRef) GetId() string {
@@ -3103,7 +3405,7 @@ type Probe struct {
 
 func (x *Probe) Reset() {
 	*x = Probe{}
-	mi := &file_navi_v1_chat_proto_msgTypes[47]
+	mi := &file_navi_v1_chat_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3115,7 +3417,7 @@ func (x *Probe) String() string {
 func (*Probe) ProtoMessage() {}
 
 func (x *Probe) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[47]
+	mi := &file_navi_v1_chat_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3128,7 +3430,7 @@ func (x *Probe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Probe.ProtoReflect.Descriptor instead.
 func (*Probe) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{47}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *Probe) GetKind() string {
@@ -3160,7 +3462,7 @@ type Child struct {
 
 func (x *Child) Reset() {
 	*x = Child{}
-	mi := &file_navi_v1_chat_proto_msgTypes[48]
+	mi := &file_navi_v1_chat_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3172,7 +3474,7 @@ func (x *Child) String() string {
 func (*Child) ProtoMessage() {}
 
 func (x *Child) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[48]
+	mi := &file_navi_v1_chat_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3185,7 +3487,7 @@ func (x *Child) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Child.ProtoReflect.Descriptor instead.
 func (*Child) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{48}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *Child) GetId() string {
@@ -3241,7 +3543,7 @@ type OperatorAccess struct {
 
 func (x *OperatorAccess) Reset() {
 	*x = OperatorAccess{}
-	mi := &file_navi_v1_chat_proto_msgTypes[49]
+	mi := &file_navi_v1_chat_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3253,7 +3555,7 @@ func (x *OperatorAccess) String() string {
 func (*OperatorAccess) ProtoMessage() {}
 
 func (x *OperatorAccess) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[49]
+	mi := &file_navi_v1_chat_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3266,7 +3568,7 @@ func (x *OperatorAccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperatorAccess.ProtoReflect.Descriptor instead.
 func (*OperatorAccess) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{49}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *OperatorAccess) GetCount() int32 {
@@ -3297,7 +3599,7 @@ type OperatorIssued struct {
 
 func (x *OperatorIssued) Reset() {
 	*x = OperatorIssued{}
-	mi := &file_navi_v1_chat_proto_msgTypes[50]
+	mi := &file_navi_v1_chat_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3309,7 +3611,7 @@ func (x *OperatorIssued) String() string {
 func (*OperatorIssued) ProtoMessage() {}
 
 func (x *OperatorIssued) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[50]
+	mi := &file_navi_v1_chat_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3322,7 +3624,7 @@ func (x *OperatorIssued) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperatorIssued.ProtoReflect.Descriptor instead.
 func (*OperatorIssued) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{50}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *OperatorIssued) GetAt() *timestamppb.Timestamp {
@@ -3364,7 +3666,7 @@ type Lease struct {
 
 func (x *Lease) Reset() {
 	*x = Lease{}
-	mi := &file_navi_v1_chat_proto_msgTypes[51]
+	mi := &file_navi_v1_chat_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3376,7 +3678,7 @@ func (x *Lease) String() string {
 func (*Lease) ProtoMessage() {}
 
 func (x *Lease) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[51]
+	mi := &file_navi_v1_chat_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3389,7 +3691,7 @@ func (x *Lease) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Lease.ProtoReflect.Descriptor instead.
 func (*Lease) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{51}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *Lease) GetLimit() string {
@@ -3417,7 +3719,7 @@ type Board struct {
 
 func (x *Board) Reset() {
 	*x = Board{}
-	mi := &file_navi_v1_chat_proto_msgTypes[52]
+	mi := &file_navi_v1_chat_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3429,7 +3731,7 @@ func (x *Board) String() string {
 func (*Board) ProtoMessage() {}
 
 func (x *Board) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[52]
+	mi := &file_navi_v1_chat_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3442,7 +3744,7 @@ func (x *Board) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Board.ProtoReflect.Descriptor instead.
 func (*Board) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{52}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *Board) GetDir() string {
@@ -3468,7 +3770,7 @@ type Session struct {
 
 func (x *Session) Reset() {
 	*x = Session{}
-	mi := &file_navi_v1_chat_proto_msgTypes[53]
+	mi := &file_navi_v1_chat_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3480,7 +3782,7 @@ func (x *Session) String() string {
 func (*Session) ProtoMessage() {}
 
 func (x *Session) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[53]
+	mi := &file_navi_v1_chat_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3493,7 +3795,7 @@ func (x *Session) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Session.ProtoReflect.Descriptor instead.
 func (*Session) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{53}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *Session) GetId() string {
@@ -3558,7 +3860,7 @@ type ResolvedInput struct {
 
 func (x *ResolvedInput) Reset() {
 	*x = ResolvedInput{}
-	mi := &file_navi_v1_chat_proto_msgTypes[54]
+	mi := &file_navi_v1_chat_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3570,7 +3872,7 @@ func (x *ResolvedInput) String() string {
 func (*ResolvedInput) ProtoMessage() {}
 
 func (x *ResolvedInput) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[54]
+	mi := &file_navi_v1_chat_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3583,7 +3885,7 @@ func (x *ResolvedInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolvedInput.ProtoReflect.Descriptor instead.
 func (*ResolvedInput) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{54}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ResolvedInput) GetDestination() string {
@@ -3628,7 +3930,7 @@ type SessionPool struct {
 
 func (x *SessionPool) Reset() {
 	*x = SessionPool{}
-	mi := &file_navi_v1_chat_proto_msgTypes[55]
+	mi := &file_navi_v1_chat_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3640,7 +3942,7 @@ func (x *SessionPool) String() string {
 func (*SessionPool) ProtoMessage() {}
 
 func (x *SessionPool) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[55]
+	mi := &file_navi_v1_chat_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3653,7 +3955,7 @@ func (x *SessionPool) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionPool.ProtoReflect.Descriptor instead.
 func (*SessionPool) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{55}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *SessionPool) GetName() string {
@@ -3703,7 +4005,7 @@ type PodSpec struct {
 
 func (x *PodSpec) Reset() {
 	*x = PodSpec{}
-	mi := &file_navi_v1_chat_proto_msgTypes[56]
+	mi := &file_navi_v1_chat_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3715,7 +4017,7 @@ func (x *PodSpec) String() string {
 func (*PodSpec) ProtoMessage() {}
 
 func (x *PodSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[56]
+	mi := &file_navi_v1_chat_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3728,7 +4030,7 @@ func (x *PodSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PodSpec.ProtoReflect.Descriptor instead.
 func (*PodSpec) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{56}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *PodSpec) GetImage() string {
@@ -3774,7 +4076,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_navi_v1_chat_proto_msgTypes[57]
+	mi := &file_navi_v1_chat_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3786,7 +4088,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[57]
+	mi := &file_navi_v1_chat_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3799,7 +4101,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{57}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *SessionEvent) GetSession() string {
@@ -3881,7 +4183,7 @@ type ToolEvent struct {
 
 func (x *ToolEvent) Reset() {
 	*x = ToolEvent{}
-	mi := &file_navi_v1_chat_proto_msgTypes[58]
+	mi := &file_navi_v1_chat_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3893,7 +4195,7 @@ func (x *ToolEvent) String() string {
 func (*ToolEvent) ProtoMessage() {}
 
 func (x *ToolEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[58]
+	mi := &file_navi_v1_chat_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3906,7 +4208,7 @@ func (x *ToolEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolEvent.ProtoReflect.Descriptor instead.
 func (*ToolEvent) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{58}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ToolEvent) GetId() string {
@@ -3963,7 +4265,7 @@ type PlanEntry struct {
 
 func (x *PlanEntry) Reset() {
 	*x = PlanEntry{}
-	mi := &file_navi_v1_chat_proto_msgTypes[59]
+	mi := &file_navi_v1_chat_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3975,7 +4277,7 @@ func (x *PlanEntry) String() string {
 func (*PlanEntry) ProtoMessage() {}
 
 func (x *PlanEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[59]
+	mi := &file_navi_v1_chat_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3988,7 +4290,7 @@ func (x *PlanEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlanEntry.ProtoReflect.Descriptor instead.
 func (*PlanEntry) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{59}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *PlanEntry) GetContent() string {
@@ -4023,7 +4325,7 @@ type TurnEnd struct {
 
 func (x *TurnEnd) Reset() {
 	*x = TurnEnd{}
-	mi := &file_navi_v1_chat_proto_msgTypes[60]
+	mi := &file_navi_v1_chat_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4035,7 +4337,7 @@ func (x *TurnEnd) String() string {
 func (*TurnEnd) ProtoMessage() {}
 
 func (x *TurnEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[60]
+	mi := &file_navi_v1_chat_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4048,7 +4350,7 @@ func (x *TurnEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnEnd.ProtoReflect.Descriptor instead.
 func (*TurnEnd) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{60}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *TurnEnd) GetStopReason() string {
@@ -4079,7 +4381,7 @@ type TurnFailure struct {
 
 func (x *TurnFailure) Reset() {
 	*x = TurnFailure{}
-	mi := &file_navi_v1_chat_proto_msgTypes[61]
+	mi := &file_navi_v1_chat_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4091,7 +4393,7 @@ func (x *TurnFailure) String() string {
 func (*TurnFailure) ProtoMessage() {}
 
 func (x *TurnFailure) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[61]
+	mi := &file_navi_v1_chat_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4104,7 +4406,7 @@ func (x *TurnFailure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TurnFailure.ProtoReflect.Descriptor instead.
 func (*TurnFailure) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{61}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *TurnFailure) GetKind() string {
@@ -4154,7 +4456,7 @@ type Pick_Box struct {
 
 func (x *Pick_Box) Reset() {
 	*x = Pick_Box{}
-	mi := &file_navi_v1_chat_proto_msgTypes[64]
+	mi := &file_navi_v1_chat_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4166,7 +4468,7 @@ func (x *Pick_Box) String() string {
 func (*Pick_Box) ProtoMessage() {}
 
 func (x *Pick_Box) ProtoReflect() protoreflect.Message {
-	mi := &file_navi_v1_chat_proto_msgTypes[64]
+	mi := &file_navi_v1_chat_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4179,7 +4481,7 @@ func (x *Pick_Box) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pick_Box.ProtoReflect.Descriptor instead.
 func (*Pick_Box) Descriptor() ([]byte, []int) {
-	return file_navi_v1_chat_proto_rawDescGZIP(), []int{44, 0}
+	return file_navi_v1_chat_proto_rawDescGZIP(), []int{47, 0}
 }
 
 func (x *Pick_Box) GetX() int32 {
@@ -4328,7 +4630,7 @@ const file_navi_v1_chat_proto_rawDesc = "" +
 	"\x05Retry\x12\x1a\n" +
 	"\bactivity\x18\x01 \x01(\tR\bactivity\x12\x18\n" +
 	"\aattempt\x18\x02 \x01(\x05R\aattempt\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\x85\b\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\xb3\t\n" +
 	"\tChatState\x12&\n" +
 	"\x06probes\x18\x01 \x03(\v2\x0e.navi.v1.ProbeR\x06probes\x123\n" +
 	"\boperator\x18\x02 \x01(\v2\x17.navi.v1.OperatorAccessR\boperator\x12*\n" +
@@ -4356,10 +4658,13 @@ const file_navi_v1_chat_proto_rawDesc = "" +
 	"\barchived\x18\x16 \x01(\bR\barchived\x12$\n" +
 	"\x05board\x18\x17 \x01(\v2\x0e.navi.v1.BoardR\x05board\x12\x1b\n" +
 	"\tlast_stop\x18\x18 \x01(\tR\blastStop\x12\x14\n" +
-	"\x05error\x18\x19 \x01(\tR\x05error\x1a:\n" +
+	"\x05error\x18\x19 \x01(\tR\x05error\x12E\n" +
+	"\x10project_requests\x18\x1a \x03(\v2\x1a.navi.v1.ProjectRequestRefR\x0fprojectRequests\x12>\n" +
+	"\x0fproject_replies\x18\x1b \x03(\v2\x15.navi.v1.ProjectReplyR\x0eprojectReplies\x12%\n" +
+	"\x0erequest_nudges\x18\x1c \x01(\x05R\rrequestNudges\x1a:\n" +
 	"\fSendersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8f\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf9\x05\n" +
 	"\vChatRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12.\n" +
@@ -4389,7 +4694,30 @@ const file_navi_v1_chat_proto_rawDesc = "" +
 	"\x04pool\x18\x13 \x01(\tR\x04pool\x12(\n" +
 	"\x06serves\x18\x14 \x01(\v2\x10.navi.v1.ServingR\x06serves\x12\x1f\n" +
 	"\vreview_hint\x18\x15 \x01(\tR\n" +
-	"reviewHint\"2\n" +
+	"reviewHint\x12'\n" +
+	"\x0frequest_targets\x18\x16 \x03(\tR\x0erequestTargets\x12?\n" +
+	"\x0fproject_request\x18\x17 \x01(\v2\x16.navi.v1.ProjectOriginR\x0eprojectRequest\"m\n" +
+	"\rProjectOrigin\x12\x18\n" +
+	"\aproject\x18\x01 \x01(\tR\aproject\x12\x18\n" +
+	"\arequest\x18\x02 \x01(\tR\arequest\x12\x12\n" +
+	"\x04chat\x18\x03 \x01(\tR\x04chat\x12\x14\n" +
+	"\x05title\x18\x04 \x01(\tR\x05title\"\xa8\x01\n" +
+	"\fProjectReply\x12\x10\n" +
+	"\x03seq\x18\x01 \x01(\x05R\x03seq\x12\x18\n" +
+	"\aoutcome\x18\x02 \x01(\tR\aoutcome\x12\x12\n" +
+	"\x04text\x18\x03 \x01(\tR\x04text\x12\x1c\n" +
+	"\treference\x18\x04 \x01(\tR\treference\x12\x0e\n" +
+	"\x02by\x18\x05 \x01(\tR\x02by\x12*\n" +
+	"\x02at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x02at\"\xa9\x01\n" +
+	"\x11ProjectRequestRef\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12\x16\n" +
+	"\x06target\x18\x03 \x01(\tR\x06target\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1f\n" +
+	"\vtarget_chat\x18\x05 \x01(\tR\n" +
+	"targetChat\x12\x1d\n" +
+	"\n" +
+	"last_reply\x18\x06 \x01(\x05R\tlastReply\"2\n" +
 	"\n" +
 	"Repository\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
@@ -4580,7 +4908,7 @@ func file_navi_v1_chat_proto_rawDescGZIP() []byte {
 	return file_navi_v1_chat_proto_rawDescData
 }
 
-var file_navi_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 68)
+var file_navi_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
 var file_navi_v1_chat_proto_goTypes = []any{
 	(*ListChatsRequest)(nil),          // 0: navi.v1.ListChatsRequest
 	(*ListChatsResponse)(nil),         // 1: navi.v1.ListChatsResponse
@@ -4620,39 +4948,42 @@ var file_navi_v1_chat_proto_goTypes = []any{
 	(*Retry)(nil),                     // 35: navi.v1.Retry
 	(*ChatState)(nil),                 // 36: navi.v1.ChatState
 	(*ChatRequest)(nil),               // 37: navi.v1.ChatRequest
-	(*Repository)(nil),                // 38: navi.v1.Repository
-	(*Issue)(nil),                     // 39: navi.v1.Issue
-	(*Escalation)(nil),                // 40: navi.v1.Escalation
-	(*Serving)(nil),                   // 41: navi.v1.Serving
-	(*Scope)(nil),                     // 42: navi.v1.Scope
-	(*Message)(nil),                   // 43: navi.v1.Message
-	(*Pick)(nil),                      // 44: navi.v1.Pick
-	(*Report)(nil),                    // 45: navi.v1.Report
-	(*EscalationRef)(nil),             // 46: navi.v1.EscalationRef
-	(*Probe)(nil),                     // 47: navi.v1.Probe
-	(*Child)(nil),                     // 48: navi.v1.Child
-	(*OperatorAccess)(nil),            // 49: navi.v1.OperatorAccess
-	(*OperatorIssued)(nil),            // 50: navi.v1.OperatorIssued
-	(*Lease)(nil),                     // 51: navi.v1.Lease
-	(*Board)(nil),                     // 52: navi.v1.Board
-	(*Session)(nil),                   // 53: navi.v1.Session
-	(*ResolvedInput)(nil),             // 54: navi.v1.ResolvedInput
-	(*SessionPool)(nil),               // 55: navi.v1.SessionPool
-	(*PodSpec)(nil),                   // 56: navi.v1.PodSpec
-	(*SessionEvent)(nil),              // 57: navi.v1.SessionEvent
-	(*ToolEvent)(nil),                 // 58: navi.v1.ToolEvent
-	(*PlanEntry)(nil),                 // 59: navi.v1.PlanEntry
-	(*TurnEnd)(nil),                   // 60: navi.v1.TurnEnd
-	(*TurnFailure)(nil),               // 61: navi.v1.TurnFailure
-	nil,                               // 62: navi.v1.ChatState.SendersEntry
-	nil,                               // 63: navi.v1.Scope.PermissionsEntry
-	(*Pick_Box)(nil),                  // 64: navi.v1.Pick.Box
-	nil,                               // 65: navi.v1.Pick.StylesEntry
-	nil,                               // 66: navi.v1.PodSpec.RequestsEntry
-	nil,                               // 67: navi.v1.PodSpec.LimitsEntry
-	(*Person)(nil),                    // 68: navi.v1.Person
-	(*timestamppb.Timestamp)(nil),     // 69: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),       // 70: google.protobuf.Duration
+	(*ProjectOrigin)(nil),             // 38: navi.v1.ProjectOrigin
+	(*ProjectReply)(nil),              // 39: navi.v1.ProjectReply
+	(*ProjectRequestRef)(nil),         // 40: navi.v1.ProjectRequestRef
+	(*Repository)(nil),                // 41: navi.v1.Repository
+	(*Issue)(nil),                     // 42: navi.v1.Issue
+	(*Escalation)(nil),                // 43: navi.v1.Escalation
+	(*Serving)(nil),                   // 44: navi.v1.Serving
+	(*Scope)(nil),                     // 45: navi.v1.Scope
+	(*Message)(nil),                   // 46: navi.v1.Message
+	(*Pick)(nil),                      // 47: navi.v1.Pick
+	(*Report)(nil),                    // 48: navi.v1.Report
+	(*EscalationRef)(nil),             // 49: navi.v1.EscalationRef
+	(*Probe)(nil),                     // 50: navi.v1.Probe
+	(*Child)(nil),                     // 51: navi.v1.Child
+	(*OperatorAccess)(nil),            // 52: navi.v1.OperatorAccess
+	(*OperatorIssued)(nil),            // 53: navi.v1.OperatorIssued
+	(*Lease)(nil),                     // 54: navi.v1.Lease
+	(*Board)(nil),                     // 55: navi.v1.Board
+	(*Session)(nil),                   // 56: navi.v1.Session
+	(*ResolvedInput)(nil),             // 57: navi.v1.ResolvedInput
+	(*SessionPool)(nil),               // 58: navi.v1.SessionPool
+	(*PodSpec)(nil),                   // 59: navi.v1.PodSpec
+	(*SessionEvent)(nil),              // 60: navi.v1.SessionEvent
+	(*ToolEvent)(nil),                 // 61: navi.v1.ToolEvent
+	(*PlanEntry)(nil),                 // 62: navi.v1.PlanEntry
+	(*TurnEnd)(nil),                   // 63: navi.v1.TurnEnd
+	(*TurnFailure)(nil),               // 64: navi.v1.TurnFailure
+	nil,                               // 65: navi.v1.ChatState.SendersEntry
+	nil,                               // 66: navi.v1.Scope.PermissionsEntry
+	(*Pick_Box)(nil),                  // 67: navi.v1.Pick.Box
+	nil,                               // 68: navi.v1.Pick.StylesEntry
+	nil,                               // 69: navi.v1.PodSpec.RequestsEntry
+	nil,                               // 70: navi.v1.PodSpec.LimitsEntry
+	(*Person)(nil),                    // 71: navi.v1.Person
+	(*timestamppb.Timestamp)(nil),     // 72: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),       // 73: google.protobuf.Duration
 }
 var file_navi_v1_chat_proto_depIdxs = []int32{
 	33, // 0: navi.v1.ListChatsResponse.chats:type_name -> navi.v1.ChatSummary
@@ -4660,95 +4991,99 @@ var file_navi_v1_chat_proto_depIdxs = []int32{
 	33, // 2: navi.v1.ListSessionsResponse.sessions:type_name -> navi.v1.ChatSummary
 	34, // 3: navi.v1.GetChatResponse.chat:type_name -> navi.v1.ChatView
 	34, // 4: navi.v1.CreateChatResponse.chat:type_name -> navi.v1.ChatView
-	68, // 5: navi.v1.Spawn.by:type_name -> navi.v1.Person
-	44, // 6: navi.v1.SendMessageRequest.picks:type_name -> navi.v1.Pick
-	43, // 7: navi.v1.SendMessageResponse.message:type_name -> navi.v1.Message
+	71, // 5: navi.v1.Spawn.by:type_name -> navi.v1.Person
+	47, // 6: navi.v1.SendMessageRequest.picks:type_name -> navi.v1.Pick
+	46, // 7: navi.v1.SendMessageResponse.message:type_name -> navi.v1.Message
 	34, // 8: navi.v1.WatchChatResponse.state:type_name -> navi.v1.ChatView
-	57, // 9: navi.v1.WatchChatResponse.event:type_name -> navi.v1.SessionEvent
+	60, // 9: navi.v1.WatchChatResponse.event:type_name -> navi.v1.SessionEvent
 	29, // 10: navi.v1.WatchChatResponse.ping:type_name -> navi.v1.Ping
-	68, // 11: navi.v1.Action.by:type_name -> navi.v1.Person
-	68, // 12: navi.v1.Dequeue.by:type_name -> navi.v1.Person
-	68, // 13: navi.v1.Archive.by:type_name -> navi.v1.Person
-	69, // 14: navi.v1.ChatSummary.started_at:type_name -> google.protobuf.Timestamp
+	71, // 11: navi.v1.Action.by:type_name -> navi.v1.Person
+	71, // 12: navi.v1.Dequeue.by:type_name -> navi.v1.Person
+	71, // 13: navi.v1.Archive.by:type_name -> navi.v1.Person
+	72, // 14: navi.v1.ChatSummary.started_at:type_name -> google.protobuf.Timestamp
 	36, // 15: navi.v1.ChatView.state:type_name -> navi.v1.ChatState
 	35, // 16: navi.v1.ChatView.retry:type_name -> navi.v1.Retry
 	33, // 17: navi.v1.ChatView.children:type_name -> navi.v1.ChatSummary
-	47, // 18: navi.v1.ChatState.probes:type_name -> navi.v1.Probe
-	49, // 19: navi.v1.ChatState.operator:type_name -> navi.v1.OperatorAccess
-	48, // 20: navi.v1.ChatState.children:type_name -> navi.v1.Child
-	46, // 21: navi.v1.ChatState.escalations:type_name -> navi.v1.EscalationRef
-	45, // 22: navi.v1.ChatState.result:type_name -> navi.v1.Report
-	51, // 23: navi.v1.ChatState.model_leases:type_name -> navi.v1.Lease
+	50, // 18: navi.v1.ChatState.probes:type_name -> navi.v1.Probe
+	52, // 19: navi.v1.ChatState.operator:type_name -> navi.v1.OperatorAccess
+	51, // 20: navi.v1.ChatState.children:type_name -> navi.v1.Child
+	49, // 21: navi.v1.ChatState.escalations:type_name -> navi.v1.EscalationRef
+	48, // 22: navi.v1.ChatState.result:type_name -> navi.v1.Report
+	54, // 23: navi.v1.ChatState.model_leases:type_name -> navi.v1.Lease
 	37, // 24: navi.v1.ChatState.request:type_name -> navi.v1.ChatRequest
-	53, // 25: navi.v1.ChatState.session:type_name -> navi.v1.Session
-	43, // 26: navi.v1.ChatState.pending:type_name -> navi.v1.Message
-	43, // 27: navi.v1.ChatState.current:type_name -> navi.v1.Message
-	62, // 28: navi.v1.ChatState.senders:type_name -> navi.v1.ChatState.SendersEntry
-	68, // 29: navi.v1.ChatState.stopped_by:type_name -> navi.v1.Person
-	68, // 30: navi.v1.ChatState.closed_by:type_name -> navi.v1.Person
-	52, // 31: navi.v1.ChatState.board:type_name -> navi.v1.Board
-	68, // 32: navi.v1.ChatRequest.started_by:type_name -> navi.v1.Person
-	38, // 33: navi.v1.ChatRequest.repositories:type_name -> navi.v1.Repository
-	39, // 34: navi.v1.ChatRequest.issue:type_name -> navi.v1.Issue
-	40, // 35: navi.v1.ChatRequest.escalation:type_name -> navi.v1.Escalation
-	42, // 36: navi.v1.ChatRequest.scope:type_name -> navi.v1.Scope
-	41, // 37: navi.v1.ChatRequest.serves:type_name -> navi.v1.Serving
-	63, // 38: navi.v1.Scope.permissions:type_name -> navi.v1.Scope.PermissionsEntry
-	68, // 39: navi.v1.Message.from:type_name -> navi.v1.Person
-	44, // 40: navi.v1.Message.picks:type_name -> navi.v1.Pick
-	64, // 41: navi.v1.Pick.box:type_name -> navi.v1.Pick.Box
-	65, // 42: navi.v1.Pick.styles:type_name -> navi.v1.Pick.StylesEntry
-	46, // 43: navi.v1.Report.escalation:type_name -> navi.v1.EscalationRef
-	45, // 44: navi.v1.Child.result:type_name -> navi.v1.Report
-	50, // 45: navi.v1.OperatorAccess.last:type_name -> navi.v1.OperatorIssued
-	69, // 46: navi.v1.OperatorIssued.at:type_name -> google.protobuf.Timestamp
-	69, // 47: navi.v1.OperatorIssued.expires:type_name -> google.protobuf.Timestamp
-	54, // 48: navi.v1.Session.inputs:type_name -> navi.v1.ResolvedInput
-	51, // 49: navi.v1.Session.lease:type_name -> navi.v1.Lease
-	55, // 50: navi.v1.Session.pool:type_name -> navi.v1.SessionPool
-	70, // 51: navi.v1.SessionPool.idle_timeout:type_name -> google.protobuf.Duration
-	56, // 52: navi.v1.SessionPool.pod:type_name -> navi.v1.PodSpec
-	66, // 53: navi.v1.PodSpec.requests:type_name -> navi.v1.PodSpec.RequestsEntry
-	67, // 54: navi.v1.PodSpec.limits:type_name -> navi.v1.PodSpec.LimitsEntry
-	69, // 55: navi.v1.SessionEvent.time:type_name -> google.protobuf.Timestamp
-	58, // 56: navi.v1.SessionEvent.tool:type_name -> navi.v1.ToolEvent
-	59, // 57: navi.v1.SessionEvent.plan:type_name -> navi.v1.PlanEntry
-	60, // 58: navi.v1.SessionEvent.end:type_name -> navi.v1.TurnEnd
-	61, // 59: navi.v1.TurnEnd.failure:type_name -> navi.v1.TurnFailure
-	69, // 60: navi.v1.TurnFailure.reset_at:type_name -> google.protobuf.Timestamp
-	0,  // 61: navi.v1.ChatService.ListChats:input_type -> navi.v1.ListChatsRequest
-	2,  // 62: navi.v1.ChatService.ListArchivedChats:input_type -> navi.v1.ListArchivedChatsRequest
-	4,  // 63: navi.v1.ChatService.ListSessions:input_type -> navi.v1.ListSessionsRequest
-	6,  // 64: navi.v1.ChatService.GetChat:input_type -> navi.v1.GetChatRequest
-	8,  // 65: navi.v1.ChatService.CreateChat:input_type -> navi.v1.CreateChatRequest
-	10, // 66: navi.v1.ChatService.SpawnChat:input_type -> navi.v1.SpawnChatRequest
-	13, // 67: navi.v1.ChatService.SendMessage:input_type -> navi.v1.SendMessageRequest
-	15, // 68: navi.v1.ChatService.Stop:input_type -> navi.v1.StopRequest
-	17, // 69: navi.v1.ChatService.StopDiscard:input_type -> navi.v1.StopDiscardRequest
-	19, // 70: navi.v1.ChatService.Dequeue:input_type -> navi.v1.DequeueRequest
-	21, // 71: navi.v1.ChatService.Close:input_type -> navi.v1.CloseRequest
-	23, // 72: navi.v1.ChatService.Archive:input_type -> navi.v1.ArchiveRequest
-	25, // 73: navi.v1.ChatService.Unarchive:input_type -> navi.v1.UnarchiveRequest
-	27, // 74: navi.v1.ChatService.WatchChat:input_type -> navi.v1.WatchChatRequest
-	1,  // 75: navi.v1.ChatService.ListChats:output_type -> navi.v1.ListChatsResponse
-	3,  // 76: navi.v1.ChatService.ListArchivedChats:output_type -> navi.v1.ListArchivedChatsResponse
-	5,  // 77: navi.v1.ChatService.ListSessions:output_type -> navi.v1.ListSessionsResponse
-	7,  // 78: navi.v1.ChatService.GetChat:output_type -> navi.v1.GetChatResponse
-	9,  // 79: navi.v1.ChatService.CreateChat:output_type -> navi.v1.CreateChatResponse
-	11, // 80: navi.v1.ChatService.SpawnChat:output_type -> navi.v1.SpawnChatResponse
-	14, // 81: navi.v1.ChatService.SendMessage:output_type -> navi.v1.SendMessageResponse
-	16, // 82: navi.v1.ChatService.Stop:output_type -> navi.v1.StopResponse
-	18, // 83: navi.v1.ChatService.StopDiscard:output_type -> navi.v1.StopDiscardResponse
-	20, // 84: navi.v1.ChatService.Dequeue:output_type -> navi.v1.DequeueResponse
-	22, // 85: navi.v1.ChatService.Close:output_type -> navi.v1.CloseResponse
-	24, // 86: navi.v1.ChatService.Archive:output_type -> navi.v1.ArchiveResponse
-	26, // 87: navi.v1.ChatService.Unarchive:output_type -> navi.v1.UnarchiveResponse
-	28, // 88: navi.v1.ChatService.WatchChat:output_type -> navi.v1.WatchChatResponse
-	75, // [75:89] is the sub-list for method output_type
-	61, // [61:75] is the sub-list for method input_type
-	61, // [61:61] is the sub-list for extension type_name
-	61, // [61:61] is the sub-list for extension extendee
-	0,  // [0:61] is the sub-list for field type_name
+	56, // 25: navi.v1.ChatState.session:type_name -> navi.v1.Session
+	46, // 26: navi.v1.ChatState.pending:type_name -> navi.v1.Message
+	46, // 27: navi.v1.ChatState.current:type_name -> navi.v1.Message
+	65, // 28: navi.v1.ChatState.senders:type_name -> navi.v1.ChatState.SendersEntry
+	71, // 29: navi.v1.ChatState.stopped_by:type_name -> navi.v1.Person
+	71, // 30: navi.v1.ChatState.closed_by:type_name -> navi.v1.Person
+	55, // 31: navi.v1.ChatState.board:type_name -> navi.v1.Board
+	40, // 32: navi.v1.ChatState.project_requests:type_name -> navi.v1.ProjectRequestRef
+	39, // 33: navi.v1.ChatState.project_replies:type_name -> navi.v1.ProjectReply
+	71, // 34: navi.v1.ChatRequest.started_by:type_name -> navi.v1.Person
+	41, // 35: navi.v1.ChatRequest.repositories:type_name -> navi.v1.Repository
+	42, // 36: navi.v1.ChatRequest.issue:type_name -> navi.v1.Issue
+	43, // 37: navi.v1.ChatRequest.escalation:type_name -> navi.v1.Escalation
+	45, // 38: navi.v1.ChatRequest.scope:type_name -> navi.v1.Scope
+	44, // 39: navi.v1.ChatRequest.serves:type_name -> navi.v1.Serving
+	38, // 40: navi.v1.ChatRequest.project_request:type_name -> navi.v1.ProjectOrigin
+	72, // 41: navi.v1.ProjectReply.at:type_name -> google.protobuf.Timestamp
+	66, // 42: navi.v1.Scope.permissions:type_name -> navi.v1.Scope.PermissionsEntry
+	71, // 43: navi.v1.Message.from:type_name -> navi.v1.Person
+	47, // 44: navi.v1.Message.picks:type_name -> navi.v1.Pick
+	67, // 45: navi.v1.Pick.box:type_name -> navi.v1.Pick.Box
+	68, // 46: navi.v1.Pick.styles:type_name -> navi.v1.Pick.StylesEntry
+	49, // 47: navi.v1.Report.escalation:type_name -> navi.v1.EscalationRef
+	48, // 48: navi.v1.Child.result:type_name -> navi.v1.Report
+	53, // 49: navi.v1.OperatorAccess.last:type_name -> navi.v1.OperatorIssued
+	72, // 50: navi.v1.OperatorIssued.at:type_name -> google.protobuf.Timestamp
+	72, // 51: navi.v1.OperatorIssued.expires:type_name -> google.protobuf.Timestamp
+	57, // 52: navi.v1.Session.inputs:type_name -> navi.v1.ResolvedInput
+	54, // 53: navi.v1.Session.lease:type_name -> navi.v1.Lease
+	58, // 54: navi.v1.Session.pool:type_name -> navi.v1.SessionPool
+	73, // 55: navi.v1.SessionPool.idle_timeout:type_name -> google.protobuf.Duration
+	59, // 56: navi.v1.SessionPool.pod:type_name -> navi.v1.PodSpec
+	69, // 57: navi.v1.PodSpec.requests:type_name -> navi.v1.PodSpec.RequestsEntry
+	70, // 58: navi.v1.PodSpec.limits:type_name -> navi.v1.PodSpec.LimitsEntry
+	72, // 59: navi.v1.SessionEvent.time:type_name -> google.protobuf.Timestamp
+	61, // 60: navi.v1.SessionEvent.tool:type_name -> navi.v1.ToolEvent
+	62, // 61: navi.v1.SessionEvent.plan:type_name -> navi.v1.PlanEntry
+	63, // 62: navi.v1.SessionEvent.end:type_name -> navi.v1.TurnEnd
+	64, // 63: navi.v1.TurnEnd.failure:type_name -> navi.v1.TurnFailure
+	72, // 64: navi.v1.TurnFailure.reset_at:type_name -> google.protobuf.Timestamp
+	0,  // 65: navi.v1.ChatService.ListChats:input_type -> navi.v1.ListChatsRequest
+	2,  // 66: navi.v1.ChatService.ListArchivedChats:input_type -> navi.v1.ListArchivedChatsRequest
+	4,  // 67: navi.v1.ChatService.ListSessions:input_type -> navi.v1.ListSessionsRequest
+	6,  // 68: navi.v1.ChatService.GetChat:input_type -> navi.v1.GetChatRequest
+	8,  // 69: navi.v1.ChatService.CreateChat:input_type -> navi.v1.CreateChatRequest
+	10, // 70: navi.v1.ChatService.SpawnChat:input_type -> navi.v1.SpawnChatRequest
+	13, // 71: navi.v1.ChatService.SendMessage:input_type -> navi.v1.SendMessageRequest
+	15, // 72: navi.v1.ChatService.Stop:input_type -> navi.v1.StopRequest
+	17, // 73: navi.v1.ChatService.StopDiscard:input_type -> navi.v1.StopDiscardRequest
+	19, // 74: navi.v1.ChatService.Dequeue:input_type -> navi.v1.DequeueRequest
+	21, // 75: navi.v1.ChatService.Close:input_type -> navi.v1.CloseRequest
+	23, // 76: navi.v1.ChatService.Archive:input_type -> navi.v1.ArchiveRequest
+	25, // 77: navi.v1.ChatService.Unarchive:input_type -> navi.v1.UnarchiveRequest
+	27, // 78: navi.v1.ChatService.WatchChat:input_type -> navi.v1.WatchChatRequest
+	1,  // 79: navi.v1.ChatService.ListChats:output_type -> navi.v1.ListChatsResponse
+	3,  // 80: navi.v1.ChatService.ListArchivedChats:output_type -> navi.v1.ListArchivedChatsResponse
+	5,  // 81: navi.v1.ChatService.ListSessions:output_type -> navi.v1.ListSessionsResponse
+	7,  // 82: navi.v1.ChatService.GetChat:output_type -> navi.v1.GetChatResponse
+	9,  // 83: navi.v1.ChatService.CreateChat:output_type -> navi.v1.CreateChatResponse
+	11, // 84: navi.v1.ChatService.SpawnChat:output_type -> navi.v1.SpawnChatResponse
+	14, // 85: navi.v1.ChatService.SendMessage:output_type -> navi.v1.SendMessageResponse
+	16, // 86: navi.v1.ChatService.Stop:output_type -> navi.v1.StopResponse
+	18, // 87: navi.v1.ChatService.StopDiscard:output_type -> navi.v1.StopDiscardResponse
+	20, // 88: navi.v1.ChatService.Dequeue:output_type -> navi.v1.DequeueResponse
+	22, // 89: navi.v1.ChatService.Close:output_type -> navi.v1.CloseResponse
+	24, // 90: navi.v1.ChatService.Archive:output_type -> navi.v1.ArchiveResponse
+	26, // 91: navi.v1.ChatService.Unarchive:output_type -> navi.v1.UnarchiveResponse
+	28, // 92: navi.v1.ChatService.WatchChat:output_type -> navi.v1.WatchChatResponse
+	79, // [79:93] is the sub-list for method output_type
+	65, // [65:79] is the sub-list for method input_type
+	65, // [65:65] is the sub-list for extension type_name
+	65, // [65:65] is the sub-list for extension extendee
+	0,  // [0:65] is the sub-list for field type_name
 }
 
 func init() { file_navi_v1_chat_proto_init() }
@@ -4769,7 +5104,7 @@ func file_navi_v1_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_navi_v1_chat_proto_rawDesc), len(file_navi_v1_chat_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   68,
+			NumMessages:   71,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

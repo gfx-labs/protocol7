@@ -29,7 +29,9 @@ type Options struct {
 	// the start of each run, after Continue-As-New too, and must return the
 	// same tools for the same State, because a session keeps the tools it
 	// was opened with. The base adds escalate and the child chat tools to
-	// every chat that is not an escalation handler's (Request.Handler).
+	// every chat that is not an escalation handler's (Request.Handler). It also
+	// adds project_request, where navi lets the chat's project ask others, and
+	// project_request_reply to a chat that a request started.
 	Tools func(chat *Chat) []p7.Tool
 	// Instructions is the hidden context of a chat's first turn. Nil uses
 	// DefaultInstructions. An error fails the turn and leaves the chat open.
@@ -94,6 +96,7 @@ func Register(registry Registry, options Options) error {
 	}
 	registry.RegisterWorkflow(WorkflowName, NewWorkflow(options))
 	registry.RegisterWorkflow(EscalationWorkflowName, NewEscalationWorkflow(options))
+	registry.RegisterWorkflow(ProjectRequestWorkflowName, ProjectRequestWorkflow)
 	// In name order, so that two workers register alike.
 	slices.Sort(names)
 	for _, name := range names {
@@ -120,6 +123,12 @@ func NewEscalationWorkflow(options Options) func(workflow.Context, *EscalationSt
 	}
 }
 
+// ProjectRequestWorkflow is the project request workflow. Register registers
+// it under ProjectRequestWorkflowName.
+func ProjectRequestWorkflow(ctx workflow.Context, state *ProjectRequestState) (*ProjectRequestState, error) {
+	return runProjectRequest(ctx, state)
+}
+
 // optionsOf are the worker's options of a run. A State that did not come
 // through NewWorkflow has the zero options.
 func optionsOf(state *State) Options {
@@ -141,7 +150,8 @@ func chatTools(state *State) []p7.Tool {
 		return tools
 	}
 	tools = append(tools, coordinationTools(state)...)
-	return append(tools, escalationTools(state)...)
+	tools = append(tools, escalationTools(state)...)
+	return append(tools, requestTools(state)...)
 }
 
 // firstContext is the hidden context of a chat's first turn: the
@@ -155,6 +165,9 @@ func firstContext(ctx workflow.Context, state *State) (string, error) {
 	text, err := instructions(state.Request)
 	if err != nil {
 		return "", fmt.Errorf("build the chat's instructions: %w", err)
+	}
+	if extra := requestInstructions(state.Request); extra != "" {
+		text += "\n\n" + extra
 	}
 	if options.Brief != nil {
 		if brief := options.Brief(ctx, &Chat{State: state}); brief != "" {

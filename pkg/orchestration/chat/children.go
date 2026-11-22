@@ -246,6 +246,9 @@ func spawnChildMessage(ctx workflow.Context, state *State, task, title string, e
 	request.Id, request.Title, request.Parent, request.Owner = id, title, state.Request.Id, workflow.GetInfo(ctx).WorkflowExecution.ID
 	request.Depth++
 	request.Issue, request.Escalation = nil, escalation
+	// A child of a chat that answers a request does not answer it: the
+	// answer is the parent's.
+	request.ProjectRequest = nil
 	// A child holds its parent's scope and may only narrow it.
 	request.Scope = InheritScope(state.Request.Scope, nil)
 	request.Repositories = ScopedRepositories(state.Request.Repositories, request.Scope)
