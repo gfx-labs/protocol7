@@ -27,16 +27,23 @@ type EscalationRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// chat is the id of the chat that asks.
-	Chat          string             `protobuf:"bytes,2,opt,name=chat,proto3" json:"chat,omitempty"`
-	Need          string             `protobuf:"bytes,3,opt,name=need,proto3" json:"need,omitempty"`
-	Why           string             `protobuf:"bytes,4,opt,name=why,proto3" json:"why,omitempty"`
-	Tried         string             `protobuf:"bytes,5,opt,name=tried,proto3" json:"tried,omitempty"`
-	Next          string             `protobuf:"bytes,6,opt,name=next,proto3" json:"next,omitempty"`
-	Issue         *Issue             `protobuf:"bytes,7,opt,name=issue,proto3" json:"issue,omitempty"`
-	Project       string             `protobuf:"bytes,8,opt,name=project,proto3" json:"project,omitempty"`
-	StartedBy     *Person            `protobuf:"bytes,9,opt,name=started_by,json=startedBy,proto3" json:"started_by,omitempty"`
-	Title         string             `protobuf:"bytes,10,opt,name=title,proto3" json:"title,omitempty"`
-	Session       *EscalationSession `protobuf:"bytes,11,opt,name=session,proto3" json:"session,omitempty"`
+	Chat      string             `protobuf:"bytes,2,opt,name=chat,proto3" json:"chat,omitempty"`
+	Need      string             `protobuf:"bytes,3,opt,name=need,proto3" json:"need,omitempty"`
+	Why       string             `protobuf:"bytes,4,opt,name=why,proto3" json:"why,omitempty"`
+	Tried     string             `protobuf:"bytes,5,opt,name=tried,proto3" json:"tried,omitempty"`
+	Next      string             `protobuf:"bytes,6,opt,name=next,proto3" json:"next,omitempty"`
+	Issue     *Issue             `protobuf:"bytes,7,opt,name=issue,proto3" json:"issue,omitempty"`
+	Project   string             `protobuf:"bytes,8,opt,name=project,proto3" json:"project,omitempty"`
+	StartedBy *Person            `protobuf:"bytes,9,opt,name=started_by,json=startedBy,proto3" json:"started_by,omitempty"`
+	Title     string             `protobuf:"bytes,10,opt,name=title,proto3" json:"title,omitempty"`
+	Session   *EscalationSession `protobuf:"bytes,11,opt,name=session,proto3" json:"session,omitempty"`
+	// person_only keeps the escalation from the handler: it goes to a person at
+	// once, and only a person's answer resolves it.
+	PersonOnly bool `protobuf:"varint,12,opt,name=person_only,json=personOnly,proto3" json:"person_only,omitempty"`
+	// notify is the workflow ID of the workflow to tell, in place of the chat.
+	// It receives the same escalation-notice signal. A workflow that raises an
+	// escalation of its own has no chat, so chat is empty then.
+	Notify        string `protobuf:"bytes,13,opt,name=notify,proto3" json:"notify,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -146,6 +153,20 @@ func (x *EscalationRequest) GetSession() *EscalationSession {
 		return x.Session
 	}
 	return nil
+}
+
+func (x *EscalationRequest) GetPersonOnly() bool {
+	if x != nil {
+		return x.PersonOnly
+	}
+	return false
+}
+
+func (x *EscalationRequest) GetNotify() string {
+	if x != nil {
+		return x.Notify
+	}
+	return ""
 }
 
 // EscalationSession is what the handler's chat takes from the chat it serves.
@@ -986,7 +1007,7 @@ var File_navi_v1_escalation_proto protoreflect.FileDescriptor
 
 const file_navi_v1_escalation_proto_rawDesc = "" +
 	"\n" +
-	"\x18navi/v1/escalation.proto\x12\anavi.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12navi/v1/chat.proto\x1a\x14navi/v1/common.proto\"\xc3\x02\n" +
+	"\x18navi/v1/escalation.proto\x12\anavi.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x12navi/v1/chat.proto\x1a\x14navi/v1/common.proto\"\xfc\x02\n" +
 	"\x11EscalationRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04chat\x18\x02 \x01(\tR\x04chat\x12\x12\n" +
@@ -1000,7 +1021,10 @@ const file_navi_v1_escalation_proto_rawDesc = "" +
 	"started_by\x18\t \x01(\v2\x0f.navi.v1.PersonR\tstartedBy\x12\x14\n" +
 	"\x05title\x18\n" +
 	" \x01(\tR\x05title\x124\n" +
-	"\asession\x18\v \x01(\v2\x1a.navi.v1.EscalationSessionR\asession\"\xee\x01\n" +
+	"\asession\x18\v \x01(\v2\x1a.navi.v1.EscalationSessionR\asession\x12\x1f\n" +
+	"\vperson_only\x18\f \x01(\bR\n" +
+	"personOnly\x12\x16\n" +
+	"\x06notify\x18\r \x01(\tR\x06notify\"\xee\x01\n" +
 	"\x11EscalationSession\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x18\n" +
 	"\abackend\x18\x02 \x01(\tR\abackend\x12\x14\n" +

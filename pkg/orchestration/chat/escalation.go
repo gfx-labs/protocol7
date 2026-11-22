@@ -154,8 +154,10 @@ type EscalationNotice = navi.EscalationNotice
 func EscalationSearchAttributes(request *EscalationRequest) temporal.SearchAttributes {
 	updates := []temporal.SearchAttributeUpdate{
 		AttributeKind.ValueSet(string(KindEscalation)),
-		AttributeParent.ValueSet(request.Chat),
 		AttributeEscalationState.ValueSet(string(EscalationOpen)),
+	}
+	if request.Chat != "" {
+		updates = append(updates, AttributeParent.ValueSet(request.Chat))
 	}
 	if request.StartedBy != nil {
 		updates = append(updates, AttributeStartedBy.ValueSet(request.StartedBy.Login))
@@ -232,11 +234,15 @@ func runEscalation(ctx workflow.Context, state *EscalationState, handoff string,
 	if state.Status == "" {
 		state.Status, state.Raised, state.Changed = EscalationOpen, navi.Timestamp(workflow.Now(ctx)), navi.Timestamp(workflow.Now(ctx))
 	}
-	chatID := WorkflowID(state.Request.Chat)
-	// tell sends the chat what changed. The chat having ended is no concern of
-	// the escalation.
+	// The escalation tells the workflow it names, or else its chat.
+	owner := state.Request.Notify
+	if owner == "" {
+		owner = WorkflowID(state.Request.Chat)
+	}
+	// tell sends the owner what changed. The owner having ended is no concern
+	// of the escalation.
 	tell := func(ctx workflow.Context, notice *EscalationNotice) error {
-		return workflow.SignalExternalWorkflow(ctx, chatID, "", SignalEscalation, notice).Get(ctx, nil)
+		return workflow.SignalExternalWorkflow(ctx, owner, "", SignalEscalation, notice).Get(ctx, nil)
 	}
 	// setState records the state in the search attribute, which navi lists by.
 	setState := func(ctx workflow.Context, status EscalationStatus) error {
@@ -281,6 +287,8 @@ func runEscalation(ctx workflow.Context, state *EscalationState, handoff string,
 			return fmt.Errorf("this escalation is resolved already")
 		case state.Status == EscalationDeclined:
 			return fmt.Errorf("the handler declined this escalation: review it instead of answering")
+		case state.Request.PersonOnly && (answer.By == nil || answer.By.Login == "" || answer.By.Login == HandlerLogin):
+			return fmt.Errorf("only a named person answers this escalation")
 		case strings.TrimSpace(answer.Text) == "":
 			return fmt.Errorf("the answer is empty")
 		case len(answer.Text) > EscalationFieldLimit:
@@ -318,6 +326,8 @@ func runEscalation(ctx workflow.Context, state *EscalationState, handoff string,
 		return state, remember(ctx)
 	}, workflow.UpdateHandlerOptions{Validator: func(_ workflow.Context, decision *EscalationDecision) error {
 		switch {
+		case state.Request.PersonOnly:
+			return fmt.Errorf("this escalation is for a person only: the handler does not decide it")
 		case state.Status != EscalationOpen && state.Status != EscalationHandling:
 			return fmt.Errorf("this escalation is %s already", state.Status)
 		case decision.Outcome != OutcomeResolved && decision.Outcome != OutcomeForwarded && decision.Outcome != OutcomeDeclined:
@@ -404,9 +414,10 @@ func runEscalation(ctx workflow.Context, state *EscalationState, handoff string,
 	})
 
 	if state.Status == EscalationOpen {
-		if workflow.GetVersion(ctx, versionEscalationHandler, workflow.DefaultVersion, 1) == workflow.DefaultVersion || handoff == "" {
-			// Before the handler, and in an app that has none, an escalation
-			// goes straight to a person.
+		if workflow.GetVersion(ctx, versionEscalationHandler, workflow.DefaultVersion, 1) == workflow.DefaultVersion || handoff == "" || state.Request.PersonOnly {
+			// Before the handler, in an app that has none, and for a request
+			// that only a person may answer, an escalation goes straight to
+			// a person.
 			if err := forward(ctx, state, "", move); err != nil {
 				return state, err
 			}

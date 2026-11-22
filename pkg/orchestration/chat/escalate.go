@@ -76,18 +76,7 @@ func raiseEscalation(ctx workflow.Context, state *State, request *EscalationRequ
 	if request.Title == "" {
 		request.Title = oneLine(request.Need, 72)
 	}
-	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		WorkflowID: EscalationWorkflowID(id), TaskQueue: TaskQueue,
-		// The escalation is not the chat's child in its lifetime: it keeps
-		// waiting when the chat continues as new. The chat cancels it when
-		// it ends.
-		ParentClosePolicy:        enumspb.PARENT_CLOSE_POLICY_ABANDON,
-		TypedSearchAttributes:    EscalationSearchAttributes(request),
-		Memo:                     EscalationMemo(request),
-		WorkflowExecutionTimeout: escalationExpiry,
-	})
-	future := workflow.ExecuteChildWorkflow(childCtx, EscalationWorkflowName, &EscalationState{Request: request})
-	if err := future.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+	if err := startEscalation(ctx, request); err != nil {
 		return "", err
 	}
 	ref := &EscalationRef{Id: id, Title: request.Title, Status: EscalationOpen}
@@ -106,7 +95,60 @@ func raiseEscalation(ctx workflow.Context, state *State, request *EscalationRequ
 func withdrawEscalations(ctx workflow.Context, state *State) {
 	for _, ref := range state.Escalations {
 		if navi.EscalationWaiting(ref.Status) {
-			_ = workflow.RequestCancelExternalWorkflow(ctx, EscalationWorkflowID(ref.Id), "").Get(ctx, nil)
+			WithdrawEscalation(ctx, ref.Id)
 		}
 	}
+}
+
+// startEscalation starts the escalation's workflow, which is not its
+// parent's child in its lifetime: it keeps waiting when the chat continues as
+// new, and its owner cancels it when it ends.
+func startEscalation(ctx workflow.Context, request *EscalationRequest) error {
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID: EscalationWorkflowID(request.Id), TaskQueue: TaskQueue,
+		ParentClosePolicy:        enumspb.PARENT_CLOSE_POLICY_ABANDON,
+		TypedSearchAttributes:    EscalationSearchAttributes(request),
+		Memo:                     EscalationMemo(request),
+		WorkflowExecutionTimeout: escalationExpiry,
+	})
+	future := workflow.ExecuteChildWorkflow(childCtx, EscalationWorkflowName, &EscalationState{Request: request})
+	return future.GetChildWorkflowExecution().Get(ctx, nil)
+}
+
+// RaiseEscalation is how a workflow that is no chat asks a person for
+// something: a research run with a question, or a request that needs a
+// person's approval. It starts the escalation and returns its ID.
+//
+// The escalation goes to a person at once, since there is no chat for the
+// handler to work in, and only a named person's answer resolves it. It tells
+// the calling workflow of each change by the signal SignalEscalation, with an
+// EscalationNotice as its payload, as it tells a chat. The workflow registers
+// that signal's channel and reads the notices. The request needs a Need and a
+// Why. Its ID, Notify and PersonOnly are set here.
+func RaiseEscalation(ctx workflow.Context, request *EscalationRequest) (string, error) {
+	request.Need, request.Why = strings.TrimSpace(request.Need), strings.TrimSpace(request.Why)
+	request.Tried, request.Next = strings.TrimSpace(request.Tried), strings.TrimSpace(request.Next)
+	if err := validateEscalation(request); err != nil {
+		return "", err
+	}
+	id, err := NewID(ctx)
+	if err != nil {
+		return "", err
+	}
+	request.Id, request.Chat = id, ""
+	request.Notify, request.PersonOnly = workflow.GetInfo(ctx).WorkflowExecution.ID, true
+	if request.Title == "" {
+		request.Title = oneLine(request.Need, 72)
+	}
+	if err := startEscalation(ctx, request); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// WithdrawEscalation asks an escalation that still waits to end, because the
+// workflow that raised it does. The escalation having ended already is no
+// error.
+func WithdrawEscalation(ctx workflow.Context, id string) {
+	_ = workflow.RequestCancelExternalWorkflow(ctx, EscalationWorkflowID(id), "").Get(ctx, nil)
 }
