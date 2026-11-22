@@ -20,6 +20,14 @@ import "github.com/gfx-labs/protocol7/pkg/transport/stream"
 // MemoContractVersion of each workflow it starts. Adding a name or a field
 // keeps it, renaming or removing one raises it. Version 2 made the chat,
 // escalation and handler payloads navi.v1 messages.
+//
+// navi and a tenant's worker deploy separately, in either order. A field that
+// is added keeps the version, and it is safe only if the older worker can
+// still decode what navi sends: p7.DataConverter ignores unknown fields, but a
+// worker built before that change does not. So navi sends a new field of a
+// chat's input in the memo (ChatInput) until every worker decodes it, and a
+// field that only a new worker may act on (a request chat's origin) fails the
+// start on an old one, which is the safe way for it to fail.
 const ContractVersion = 2
 
 // Workflow types.

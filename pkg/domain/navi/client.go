@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/gfx-labs/protocol7/pkg/domain/scope"
 )
@@ -32,7 +33,25 @@ const LearningListLimit = 500
 
 // ChatMemo is the memo a chat's workflow starts with.
 func ChatMemo(request *ChatRequest) map[string]any {
-	return map[string]any{MemoTitle: request.GetTitle(), MemoContractVersion: ContractVersion}
+	memo := map[string]any{MemoTitle: request.GetTitle(), MemoContractVersion: ContractVersion}
+	if targets := request.GetRequestTargets(); len(targets) > 0 {
+		memo[MemoRequestTargets] = targets
+	}
+	return memo
+}
+
+// ChatInput is the input a chat's workflow starts with: the state without
+// the fields that a worker of an earlier build cannot decode and that ChatMemo
+// carries instead (the projects the chat may ask). The worker puts them back.
+// A new field in a message that navi sends to workers goes the same way, or
+// waits until every tenant's worker decodes unknown fields (p7.DataConverter).
+func ChatInput(state *ChatState) *ChatState {
+	if len(state.GetRequest().GetRequestTargets()) == 0 {
+		return state
+	}
+	input := proto.Clone(state).(*ChatState)
+	input.Request.RequestTargets = nil
+	return input
 }
 
 // ChatSearchAttributes are the search attributes a chat's workflow starts

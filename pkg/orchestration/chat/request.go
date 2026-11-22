@@ -9,6 +9,7 @@ import (
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -122,6 +123,25 @@ func ProjectRequestSearchAttributes(request *ProjectRequest) temporal.SearchAttr
 // page lists it by.
 func ProjectRequestMemo(request *ProjectRequest) map[string]any {
 	return map[string]any{MemoTitle: request.Title, MemoReason: oneLine(request.Why, 200), navi.MemoTarget: request.Target, navi.MemoContractVersion: navi.ContractVersion}
+}
+
+// takeRequestTargets reads the projects the chat may ask from the memo that
+// navi starts it with (navi.ChatInput says why they are not in its input). The
+// state keeps them from then on, over a continue-as-new. A chat that started
+// with them in its input, or with none, is as it was.
+func takeRequestTargets(ctx workflow.Context, state *State) {
+	if len(state.Request.GetRequestTargets()) > 0 {
+		return
+	}
+	payload, ok := workflow.GetInfo(ctx).Memo.GetFields()[navi.MemoRequestTargets]
+	if !ok {
+		return
+	}
+	var targets []string
+	if err := converter.GetDefaultDataConverter().FromPayload(payload, &targets); err != nil {
+		return
+	}
+	state.Request.RequestTargets = targets
 }
 
 // requestTools are the tools a chat has for project requests: project_request

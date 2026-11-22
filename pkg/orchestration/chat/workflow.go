@@ -35,6 +35,7 @@ const upgradeWake = time.Hour
 // repository, answers each message with one turn, in the order the messages
 // came, and closes the session when the chat is closed or cancelled.
 func run(ctx workflow.Context, state State) (*Report, error) {
+	takeRequestTargets(ctx, &state)
 	if err := workflow.SetQueryHandler(ctx, QueryState, func() (*navi.ChatState, error) { return state.ChatState, nil }); err != nil {
 		return &Report{}, err
 	}
