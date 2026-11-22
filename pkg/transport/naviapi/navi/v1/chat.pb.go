@@ -3999,6 +3999,7 @@ type PodSpec struct {
 	Image         string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
 	Requests      map[string]string      `protobuf:"bytes,2,rep,name=requests,proto3" json:"requests,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Limits        map[string]string      `protobuf:"bytes,3,rep,name=limits,proto3" json:"limits,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Env           map[string]string      `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4050,6 +4051,13 @@ func (x *PodSpec) GetRequests() map[string]string {
 func (x *PodSpec) GetLimits() map[string]string {
 	if x != nil {
 		return x.Limits
+	}
+	return nil
+}
+
+func (x *PodSpec) GetEnv() map[string]string {
+	if x != nil {
+		return x.Env
 	}
 	return nil
 }
@@ -4837,15 +4845,19 @@ const file_navi_v1_chat_proto_rawDesc = "" +
 	"maxWorkers\x12.\n" +
 	"\x13sessions_per_worker\x18\x03 \x01(\x05R\x11sessionsPerWorker\x12<\n" +
 	"\fidle_timeout\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\vidleTimeout\x12\"\n" +
-	"\x03pod\x18\x05 \x01(\v2\x10.navi.v1.PodSpecR\x03pod\"\x89\x02\n" +
+	"\x03pod\x18\x05 \x01(\v2\x10.navi.v1.PodSpecR\x03pod\"\xee\x02\n" +
 	"\aPodSpec\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12:\n" +
 	"\brequests\x18\x02 \x03(\v2\x1e.navi.v1.PodSpec.RequestsEntryR\brequests\x124\n" +
-	"\x06limits\x18\x03 \x03(\v2\x1c.navi.v1.PodSpec.LimitsEntryR\x06limits\x1a;\n" +
+	"\x06limits\x18\x03 \x03(\v2\x1c.navi.v1.PodSpec.LimitsEntryR\x06limits\x12+\n" +
+	"\x03env\x18\x04 \x03(\v2\x19.navi.v1.PodSpec.EnvEntryR\x03env\x1a;\n" +
 	"\rRequestsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
 	"\vLimitsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a6\n" +
+	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9a\x02\n" +
 	"\fSessionEvent\x12\x18\n" +
@@ -4908,7 +4920,7 @@ func file_navi_v1_chat_proto_rawDescGZIP() []byte {
 	return file_navi_v1_chat_proto_rawDescData
 }
 
-var file_navi_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
+var file_navi_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 72)
 var file_navi_v1_chat_proto_goTypes = []any{
 	(*ListChatsRequest)(nil),          // 0: navi.v1.ListChatsRequest
 	(*ListChatsResponse)(nil),         // 1: navi.v1.ListChatsResponse
@@ -4981,9 +4993,10 @@ var file_navi_v1_chat_proto_goTypes = []any{
 	nil,                               // 68: navi.v1.Pick.StylesEntry
 	nil,                               // 69: navi.v1.PodSpec.RequestsEntry
 	nil,                               // 70: navi.v1.PodSpec.LimitsEntry
-	(*Person)(nil),                    // 71: navi.v1.Person
-	(*timestamppb.Timestamp)(nil),     // 72: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),       // 73: google.protobuf.Duration
+	nil,                               // 71: navi.v1.PodSpec.EnvEntry
+	(*Person)(nil),                    // 72: navi.v1.Person
+	(*timestamppb.Timestamp)(nil),     // 73: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),       // 74: google.protobuf.Duration
 }
 var file_navi_v1_chat_proto_depIdxs = []int32{
 	33, // 0: navi.v1.ListChatsResponse.chats:type_name -> navi.v1.ChatSummary
@@ -4991,16 +5004,16 @@ var file_navi_v1_chat_proto_depIdxs = []int32{
 	33, // 2: navi.v1.ListSessionsResponse.sessions:type_name -> navi.v1.ChatSummary
 	34, // 3: navi.v1.GetChatResponse.chat:type_name -> navi.v1.ChatView
 	34, // 4: navi.v1.CreateChatResponse.chat:type_name -> navi.v1.ChatView
-	71, // 5: navi.v1.Spawn.by:type_name -> navi.v1.Person
+	72, // 5: navi.v1.Spawn.by:type_name -> navi.v1.Person
 	47, // 6: navi.v1.SendMessageRequest.picks:type_name -> navi.v1.Pick
 	46, // 7: navi.v1.SendMessageResponse.message:type_name -> navi.v1.Message
 	34, // 8: navi.v1.WatchChatResponse.state:type_name -> navi.v1.ChatView
 	60, // 9: navi.v1.WatchChatResponse.event:type_name -> navi.v1.SessionEvent
 	29, // 10: navi.v1.WatchChatResponse.ping:type_name -> navi.v1.Ping
-	71, // 11: navi.v1.Action.by:type_name -> navi.v1.Person
-	71, // 12: navi.v1.Dequeue.by:type_name -> navi.v1.Person
-	71, // 13: navi.v1.Archive.by:type_name -> navi.v1.Person
-	72, // 14: navi.v1.ChatSummary.started_at:type_name -> google.protobuf.Timestamp
+	72, // 11: navi.v1.Action.by:type_name -> navi.v1.Person
+	72, // 12: navi.v1.Dequeue.by:type_name -> navi.v1.Person
+	72, // 13: navi.v1.Archive.by:type_name -> navi.v1.Person
+	73, // 14: navi.v1.ChatSummary.started_at:type_name -> google.protobuf.Timestamp
 	36, // 15: navi.v1.ChatView.state:type_name -> navi.v1.ChatState
 	35, // 16: navi.v1.ChatView.retry:type_name -> navi.v1.Retry
 	33, // 17: navi.v1.ChatView.children:type_name -> navi.v1.ChatSummary
@@ -5015,75 +5028,76 @@ var file_navi_v1_chat_proto_depIdxs = []int32{
 	46, // 26: navi.v1.ChatState.pending:type_name -> navi.v1.Message
 	46, // 27: navi.v1.ChatState.current:type_name -> navi.v1.Message
 	65, // 28: navi.v1.ChatState.senders:type_name -> navi.v1.ChatState.SendersEntry
-	71, // 29: navi.v1.ChatState.stopped_by:type_name -> navi.v1.Person
-	71, // 30: navi.v1.ChatState.closed_by:type_name -> navi.v1.Person
+	72, // 29: navi.v1.ChatState.stopped_by:type_name -> navi.v1.Person
+	72, // 30: navi.v1.ChatState.closed_by:type_name -> navi.v1.Person
 	55, // 31: navi.v1.ChatState.board:type_name -> navi.v1.Board
 	40, // 32: navi.v1.ChatState.project_requests:type_name -> navi.v1.ProjectRequestRef
 	39, // 33: navi.v1.ChatState.project_replies:type_name -> navi.v1.ProjectReply
-	71, // 34: navi.v1.ChatRequest.started_by:type_name -> navi.v1.Person
+	72, // 34: navi.v1.ChatRequest.started_by:type_name -> navi.v1.Person
 	41, // 35: navi.v1.ChatRequest.repositories:type_name -> navi.v1.Repository
 	42, // 36: navi.v1.ChatRequest.issue:type_name -> navi.v1.Issue
 	43, // 37: navi.v1.ChatRequest.escalation:type_name -> navi.v1.Escalation
 	45, // 38: navi.v1.ChatRequest.scope:type_name -> navi.v1.Scope
 	44, // 39: navi.v1.ChatRequest.serves:type_name -> navi.v1.Serving
 	38, // 40: navi.v1.ChatRequest.project_request:type_name -> navi.v1.ProjectOrigin
-	72, // 41: navi.v1.ProjectReply.at:type_name -> google.protobuf.Timestamp
+	73, // 41: navi.v1.ProjectReply.at:type_name -> google.protobuf.Timestamp
 	66, // 42: navi.v1.Scope.permissions:type_name -> navi.v1.Scope.PermissionsEntry
-	71, // 43: navi.v1.Message.from:type_name -> navi.v1.Person
+	72, // 43: navi.v1.Message.from:type_name -> navi.v1.Person
 	47, // 44: navi.v1.Message.picks:type_name -> navi.v1.Pick
 	67, // 45: navi.v1.Pick.box:type_name -> navi.v1.Pick.Box
 	68, // 46: navi.v1.Pick.styles:type_name -> navi.v1.Pick.StylesEntry
 	49, // 47: navi.v1.Report.escalation:type_name -> navi.v1.EscalationRef
 	48, // 48: navi.v1.Child.result:type_name -> navi.v1.Report
 	53, // 49: navi.v1.OperatorAccess.last:type_name -> navi.v1.OperatorIssued
-	72, // 50: navi.v1.OperatorIssued.at:type_name -> google.protobuf.Timestamp
-	72, // 51: navi.v1.OperatorIssued.expires:type_name -> google.protobuf.Timestamp
+	73, // 50: navi.v1.OperatorIssued.at:type_name -> google.protobuf.Timestamp
+	73, // 51: navi.v1.OperatorIssued.expires:type_name -> google.protobuf.Timestamp
 	57, // 52: navi.v1.Session.inputs:type_name -> navi.v1.ResolvedInput
 	54, // 53: navi.v1.Session.lease:type_name -> navi.v1.Lease
 	58, // 54: navi.v1.Session.pool:type_name -> navi.v1.SessionPool
-	73, // 55: navi.v1.SessionPool.idle_timeout:type_name -> google.protobuf.Duration
+	74, // 55: navi.v1.SessionPool.idle_timeout:type_name -> google.protobuf.Duration
 	59, // 56: navi.v1.SessionPool.pod:type_name -> navi.v1.PodSpec
 	69, // 57: navi.v1.PodSpec.requests:type_name -> navi.v1.PodSpec.RequestsEntry
 	70, // 58: navi.v1.PodSpec.limits:type_name -> navi.v1.PodSpec.LimitsEntry
-	72, // 59: navi.v1.SessionEvent.time:type_name -> google.protobuf.Timestamp
-	61, // 60: navi.v1.SessionEvent.tool:type_name -> navi.v1.ToolEvent
-	62, // 61: navi.v1.SessionEvent.plan:type_name -> navi.v1.PlanEntry
-	63, // 62: navi.v1.SessionEvent.end:type_name -> navi.v1.TurnEnd
-	64, // 63: navi.v1.TurnEnd.failure:type_name -> navi.v1.TurnFailure
-	72, // 64: navi.v1.TurnFailure.reset_at:type_name -> google.protobuf.Timestamp
-	0,  // 65: navi.v1.ChatService.ListChats:input_type -> navi.v1.ListChatsRequest
-	2,  // 66: navi.v1.ChatService.ListArchivedChats:input_type -> navi.v1.ListArchivedChatsRequest
-	4,  // 67: navi.v1.ChatService.ListSessions:input_type -> navi.v1.ListSessionsRequest
-	6,  // 68: navi.v1.ChatService.GetChat:input_type -> navi.v1.GetChatRequest
-	8,  // 69: navi.v1.ChatService.CreateChat:input_type -> navi.v1.CreateChatRequest
-	10, // 70: navi.v1.ChatService.SpawnChat:input_type -> navi.v1.SpawnChatRequest
-	13, // 71: navi.v1.ChatService.SendMessage:input_type -> navi.v1.SendMessageRequest
-	15, // 72: navi.v1.ChatService.Stop:input_type -> navi.v1.StopRequest
-	17, // 73: navi.v1.ChatService.StopDiscard:input_type -> navi.v1.StopDiscardRequest
-	19, // 74: navi.v1.ChatService.Dequeue:input_type -> navi.v1.DequeueRequest
-	21, // 75: navi.v1.ChatService.Close:input_type -> navi.v1.CloseRequest
-	23, // 76: navi.v1.ChatService.Archive:input_type -> navi.v1.ArchiveRequest
-	25, // 77: navi.v1.ChatService.Unarchive:input_type -> navi.v1.UnarchiveRequest
-	27, // 78: navi.v1.ChatService.WatchChat:input_type -> navi.v1.WatchChatRequest
-	1,  // 79: navi.v1.ChatService.ListChats:output_type -> navi.v1.ListChatsResponse
-	3,  // 80: navi.v1.ChatService.ListArchivedChats:output_type -> navi.v1.ListArchivedChatsResponse
-	5,  // 81: navi.v1.ChatService.ListSessions:output_type -> navi.v1.ListSessionsResponse
-	7,  // 82: navi.v1.ChatService.GetChat:output_type -> navi.v1.GetChatResponse
-	9,  // 83: navi.v1.ChatService.CreateChat:output_type -> navi.v1.CreateChatResponse
-	11, // 84: navi.v1.ChatService.SpawnChat:output_type -> navi.v1.SpawnChatResponse
-	14, // 85: navi.v1.ChatService.SendMessage:output_type -> navi.v1.SendMessageResponse
-	16, // 86: navi.v1.ChatService.Stop:output_type -> navi.v1.StopResponse
-	18, // 87: navi.v1.ChatService.StopDiscard:output_type -> navi.v1.StopDiscardResponse
-	20, // 88: navi.v1.ChatService.Dequeue:output_type -> navi.v1.DequeueResponse
-	22, // 89: navi.v1.ChatService.Close:output_type -> navi.v1.CloseResponse
-	24, // 90: navi.v1.ChatService.Archive:output_type -> navi.v1.ArchiveResponse
-	26, // 91: navi.v1.ChatService.Unarchive:output_type -> navi.v1.UnarchiveResponse
-	28, // 92: navi.v1.ChatService.WatchChat:output_type -> navi.v1.WatchChatResponse
-	79, // [79:93] is the sub-list for method output_type
-	65, // [65:79] is the sub-list for method input_type
-	65, // [65:65] is the sub-list for extension type_name
-	65, // [65:65] is the sub-list for extension extendee
-	0,  // [0:65] is the sub-list for field type_name
+	71, // 59: navi.v1.PodSpec.env:type_name -> navi.v1.PodSpec.EnvEntry
+	73, // 60: navi.v1.SessionEvent.time:type_name -> google.protobuf.Timestamp
+	61, // 61: navi.v1.SessionEvent.tool:type_name -> navi.v1.ToolEvent
+	62, // 62: navi.v1.SessionEvent.plan:type_name -> navi.v1.PlanEntry
+	63, // 63: navi.v1.SessionEvent.end:type_name -> navi.v1.TurnEnd
+	64, // 64: navi.v1.TurnEnd.failure:type_name -> navi.v1.TurnFailure
+	73, // 65: navi.v1.TurnFailure.reset_at:type_name -> google.protobuf.Timestamp
+	0,  // 66: navi.v1.ChatService.ListChats:input_type -> navi.v1.ListChatsRequest
+	2,  // 67: navi.v1.ChatService.ListArchivedChats:input_type -> navi.v1.ListArchivedChatsRequest
+	4,  // 68: navi.v1.ChatService.ListSessions:input_type -> navi.v1.ListSessionsRequest
+	6,  // 69: navi.v1.ChatService.GetChat:input_type -> navi.v1.GetChatRequest
+	8,  // 70: navi.v1.ChatService.CreateChat:input_type -> navi.v1.CreateChatRequest
+	10, // 71: navi.v1.ChatService.SpawnChat:input_type -> navi.v1.SpawnChatRequest
+	13, // 72: navi.v1.ChatService.SendMessage:input_type -> navi.v1.SendMessageRequest
+	15, // 73: navi.v1.ChatService.Stop:input_type -> navi.v1.StopRequest
+	17, // 74: navi.v1.ChatService.StopDiscard:input_type -> navi.v1.StopDiscardRequest
+	19, // 75: navi.v1.ChatService.Dequeue:input_type -> navi.v1.DequeueRequest
+	21, // 76: navi.v1.ChatService.Close:input_type -> navi.v1.CloseRequest
+	23, // 77: navi.v1.ChatService.Archive:input_type -> navi.v1.ArchiveRequest
+	25, // 78: navi.v1.ChatService.Unarchive:input_type -> navi.v1.UnarchiveRequest
+	27, // 79: navi.v1.ChatService.WatchChat:input_type -> navi.v1.WatchChatRequest
+	1,  // 80: navi.v1.ChatService.ListChats:output_type -> navi.v1.ListChatsResponse
+	3,  // 81: navi.v1.ChatService.ListArchivedChats:output_type -> navi.v1.ListArchivedChatsResponse
+	5,  // 82: navi.v1.ChatService.ListSessions:output_type -> navi.v1.ListSessionsResponse
+	7,  // 83: navi.v1.ChatService.GetChat:output_type -> navi.v1.GetChatResponse
+	9,  // 84: navi.v1.ChatService.CreateChat:output_type -> navi.v1.CreateChatResponse
+	11, // 85: navi.v1.ChatService.SpawnChat:output_type -> navi.v1.SpawnChatResponse
+	14, // 86: navi.v1.ChatService.SendMessage:output_type -> navi.v1.SendMessageResponse
+	16, // 87: navi.v1.ChatService.Stop:output_type -> navi.v1.StopResponse
+	18, // 88: navi.v1.ChatService.StopDiscard:output_type -> navi.v1.StopDiscardResponse
+	20, // 89: navi.v1.ChatService.Dequeue:output_type -> navi.v1.DequeueResponse
+	22, // 90: navi.v1.ChatService.Close:output_type -> navi.v1.CloseResponse
+	24, // 91: navi.v1.ChatService.Archive:output_type -> navi.v1.ArchiveResponse
+	26, // 92: navi.v1.ChatService.Unarchive:output_type -> navi.v1.UnarchiveResponse
+	28, // 93: navi.v1.ChatService.WatchChat:output_type -> navi.v1.WatchChatResponse
+	80, // [80:94] is the sub-list for method output_type
+	66, // [66:80] is the sub-list for method input_type
+	66, // [66:66] is the sub-list for extension type_name
+	66, // [66:66] is the sub-list for extension extendee
+	0,  // [0:66] is the sub-list for field type_name
 }
 
 func init() { file_navi_v1_chat_proto_init() }
@@ -5104,7 +5118,7 @@ func file_navi_v1_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_navi_v1_chat_proto_rawDesc), len(file_navi_v1_chat_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   71,
+			NumMessages:   72,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
