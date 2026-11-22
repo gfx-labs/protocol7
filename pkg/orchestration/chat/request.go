@@ -44,16 +44,22 @@ const (
 	// RequestFieldLimit bounds each text of a request and of an answer.
 	RequestFieldLimit = 32 << 10
 
-	// projectRequestExpiry bounds how long a request may wait for its work.
-	projectRequestExpiry = 14 * 24 * time.Hour
 	// requestDeliverDeadline is how long navi has to hand a request to the
-	// target project, and requestAnswerDeadline how long the target's chat has
-	// to answer it (accept, redirect or decline). An accepted request may take
-	// up to projectRequestExpiry.
+	// target project, requestAnswerDeadline how long the target's chat has to
+	// answer it (accept, redirect or decline), and requestDoneDeadline how long
+	// an accepted request may take to be done. The workflow declines a request
+	// that passes one, as navi, and tells the chat. projectRequestExpiry is the
+	// workflow's own timeout: past the three, so it never fires first.
 	requestDeliverDeadline = time.Hour
 	requestAnswerDeadline  = 24 * time.Hour
-	// maxRequestNudges bounds the reminders a request chat gets to answer.
-	maxRequestNudges = 3
+	requestDoneDeadline    = 7 * 24 * time.Hour
+	projectRequestExpiry   = 15 * 24 * time.Hour
+	// maxRequestNudges bounds the reminders a request chat gets to answer, and
+	// maxAcceptedNudges those it gets to say a request it accepted is done. The
+	// work of an accepted request may go on outside the chat, so one reminder is
+	// all it gets: the asking project's deadline ends the wait.
+	maxRequestNudges  = 3
+	maxAcceptedNudges = 1
 	// versionProjectRequest gates what changes a running chat's commands for a
 	// request chat: the reminders and the close after the answer.
 	versionProjectRequest = "project-request"
@@ -313,7 +319,8 @@ func takeProjectRequest(state *State, notice *ProjectRequestNotice) (*Message, b
 		}
 		text, err := navi.ReplyMessageText(ref, reply)
 		if err != nil {
-			text = fmt.Sprintf("Answer to your request %s from %s: %s. %s", ref.Id, ref.Target, reply.Outcome, reply.Text)
+			// The answer's own words stay out of a text that is not fenced.
+			text = fmt.Sprintf("The project %s answered your request %s: %s. Its words could not be put in this message: read them on the request's page in navi.", ref.Target, ref.Id, reply.Outcome)
 		}
 		return &Message{Id: fmt.Sprintf("request-%s-%d", ref.Id, reply.Seq), Text: text, Restricted: true}, true
 	}
@@ -406,10 +413,18 @@ func runProjectRequest(ctx workflow.Context, state *ProjectRequestState) (*Proje
 		if err := workflow.Await(ctx, func() bool { return state.Status != navi.RequestOpen }); err != nil {
 			return
 		}
-		if ok, err := workflow.AwaitWithTimeout(ctx, requestAnswerDeadline, func() bool { return state.Status != navi.RequestDelivered }); err != nil || ok {
+		if ok, err := workflow.AwaitWithTimeout(ctx, requestAnswerDeadline, func() bool { return state.Status != navi.RequestDelivered }); err != nil {
+			return
+		} else if !ok {
+			giveUp(ctx, state, move, "the project "+state.Request.Target+" did not answer within "+requestAnswerDeadline.String()+".")
 			return
 		}
-		giveUp(ctx, state, move, "the project "+state.Request.Target+" did not answer within "+requestAnswerDeadline.String()+".")
+		if state.Status != navi.RequestAccepted {
+			return
+		}
+		if ok, err := workflow.AwaitWithTimeout(ctx, requestDoneDeadline, func() bool { return state.Status != navi.RequestAccepted }); err == nil && !ok {
+			giveUp(ctx, state, move, "the project "+state.Request.Target+" accepted this request and did not report it done within "+requestDoneDeadline.String()+". Look at what it named as the reference to see how far the work is.")
+		}
 	})
 
 	if err := workflow.Await(ctx, finished); err != nil {
@@ -504,6 +519,10 @@ func replyTool(state *State) p7.Tool {
 			}
 			reply.At = navi.Timestamp(workflow.Now(ctx))
 			state.ProjectReplies = append(state.ProjectReplies, reply)
+			if reply.Outcome == navi.ReplyAccepted {
+				// The reminders to say it is done have a budget of their own.
+				state.RequestNudges = 0
+			}
 			if navi.ReplyTerminal(reply.Outcome) {
 				return p7.TextResult("Answered. This chat closes when you end your turn."), nil
 			}
@@ -559,7 +578,9 @@ func requestTurnEnded(ctx workflow.Context, state *State, stopped bool) {
 			state.Closing = true
 		}
 	case len(state.Pending) > 0:
-	case int(state.RequestNudges) >= maxRequestNudges:
+	case int(state.RequestNudges) >= maxRequestNudges || last != nil && int(state.RequestNudges) >= maxAcceptedNudges:
+		// An accepted request stays open after its one reminder. Nobody is
+		// stuck: the asking project's deadline ends the wait.
 		if last == nil {
 			state.ProjectReplies = append(state.ProjectReplies, &ProjectReply{
 				Seq: 1, Outcome: navi.ReplyDeclined, By: requestSystem, At: navi.Timestamp(workflow.Now(ctx)),

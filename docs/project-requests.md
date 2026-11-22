@@ -13,9 +13,9 @@ A chat in one navi project asks another project for something it cannot do itsel
   - `accepted`: the target takes the work. `reference` is the issue or pull request that delivers it. The chat does the work through the project's own flow and answers again with `done` (reference: the merged pull request or commit), or `declined` if it cannot deliver.
   - `redirected`: what to do instead (a different approach, a feature that exists, where the change belongs).
   - `declined`: why not. A request for a credential, a permission or anything that needs a person is declined with who to ask.
-  - The tool refuses `done` before `accepted`, `accepted` without a reference, and any answer after a final one. The chat closes after `redirected`, `declined` or `done`. A chat that ends a turn with no answer is reminded up to three times, and then the request is declined as navi.
+  - The tool refuses `done` before `accepted`, `accepted` without a reference, and any answer after a final one. The chat closes after `redirected`, `declined` or `done`. A chat that ends a turn with no answer is reminded up to three times, and then the request is declined as navi. A chat that accepted and ends a turn without saying `done` is reminded once, and then waits: the work may go on outside the chat.
 - **The way back.** The answers are in the target chat's state (`ChatState.project_replies`). navi reads them and hands them to the request workflow with the update `project-request-reply`. The workflow signals the asking chat (`project-request`), which queues one message for each answer (ID `request-<id>-<n>`, `Restricted`, the target's words in a fence, the outcome and what to do about it said outside the fence). The next turn starts from it.
-- **Deadlines.** navi has an hour to deliver. The target's chat has a day to answer. An accepted request may take until the request's 14 day expiry. The workflow declines a request that passes a deadline, as navi, with the reason.
+- **Deadlines.** navi has an hour to deliver. The target's chat has a day to answer (accept, redirect or decline). An accepted request has seven days to be reported done. The workflow declines a request that passes one, as navi, with the reason, and the asking chat gets that as an answer. The workflow's own timeout is 15 days, past all three.
 - **Continuing.** A request with `follows` (the ID of an earlier request of the same chat to the same project) is delivered as a message to the earlier target chat if it still runs, and starts a new chat if it does not.
 
 ## Why navi carries it
@@ -32,10 +32,10 @@ Two histories recorded from the chat workflow of protocol7 81909bd, before this 
 
 ## Tests
 
-`pkg/orchestration/chat/request_test.go`, over Temporal's test environment: the full path (tool, delivery, accepted, done, the messages that the chat gets, their fences and restriction, the status while waiting), a target that is not listed and a request with no reason, a chat with no targets (no tool, no instructions), the reply tool's transitions and the close, the reminders and the decline of a chat that never answers, the deadline for delivery and the withdrawal at close, and a follow-up, and the replay of the recorded histories.
+`pkg/orchestration/chat/request_test.go`, over Temporal's test environment: the full path (tool, delivery, accepted, done, the messages that the chat gets, their fences and restriction, the status while waiting), a target that is not listed and a request with no reason, a chat with no targets (no tool, no instructions), the reply tool's transitions and the close, the reminders and the decline of a chat that never answers, the deadlines (delivery, and an accepted request never done) and the withdrawal at close, and a follow-up, and the replay of the recorded histories.
 
 ## Not built
 
-- No wake-up from the target's side when work that the target accepted is delivered some other way, such as an issue that the issue workflow takes. The target's chat is responsible for answering `done`: it is reminded three times, and the request expires after 14 days.
+- No wake-up from the target's side when work that the target accepted is delivered some other way, such as an issue that the issue workflow takes. The target's chat is responsible for answering `done`: it is reminded once, and the asking project's seven days end the wait. The target's chat then stays open and idle until a person closes it or messages it to answer `done`.
 - A request chat cannot ask a third project.
 - navi does not tell the target's chat when the asking chat withdraws.

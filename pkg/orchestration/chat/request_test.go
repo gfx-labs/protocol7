@@ -422,3 +422,71 @@ func (replayLogger) Debug(string, ...any) {}
 func (replayLogger) Info(string, ...any)  {}
 func (replayLogger) Warn(string, ...any)  {}
 func (replayLogger) Error(string, ...any) {}
+
+// A request that the target accepted and did not report done within a week is
+// declined by the workflow, as navi, and the chat that asked is told: it does
+// not wait for good on a chat that may have ended.
+func TestAnAcceptedRequestThatIsNeverDoneIsDeclined(t *testing.T) {
+	env, fake := newEnvironment(t)
+	var id string
+	fake.onTurn = func(_ context.Context, request domain.TurnRequest) (domain.TurnResult, error) {
+		if request.Prompt == "slow" {
+			fake.onSlow()
+			<-fake.release
+		}
+		return domain.TurnResult{Text: "ok", Turn: request.Turn, StopReason: p7.StopEndTurn}, nil
+	}
+	fake.onSlow = func() {
+		callTool(t, env, fake.sessionID(), "project_request", map[string]string{"target": "selfdev", "need": "x", "why": "y"}, func(p7.ToolResult) { close(fake.release) })
+	}
+	passRequestSignals(env)
+	env.RegisterDelayedCallback(func() {
+		id = queryState(t, env).ProjectRequests[0].Id
+		updateRequest(t, env, id, chat.UpdateProjectRequestDeliver, &navi.ProjectDelivery{TargetChat: "pr-x"})
+	}, time.Minute)
+	env.RegisterDelayedCallback(func() {
+		updateRequest(t, env, id, chat.UpdateProjectRequestReply, &navi.ProjectReply{Seq: 1, Outcome: navi.ReplyAccepted, Text: "ok", Reference: "r", By: "chat x"})
+	}, 2*time.Minute)
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, &chat.Action{}) }, 9*24*time.Hour)
+	env.ExecuteWorkflow(chat.WorkflowName, askingChat("slow"))
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	state := queryRequest(t, env, id)
+	if state.Status != navi.RequestDeclined || len(state.Replies) != 2 || state.Replies[1].By != "navi" || !strings.Contains(state.Replies[1].Text, "did not report it done") {
+		t.Errorf("request %+v, want accepted and then declined by navi", state)
+	}
+	if len(fake.turns) != 3 || !strings.Contains(fake.turns[2].Prompt, "Outcome: **declined**") {
+		t.Errorf("turns %d, want the chat told of the decline", len(fake.turns))
+	}
+}
+
+// A request chat that accepted and ends its turn without saying done gets one
+// reminder, and then waits: the work may go on outside the chat, and the asking
+// project's deadline ends the wait.
+func TestAnAcceptedRequestChatIsRemindedOnce(t *testing.T) {
+	env, fake := newEnvironment(t)
+	fake.onTurn = func(_ context.Context, request domain.TurnRequest) (domain.TurnResult, error) {
+		if request.Prompt == "slow" {
+			fake.onSlow()
+			<-fake.release
+		}
+		return domain.TurnResult{Text: "filed an issue", Turn: request.Turn, StopReason: p7.StopEndTurn}, nil
+	}
+	fake.onSlow = func() {
+		callTool(t, env, fake.sessionID(), "project_request_reply", map[string]string{"outcome": "accepted", "text": "issue filed", "reference": "https://github.com/gfx-labs/protocol7/issues/9"}, func(p7.ToolResult) { close(fake.release) })
+	}
+	env.RegisterDelayedCallback(func() { env.SignalWorkflow(chat.SignalClose, &chat.Action{}) }, 2*time.Hour)
+	env.ExecuteWorkflow(chat.WorkflowName, requestChat("slow"))
+
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.turns) != 2 || !strings.Contains(fake.turns[1].Prompt, "You accepted the request, and it is not done yet") {
+		t.Errorf("%d turns, want the request's and one reminder", len(fake.turns))
+	}
+	if state := queryState(t, env); len(state.ProjectReplies) != 1 || state.ProjectReplies[0].Outcome != navi.ReplyAccepted {
+		t.Errorf("replies %+v, want only the acceptance", state.ProjectReplies)
+	}
+}
