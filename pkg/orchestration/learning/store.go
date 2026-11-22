@@ -3,6 +3,7 @@ package learning
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"time"
 
@@ -52,18 +53,46 @@ func (s Store) Record(ctx context.Context, entry Entry) error {
 	return err
 }
 
-// Query lists the proposed and the accepted entries, the ones whose workflow
-// runs.
-const listQuery = "WorkflowType = '" + WorkflowName + "' AND ExecutionStatus = 'Running'"
+// listQuery lists the entries whose workflow runs: the open, accepted and
+// applied ones. allQuery lists the covered, rejected and retired ones too,
+// while Temporal's retention holds them.
+const (
+	listQuery = "WorkflowType = '" + WorkflowName + "' AND ExecutionStatus = 'Running'"
+	allQuery  = "WorkflowType = '" + WorkflowName + "'"
+)
 
-// List reads the entries that wait or are accepted, newest first, at most
-// ListLimit. Each entry's state is the search attribute's, which a decision
-// changes, and its text is the memo's.
-func (s Store) List(ctx context.Context) ([]Entry, error) {
+// List reads the entries that run (open, accepted and applied), newest first,
+// at most ListLimit. Each entry's state is the search attribute's, which a
+// decision changes, and its text is the memo's.
+func (s Store) List(ctx context.Context) ([]Entry, error) { return s.list(ctx, listQuery) }
+
+// ListAll reads the entries that run and the settled ones that Temporal still
+// holds, newest first, at most ListLimit. It is what a page that shows how
+// entries were settled reads.
+func (s Store) ListAll(ctx context.Context) ([]Entry, error) { return s.list(ctx, allQuery) }
+
+// Open reads the open entries, oldest first. The curator takes them in that
+// order, so that none waits for ever behind newer ones.
+func (s Store) Open(ctx context.Context) ([]Entry, error) {
+	entries, err := s.list(ctx, listQuery)
+	if err != nil {
+		return nil, err
+	}
+	open := entries[:0]
+	for _, entry := range entries {
+		if entry.State.IsOpen() {
+			open = append(open, entry)
+		}
+	}
+	slices.Reverse(open)
+	return open, nil
+}
+
+func (s Store) list(ctx context.Context, query string) ([]Entry, error) {
 	var entries []Entry
 	var token []byte
 	for len(entries) < ListLimit {
-		response, err := s.Client.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{PageSize: 100, NextPageToken: token, Query: listQuery})
+		response, err := s.Client.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{PageSize: 100, NextPageToken: token, Query: query})
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +159,7 @@ func sortNewest(entries []Entry) {
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Recorded.After(entries[j].Recorded) })
 }
 
-// Decide accepts, rejects or retires an entry, as an update that the
+// Decide moves an entry (accept, reject, retire, apply or cover), as an update that the
 // workflow refuses when the state does not allow it. It returns the entry
 // as it is after.
 func (s Store) Decide(ctx context.Context, id string, decision Decision) (Entry, error) {

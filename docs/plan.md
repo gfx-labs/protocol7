@@ -92,7 +92,7 @@ Optional modules expose their own records through ticketd without becoming prere
 
 | Record | Main fields and behavior |
 |---|---|
-| `learnings` | Scoped content, consumer-defined metadata and non-owning evidence references. No required curation state machine |
+| `learnings` | Scoped content, consumer-defined metadata and non-owning evidence references. No required curation state machine. The SDK's learnings log (`pkg/orchestration/learning`) keeps open, applied, covered and rejected states and a curator pass that settles them (`docs/learning-curator.md`) |
 | External objects | One optional model for outside entities such as GitHub PRs: source, kind, external ID, URL, ticket links, current-state projection, typed fields, last synchronization time and a retained timeline |
 | Integration operation records | Integration-scoped external operation identity, pending/confirmed outcome and reconciliation evidence. Not a universal exactly-once guarantee |
 | Intake records | Consumer-owned delivery deduplication that outlasts the webhook stream, and poll cursors. Deliveries themselves are held in the JetStream webhook stream (section 10) |

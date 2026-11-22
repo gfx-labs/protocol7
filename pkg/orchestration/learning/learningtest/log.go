@@ -5,8 +5,10 @@ package learningtest
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	commonpb "go.temporal.io/api/common/v1"
@@ -26,6 +28,10 @@ type Log struct {
 	Client  *mocks.Client
 	mu      sync.Mutex
 	entries []learning.Entry
+	// closed are the entries whose workflow ended: covered, rejected and
+	// retired. Get and the listings of every status still see them, as
+	// Temporal's retention lets them.
+	closed []learning.Entry
 	// Queries are the visibility queries that were asked.
 	Queries []string
 }
@@ -53,7 +59,11 @@ func New(t testing.TB) *Log {
 			defer l.mu.Unlock()
 			l.Queries = append(l.Queries, request.GetQuery())
 			response := &workflowservice.ListWorkflowExecutionsResponse{}
-			for _, entry := range l.entries {
+			listed := l.entries
+			if !strings.Contains(request.GetQuery(), "ExecutionStatus") {
+				listed = append(append([]learning.Entry(nil), l.entries...), l.closed...)
+			}
+			for _, entry := range listed {
 				memo, err := data.ToPayload(entry)
 				if err != nil {
 					return nil, err
@@ -74,7 +84,7 @@ func New(t testing.TB) *Log {
 		func(_ context.Context, id, _ string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
 			l.mu.Lock()
 			defer l.mu.Unlock()
-			for _, entry := range l.entries {
+			for _, entry := range append(append([]learning.Entry(nil), l.entries...), l.closed...) {
 				if learning.WorkflowID(entry.ID) != id {
 					continue
 				}
@@ -103,11 +113,10 @@ func New(t testing.TB) *Log {
 				if learning.WorkflowID(entry.ID) != options.WorkflowID {
 					continue
 				}
-				next, err := entry.Decide(decision.Action)
+				entry, err := entry.Settle(decision, time.Now())
 				if err != nil {
 					return nil, temporal.NewApplicationError(err.Error(), "")
 				}
-				entry.State = next
 				handle := &mocks.WorkflowUpdateHandle{}
 				handle.On("Get", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 					// As Temporal does, decode the result into whatever type the caller holds.
@@ -119,8 +128,9 @@ func New(t testing.TB) *Log {
 						panic(err)
 					}
 				})
-				if next == learning.Rejected || next == learning.Retired {
+				if entry.State.Ended() {
 					l.entries = append(l.entries[:i], l.entries[i+1:]...)
+					l.closed = append(l.closed, entry)
 				} else {
 					l.entries[i] = entry
 				}
@@ -143,3 +153,23 @@ func (l *Log) Store() learning.Store { return learning.Store{Client: l.Client} }
 
 // Activities are the real activities over the log.
 func (l *Log) Activities() *learning.Activities { return &learning.Activities{Store: l.Store()} }
+
+// Closed are the entries whose workflow ended.
+func (l *Log) Closed() []learning.Entry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]learning.Entry(nil), l.closed...)
+}
+
+// Add puts an entry in the log as it is, in the state it holds, so that a
+// test starts from entries a curator has seen. An entry in an ended state
+// goes with the closed ones.
+func (l *Log) Add(entry learning.Entry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if entry.State.Ended() {
+		l.closed = append(l.closed, entry)
+		return
+	}
+	l.entries = append(l.entries, entry)
+}

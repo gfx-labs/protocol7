@@ -156,7 +156,20 @@ type ReviewState struct {
 type LearningState string
 
 const (
+	// LearningOpen is a recorded learning that nobody has settled. The
+	// curator settles it, and chats read it meanwhile.
+	LearningOpen LearningState = "open"
+	// LearningProposed is what an open learning was called before the
+	// curator. It means the same as LearningOpen.
 	LearningProposed LearningState = "proposed"
+	// LearningApplied is a learning that the curator turned into a change.
+	// Its PR is the link.
+	LearningApplied LearningState = "applied"
+	// LearningCovered is a learning that a line of the code or the docs says
+	// already. Its note names the line. It ends.
+	LearningCovered LearningState = "covered"
+	// LearningAccepted is what a person or the handler accepted before the
+	// curator. Chats read it.
 	LearningAccepted LearningState = "accepted"
 	LearningRejected LearningState = "rejected"
 	LearningRetired  LearningState = "retired"
@@ -196,10 +209,23 @@ type LearningEntry struct {
 	Project  string         `json:"project,omitempty"`
 	Recorded time.Time      `json:"recorded"`
 	State    LearningState  `json:"state"`
+	// PR is the pull request that applied the learning, Note why it was
+	// covered or rejected, Pass the curator pass that settled it, SettledBy
+	// who did and Settled when. They are empty until a decision sets them.
+	PR        string    `json:"pr,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	Pass      string    `json:"pass,omitempty"`
+	SettledBy string    `json:"settled_by,omitempty"`
+	Settled   time.Time `json:"settled,omitzero"`
 }
 
 // LearningDecision is the payload of UpdateLearningDecide.
 type LearningDecision struct {
 	Action string `json:"action"`
 	By     string `json:"by,omitempty"`
+	// PR is the pull request of an apply, Note the reason of a cover or a
+	// reject, and Pass the curator pass that decides.
+	PR   string `json:"pr,omitempty"`
+	Note string `json:"note,omitempty"`
+	Pass string `json:"pass,omitempty"`
 }

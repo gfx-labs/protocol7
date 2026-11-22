@@ -159,12 +159,13 @@ var learningIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 // ValidLearningID says whether id can be a learning's ID.
 func ValidLearningID(id string) bool { return learningIDPattern.MatchString(id) }
 
-// learningListQuery lists the proposed and the accepted learnings, the ones
-// whose workflow runs.
-const learningListQuery = "WorkflowType = '" + LearningWorkflow + "' AND ExecutionStatus = 'Running'"
+// learningListQuery lists every learning Temporal still holds: the open,
+// accepted and applied ones, whose workflow runs, and the covered, rejected
+// and retired ones until their retention ends.
+const learningListQuery = "WorkflowType = '" + LearningWorkflow + "'"
 
-// ListLearnings reads the learnings that wait or are accepted, newest first,
-// at most LearningListLimit. Each one's state is the search attribute's,
+// ListLearnings reads the learnings, open and settled, newest first, at most
+// LearningListLimit. Each one's state is the search attribute's,
 // which a decision changes, and its text is the memo's.
 func ListLearnings(ctx context.Context, temporalClient client.Client) ([]LearningEntry, error) {
 	data := converter.GetDefaultDataConverter()
@@ -200,8 +201,8 @@ func ListLearnings(ctx context.Context, temporalClient client.Client) ([]Learnin
 	return entries, nil
 }
 
-// DecideLearning accepts, rejects or retires a learning through
-// UpdateLearningDecide, which the workflow refuses when the state does not
+// DecideLearning decides a learning (accept, reject or retire, and the
+// curator's apply and cover) through UpdateLearningDecide, which the workflow refuses when the state does not
 // allow it. It returns the learning as it is after.
 func DecideLearning(ctx context.Context, temporalClient client.Client, id string, decision LearningDecision) (LearningEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)

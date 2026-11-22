@@ -131,7 +131,7 @@ const (
 	SignalRereview = "rereview"
 	// QueryLearning returns a learning's Entry.
 	QueryLearning = "learning"
-	// UpdateLearningDecide accepts, rejects or retires a learning.
+	// UpdateLearningDecide moves a learning: accept, reject, retire, apply or cover.
 	UpdateLearningDecide = "learning-decide"
 )
 
