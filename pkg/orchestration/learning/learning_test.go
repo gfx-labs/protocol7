@@ -325,3 +325,18 @@ func TestListShowsAnEntryOnce(t *testing.T) {
 	assert.NotContains(t, queries[0], "ContinuedAsNew")
 	assert.Contains(t, queries[0], "ExecutionStatus = 'Running' OR ExecutionStatus = 'Completed'", "the runs that continued as new are not asked for")
 }
+
+// The open entries are asked for by their state, so that a log of more than a
+// read returns does not hide an old open entry behind newer settled ones.
+func TestOpenAsksForTheOpenStates(t *testing.T) {
+	log := learningtest.New(t)
+	log.Add(entry("o1", "Open", selfdev))
+	applied := entry("a1", "Applied", selfdev)
+	applied.State = learning.Applied
+	log.Add(applied)
+	open, err := log.Store().Open(t.Context())
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, "o1", open[0].ID)
+	assert.Contains(t, log.Queries[len(log.Queries)-1], "SelfdevLearningState = 'open' OR SelfdevLearningState = 'proposed'")
+}
