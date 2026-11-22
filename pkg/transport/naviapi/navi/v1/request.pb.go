@@ -41,8 +41,12 @@ type ProjectRequest struct {
 	StartedBy *Person `protobuf:"bytes,10,opt,name=started_by,json=startedBy,proto3" json:"started_by,omitempty"`
 	Issue     *Issue  `protobuf:"bytes,11,opt,name=issue,proto3" json:"issue,omitempty"`
 	// follows is the id of an earlier request of this chat to the same project.
-	// Its target chat, if it still runs, gets this request as a message.
-	Follows       string `protobuf:"bytes,12,opt,name=follows,proto3" json:"follows,omitempty"`
+	// The target says so in the first message of the new chat that works on this
+	// request: one chat answers one request, so a follow-up is never sent to the
+	// chat of the earlier one.
+	Follows string `protobuf:"bytes,12,opt,name=follows,proto3" json:"follows,omitempty"`
+	// follows_chat is the target chat of the earlier request. It is kept for the
+	// record, and nothing is sent to it.
 	FollowsChat   string `protobuf:"bytes,13,opt,name=follows_chat,json=followsChat,proto3" json:"follows_chat,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

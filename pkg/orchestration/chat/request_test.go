@@ -345,7 +345,8 @@ func TestAnUndeliveredRequestIsDeclinedAndAWaitingOneWithdrawn(t *testing.T) {
 }
 
 // A request may continue an earlier one to the same project: it names the
-// chat that works on the earlier request, which navi continues when it runs.
+// chat that works on the earlier request, for the record: the target starts a
+// chat of its own for the new request.
 func TestAFollowUpRequestNamesTheEarlierChat(t *testing.T) {
 	env, fake := newEnvironment(t)
 	var results []p7.ToolResult

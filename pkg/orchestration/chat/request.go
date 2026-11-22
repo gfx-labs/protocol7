@@ -183,7 +183,7 @@ func requestSchema(targets []string) json.RawMessage {
 			"why":     text("Why this chat cannot do it or get it itself."),
 			"tried":   text("What it already tried."),
 			"next":    text("What it will do with the answer."),
-			"follows": map[string]any{"type": "string", "description": "The ID of an earlier request of this chat to the same project, when this one continues it: the same chat of that project gets it, if it still runs."},
+			"follows": map[string]any{"type": "string", "description": "The ID of an earlier request of this chat to the same project, when this one continues it. The project starts a new chat for this request, tells it that it continues the earlier one, and answers it by itself."},
 		},
 		"required":             []string{"target", "need", "why"},
 		"additionalProperties": false,
