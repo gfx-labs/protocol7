@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net/url"
 	"strings"
@@ -202,5 +203,39 @@ func TestSubscribeWithSPIFFEIdentity(t *testing.T) {
 	err = subscribe(ctx, url, consumerName, clientTLS(strangerID), func(context.Context, Delivery) error { return nil })
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "authorization") {
 		t.Fatalf("ungranted SPIFFE ID: got %v, want an authorization error", err)
+	}
+}
+
+// A bus that cannot be reached does not end the subscriber: it logs, waits
+// and tries again, and it returns, with no error, when its context ends.
+func TestSubscribeRetryingSurvivesAnUnreachableBus(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	attempts := 0
+	var logged strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logged, nil))
+	done := make(chan error, 1)
+	go func() {
+		done <- retry(ctx, logger, time.Millisecond, 4*time.Millisecond, func(context.Context) error {
+			attempts++
+			if attempts == 5 {
+				cancel()
+			}
+			return errors.New("connect to the webhook bus: dial tcp 10.43.54.202:4222: connect: operation not permitted")
+		})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("retry ended with %v, want nil once the context ended", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("retry did not return")
+	}
+	if attempts != 5 {
+		t.Errorf("%d attempts, want 5 (the fifth cancels)", attempts)
+	}
+	if got := strings.Count(logged.String(), "operation not permitted"); got != 4 {
+		t.Errorf("logged the failure %d times, want 4 (not the one that the cancel caused)", got)
 	}
 }

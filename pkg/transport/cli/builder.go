@@ -135,8 +135,11 @@ func (c *builderCommand) Run(ctx context.Context, logger *slog.Logger) error {
 	}
 	if c.HooksURL != "" {
 		handler := build.PushHandler{Repository: c.Repository, Branch: c.Branch, Inputs: c.Inputs, Temporal: temporalClient}
+		// The bus only warms the cache for pushes. A builder that cannot reach
+		// it still serves the build queue, so a failure is logged and tried
+		// again, and never ends the builder.
 		group.Go(func() error {
-			return hooks.Subscribe(ctx, hooks.SubscriberConfig{URL: c.HooksURL, Consumer: c.HooksConsumer, SPIFFESocket: c.SPIFFESocket, ServerID: c.HooksServerID},
+			return hooks.SubscribeRetrying(ctx, logger, hooks.SubscriberConfig{URL: c.HooksURL, Consumer: c.HooksConsumer, SPIFFESocket: c.SPIFFESocket, ServerID: c.HooksServerID},
 				func(ctx context.Context, delivery hooks.Delivery) error {
 					if delivery.Source != "github" {
 						return nil

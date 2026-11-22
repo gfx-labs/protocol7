@@ -302,3 +302,7 @@ The recorded journal holds the scratch paths of the machine it was recorded on. 
 - A turn that reaches its activity timeout.
 - An activity retry that finds its turn still running and attaches to it. Both restart cases above ended their turn before the new worker started. The session manager does attach in its test and in the run against towa.
 - More than one machine, and any harness other than towa.
+
+## Builder and the webhook bus
+
+`p7 builder` serves the build queue and, with `--hooks-url`, also takes pushes from the webhook bus to warm the cache. The bus is the optional part: `hooks.SubscribeRetrying` logs a failure to reach it (no route, an identity or consumer not granted) and tries again, waiting 5 seconds growing to 5 minutes, and never ends the builder. Before, `Subscribe`'s error ended the builder's errgroup, and a builder whose network policy did not allow the bus crash-looped (24 restarts in 5.5 hours in p7-oku and p7-oku-review) with its build queue down too. Test: `TestSubscribeRetryingSurvivesAnUnreachableBus`. A builder that cannot reach the bus is not told apart from one that is up except by the warnings in its log.
