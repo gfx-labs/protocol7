@@ -27,6 +27,13 @@ message EscalationRequest {
   Person started_by = 9;
   string title = 10;
   EscalationSession session = 11;
+  // person_only keeps the escalation from the handler: it goes to a person at
+  // once, and only a person's answer resolves it.
+  bool person_only = 12;
+  // notify is the workflow ID of the workflow to tell, in place of the chat.
+  // It receives the same escalation-notice signal. A workflow that raises an
+  // escalation of its own has no chat, so chat is empty then.
+  string notify = 13;
 }
 
 // EscalationSession is what the handler's chat takes from the chat it serves.
