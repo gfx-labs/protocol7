@@ -1,0 +1,41 @@
+# Project requests
+
+Status: implemented in the SDK (this document), navi (`protocol7-selfdev`, "Project requests" in its README) and the deployment's projects file. Written 2026-11-22.
+
+A chat in one navi project asks another project for something it cannot do itself, and the other project decides. The first user is oku-review, whose chats need changes in protocol7 or in the oku project's area, and whose GitHub scope must stay as it is: the request crosses projects, not the scope.
+
+## Behavior
+
+- **The tool.** A chat whose project may ask others has `project_request` (`target`, `need`, `why`, `tried`, `next`, and optionally `follows`). Which projects it may ask is navi's configuration: navi puts them in `ChatRequest.request_targets` when it starts the chat, and a child holds its parent's. A chat with none has no tool. The tool returns the request's ID at once and tells the agent to end its turn. The answer arrives as a message, as an escalation's does, and the chat waits without a model slot (status `escalated`).
+- **The record.** A request is one workflow in the asking project's namespace, `selfdev.ProjectRequest` (`project-request-<id>`), started as an abandoned child of the chat. It has `SelfdevKind=project-request`, the chat as `SelfdevParent`, and its status in `SelfdevEscalationState`, so navi lists it without asking a workflow. States: `open`, `delivered`, `accepted`, then `done`, `redirected`, `declined` or `withdrawn` (the asking chat ended first).
+- **The target's chat.** navi starts a chat in the target project, `chat-pr<hash of the asking project and the request id>` (`navi.RequestChatID`), whose first message is the request. The message names the asking project and holds the request's words in a fence, as untrusted input (`navi.RequestMessageText`, built with `pkg/support/prompt`). The chat's request has `project_request` set (project, request, asking chat, title), `Restricted`, no `request_targets` (a request chat does not ask a third project) and the target project's own scope, which is its ceiling. Its first turn's context adds `request-target.md`: judge it, and answer with `project_request_reply`.
+- **The answer.** `project_request_reply` takes `outcome`, `text` and `reference`:
+  - `accepted`: the target takes the work. `reference` is the issue or pull request that delivers it. The chat does the work through the project's own flow and answers again with `done` (reference: the merged pull request or commit), or `declined` if it cannot deliver.
+  - `redirected`: what to do instead (a different approach, a feature that exists, where the change belongs).
+  - `declined`: why not. A request for a credential, a permission or anything that needs a person is declined with who to ask.
+  - The tool refuses `done` before `accepted`, `accepted` without a reference, and any answer after a final one. The chat closes after `redirected`, `declined` or `done`. A chat that ends a turn with no answer is reminded up to three times, and then the request is declined as navi. A chat that accepted and ends a turn without saying `done` is reminded once, and then waits: the work may go on outside the chat.
+- **The way back.** The answers are in the target chat's state (`ChatState.project_replies`). navi reads them and hands them to the request workflow with the update `project-request-reply`. The workflow signals the asking chat (`project-request`), which queues one message for each answer (ID `request-<id>-<n>`, `Restricted`, the target's words in a fence, the outcome and what to do about it said outside the fence). The next turn starts from it.
+- **Deadlines.** navi has an hour to deliver. The target's chat has a day to answer (accept, redirect or decline). An accepted request has seven days to be reported done. The workflow declines a request that passes one, as navi, with the reason, and the asking chat gets that as an answer. The workflow's own timeout is 15 days, past all three.
+- **Continuing.** A request with `follows` (the ID of an earlier request of the same chat to the same project) is delivered as a message to the earlier target chat if it still runs, and starts a new chat if it does not.
+
+## Why navi carries it
+
+The two projects share nothing: each has its own Temporal namespace and workers, and a tenant's worker identity may poll and start only in its own namespace (`protocol7-selfdev/kubernetes/README.md`, "Temporal SPIFFE isolation"). navi is the one identity with the writer role in every namespace, and it already holds the table of projects. So the policy (which project may ask which) is checked where it cannot be forged: navi takes the asking project from the namespace it reads the request in, never from what the request says, and checks it against the projects file.
+
+Nexus was the alternative. A Nexus operation from a chat to a handler in the target namespace would carry the result back durably with no polling. It was not taken because each pair needs an endpoint (an operator API call by an administrator) and a `nexus_endpoints` grant in the Temporal authorizer's configuration, which lives in gfx-labs/baremetal, so the pairs that may ask would be configured there and not in navi's projects file, and a tenant's worker would need the Nexus handler registered by each app. If those costs are accepted later, only the transport changes: the request workflow and the target chat stay as they are, and the update calls navi makes become a Nexus operation's start and result.
+
+## What changes for a running chat
+
+Nothing for a chat that has no targets and no request: the new signal channel, the new tools and the new statuses do not exist for it. The commands a request adds (the child workflow, the cancellation at close, the reminders and the close after the final answer) are reached only from the new tools and a request chat. The reminders and the close are behind `workflow.GetVersion("project-request")`. A chat's `idleStatus`, and a child chat's close, count waiting requests with waiting escalations, and a chat that sent none counts as before. Escalations are untouched.
+
+Two histories recorded from the chat workflow of protocol7 81909bd, before this change, replay with the current code (`TestHistoriesFromBeforeProjectRequestsReplay`, `pkg/orchestration/chat/testdata`): a chat with two turns, an escalation that a person answered, a child chat and a close, and that child. They were recorded on a Temporal dev server with the CLI (`temporal workflow show --output json`) from a test run against that commit with fake session activities. A change to the commands such a chat issues fails the replay (checked by adding a timer to the loop).
+
+## Tests
+
+`pkg/orchestration/chat/request_test.go`, over Temporal's test environment: the full path (tool, delivery, accepted, done, the messages that the chat gets, their fences and restriction, the status while waiting), a target that is not listed and a request with no reason, a chat with no targets (no tool, no instructions), the reply tool's transitions and the close, the reminders and the decline of a chat that never answers, the deadlines (delivery, and an accepted request never done) and the withdrawal at close, and a follow-up, and the replay of the recorded histories.
+
+## Not built
+
+- No wake-up from the target's side when work that the target accepted is delivered some other way, such as an issue that the issue workflow takes. The target's chat is responsible for answering `done`: it is reminded once, and the asking project's seven days end the wait. The target's chat then stays open and idle until a person closes it or messages it to answer `done`.
+- A request chat cannot ask a third project.
+- navi does not tell the target's chat when the asking chat withdraws.

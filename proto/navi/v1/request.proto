@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package navi.v1;
+
+import "google/protobuf/timestamp.proto";
+import "navi/v1/chat.proto";
+import "navi/v1/common.proto";
+
+option go_package = "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1;naviv1";
+
+// The project request workflow's payloads. A chat asks another project for
+// something it cannot do itself. navi, which reaches every project's Temporal
+// namespace, checks that the project may ask, starts or continues a chat in the
+// target project, and hands that chat's answers back. Message names are those
+// of the Go types in pkg/domain/navi.
+
+// ProjectRequest is what a chat asks of another project.
+message ProjectRequest {
+  string id = 1;
+  // chat is the id of the chat that asks.
+  string chat = 2;
+  // target is the project that is asked.
+  string target = 3;
+  string need = 4;
+  string why = 5;
+  string tried = 6;
+  string next = 7;
+  string title = 8;
+  // project is the project of the chat that asks. navi uses the namespace it
+  // read the request in and ignores this.
+  string project = 9;
+  Person started_by = 10;
+  Issue issue = 11;
+  // follows is the id of an earlier request of this chat to the same project.
+  // Its target chat, if it still runs, gets this request as a message.
+  string follows = 12;
+  string follows_chat = 13;
+}
+
+// ProjectRequestState is the request workflow's input and result, and what it
+// answers the project-request query with.
+message ProjectRequestState {
+  ProjectRequest request = 1;
+  // status is a ProjectRequestStatus: open, delivered, accepted, done,
+  // redirected, declined or withdrawn.
+  string status = 2;
+  google.protobuf.Timestamp raised = 3;
+  google.protobuf.Timestamp changed = 4;
+  // target_chat is the chat that works on the request in the target project.
+  string target_chat = 5;
+  repeated ProjectReply replies = 6;
+  // withdrawn is set when the requesting chat ended with the request waiting.
+  bool withdrawn = 7;
+  // delivered_at is when navi handed the request to the target project.
+  google.protobuf.Timestamp delivered_at = 8;
+}
+
+// ProjectDelivery is the payload of the project-request-deliver update: navi
+// started or continued the chat that works on the request.
+message ProjectDelivery {
+  string target_chat = 1;
+}
+
+// ProjectRequestNotice is the payload of the project-request signal that the
+// request workflow sends the chat that asked, on each change.
+message ProjectRequestNotice {
+  string id = 1;
+  string status = 2;
+  string target_chat = 3;
+  // reply is set when the change is an answer.
+  ProjectReply reply = 4;
+}

@@ -80,6 +80,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	closes := workflow.GetSignalChannel(ctx, SignalClose)
 	children := workflow.GetSignalChannel(ctx, SignalReport)
 	escalations := workflow.GetSignalChannel(ctx, SignalEscalation)
+	requests := workflow.GetSignalChannel(ctx, SignalProjectRequest)
 	addMessage := func(message *Message) {
 		if message.GetId() != "" && message.GetText() != "" {
 			state.Pending = append(state.Pending, message)
@@ -93,6 +94,15 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 			return
 		}
 		if message, ok := takeEscalation(&state, notice); ok {
+			addMessage(message)
+		}
+	}
+	// takeRequest applies what a request to another project told the chat.
+	takeRequest := func(notice *ProjectRequestNotice) {
+		if notice == nil {
+			return
+		}
+		if message, ok := takeProjectRequest(&state, notice); ok {
 			addMessage(message)
 		}
 	}
@@ -155,6 +165,11 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 			var notice *EscalationNotice
 			channel.Receive(ctx, &notice)
 			takeNotice(notice)
+		})
+		selector.AddReceive(requests, func(channel workflow.ReceiveChannel, _ bool) {
+			var notice *ProjectRequestNotice
+			channel.Receive(ctx, &notice)
+			takeRequest(notice)
 		})
 		selector.AddReceive(closes, func(channel workflow.ReceiveChannel, _ bool) {
 			var action *Action
@@ -224,6 +239,13 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 					break
 				}
 				takeNotice(notice)
+			}
+			for {
+				var notice *ProjectRequestNotice
+				if !requests.ReceiveAsync(&notice) {
+					break
+				}
+				takeRequest(notice)
 			}
 			for {
 				var action *Action
@@ -324,8 +346,9 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 		}
 		state.Result = summary
 		report(ctx, state, state.Result)
+		requestTurnEnded(ctx, &state, summary.Stopped || err != nil)
 		// A child that waits for an answer to an escalation is not done.
-		if state.Request.Parent != "" && !state.Attention && len(state.Pending) == 0 && openEscalations(&state) == 0 && (!modernChild || liveChildren(&state) == 0) {
+		if state.Request.Parent != "" && !state.Attention && len(state.Pending) == 0 && openAsks(&state) == 0 && (!modernChild || liveChildren(&state) == 0) {
 			state.Closing = true
 		}
 	}
@@ -337,6 +360,7 @@ func run(ctx workflow.Context, state State) (*Report, error) {
 	closeCtx, _ := workflow.NewDisconnectedContext(ctx)
 	closeChildren(closeCtx, &state)
 	withdrawEscalations(closeCtx, &state)
+	withdrawRequests(closeCtx, &state)
 	// Even a ready timed await consumes command IDs, so historical roots must skip it.
 	if state.Request.Parent != "" || len(state.Children) > 0 {
 		if workflow.GetVersion(closeCtx, versionSubchatClose, workflow.DefaultVersion, 1) >= 1 {

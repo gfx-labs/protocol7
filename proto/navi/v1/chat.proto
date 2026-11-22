@@ -322,6 +322,13 @@ message ChatState {
   Board board = 23;
   string last_stop = 24;
   string error = 25;
+  // project_requests are the requests this chat sent to other projects.
+  repeated ProjectRequestRef project_requests = 26;
+  // project_replies are the answers a chat that a project request started
+  // gave, in order. navi reads them and hands them to the requesting chat.
+  repeated ProjectReply project_replies = 27;
+  // request_nudges counts the reminders to answer that a request chat got.
+  int32 request_nudges = 28;
 }
 
 // ChatRequest describes a chat as it was started.
@@ -347,6 +354,55 @@ message ChatRequest {
   string pool = 19;
   Serving serves = 20;
   string review_hint = 21;
+  // request_targets are the projects this chat may send requests to
+  // (project_request). navi sets them from its configuration when it starts
+  // the chat, and a child holds its parent's.
+  repeated string request_targets = 22;
+  // project_request is set on a chat that a request from another project
+  // started. Its input is untrusted, and it answers with
+  // project_request_reply.
+  ProjectOrigin project_request = 23;
+}
+
+// ProjectOrigin names the request from another project that started a chat.
+// navi sets it from the namespace it read the request in, never from what the
+// requesting chat claims.
+message ProjectOrigin {
+  // project is the requesting project.
+  string project = 1;
+  // request is the id of the request in the requesting project.
+  string request = 2;
+  // chat is the requesting chat's id there.
+  string chat = 3;
+  string title = 4;
+}
+
+// ProjectReply is one answer to a project request.
+message ProjectReply {
+  // seq counts the answers to one request from 1.
+  int32 seq = 1;
+  // outcome is accepted, redirected, declined or done.
+  string outcome = 2;
+  string text = 3;
+  // reference is the issue or pull request the target delivers with.
+  string reference = 4;
+  // by names who answered: the target's chat, or navi.
+  string by = 5;
+  google.protobuf.Timestamp at = 6;
+}
+
+// ProjectRequestRef is what a chat keeps of a request it sent to another
+// project.
+message ProjectRequestRef {
+  string id = 1;
+  string title = 2;
+  string target = 3;
+  // status is a ProjectRequestStatus.
+  string status = 4;
+  // target_chat is the chat that works on it in the target project.
+  string target_chat = 5;
+  // last_reply is the number of the last answer the chat took.
+  int32 last_reply = 6;
 }
 
 // Repository is one repository cloned into a chat's session.

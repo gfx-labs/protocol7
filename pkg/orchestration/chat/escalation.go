@@ -500,10 +500,14 @@ func openEscalations(state *State) int {
 	return count
 }
 
+// openAsks counts what the chat waits on: the escalations that wait, and the
+// requests to other projects that do.
+func openAsks(state *State) int { return openEscalations(state) + openRequests(state) }
+
 // idleStatus is what a chat with no turn to run is: idle, or escalated while
 // it waits for an answer.
 func idleStatus(state *State) Status {
-	if openEscalations(state) > 0 {
+	if openAsks(state) > 0 {
 		return StatusEscalated
 	}
 	return StatusIdle
