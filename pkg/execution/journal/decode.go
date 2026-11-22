@@ -166,6 +166,10 @@ func (d *Decoder) fromAgent(frame domain.Frame, message rpcMessage) []domain.Ses
 		event := d.event(frame, domain.EventPlan)
 		event.Plan = update.Entries
 		return []domain.SessionEvent{event}
+	case "usage_update":
+		event := d.event(frame, domain.EventUsage)
+		event.Usage = &domain.UsageEvent{Model: update.model(), Tokens: update.Used, Window: update.Size, Cost: update.Cost}
+		return []domain.SessionEvent{event}
 	}
 	return nil
 }
@@ -247,6 +251,26 @@ type sessionUpdate struct {
 	Status     string             `json:"status"`
 	RawInput   json.RawMessage    `json:"rawInput"`
 	Entries    []domain.PlanEntry `json:"entries"`
+	// Size, Used and Cost are those of a usage update.
+	Size int64        `json:"size"`
+	Used int64        `json:"used"`
+	Cost *domain.Cost `json:"cost"`
+	// Meta holds the harness's addition. towa names the model under "towa".
+	Meta map[string]json.RawMessage `json:"_meta"`
+}
+
+// harnessKey is where towa puts its addition to the _meta of a message.
+const harnessKey = "towa"
+
+// model is the model that a usage update names in the harness's addition.
+func (u sessionUpdate) model() string {
+	var addition struct {
+		Model string `json:"model"`
+	}
+	if raw, ok := u.Meta[harnessKey]; ok {
+		_ = json.Unmarshal(raw, &addition)
+	}
+	return addition.Model
 }
 
 // toolOutput is the text of a tool call's content: its text blocks, and for

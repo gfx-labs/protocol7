@@ -45,12 +45,41 @@ func (t *Turn) Observe(event domain.SessionEvent) {
 			t.result.Truncated = true
 		}
 		t.text.WriteString(cut(event.Text, max(room, 0)))
+	case domain.EventUsage:
+		t.addUsage(event.Usage)
 	case domain.EventTurnEnd:
 		t.ended = true
 		if event.End != nil {
 			t.result.StopReason = event.End.StopReason
 			t.result.Failure = event.End.Failure
 		}
+	}
+}
+
+// addUsage counts one model request of the turn.
+func (t *Turn) addUsage(usage *domain.UsageEvent) {
+	if usage == nil {
+		return
+	}
+	total := t.result.Usage
+	if total == nil {
+		total = &domain.TurnUsage{}
+		t.result.Usage = total
+	}
+	total.Requests++
+	total.Tokens += usage.Tokens
+	if usage.Model != "" {
+		if total.ByModel == nil {
+			total.ByModel = make(map[string]domain.ModelUsage)
+		}
+		model := total.ByModel[usage.Model]
+		model.Requests++
+		model.Tokens += usage.Tokens
+		total.ByModel[usage.Model] = model
+	}
+	if usage.Cost != nil {
+		cost := *usage.Cost
+		total.SessionCost = &cost
 	}
 }
 

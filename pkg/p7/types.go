@@ -66,6 +66,7 @@ const (
 	EventToolCall   = domain.EventToolCall
 	EventToolUpdate = domain.EventToolUpdate
 	EventPlan       = domain.EventPlan
+	EventUsage      = domain.EventUsage
 	EventTurnEnd    = domain.EventTurnEnd
 )
 
@@ -105,3 +106,16 @@ func (g GitClone) input(destination string) domain.Input {
 		Repository: g.Repository, Ref: g.Ref, Branch: g.Branch,
 	}
 }
+
+// TurnUsage is what the model requests of a turn used, as the harness
+// reported it. Turn.Usage holds it.
+type TurnUsage = domain.TurnUsage
+
+// ModelUsage is the usage of one model in a turn.
+type ModelUsage = domain.ModelUsage
+
+// UsageEvent is the harness's usage update for one model request.
+type UsageEvent = domain.UsageEvent
+
+// Cost is an amount of money in a currency the harness names.
+type Cost = domain.Cost

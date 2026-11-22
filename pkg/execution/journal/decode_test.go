@@ -99,3 +99,69 @@ func TestALoadedConversationIsNotShownTwice(t *testing.T) {
 		t.Errorf("the first turn's answer appears %d times in the messages, want 1", got)
 	}
 }
+
+// frames builds a session's journal from JSON-RPC messages, in order.
+func frames(t *testing.T, messages ...[2]string) []domain.Frame {
+	t.Helper()
+	var out []domain.Frame
+	for index, message := range messages {
+		out = append(out, domain.Frame{Seq: int64(index + 1), T: 1700000000000 + int64(index), From: message[0], Msg: json.RawMessage(message[1])})
+	}
+	return out
+}
+
+// A turn's usage is the sum of its model requests' usage updates, by model,
+// with the session's cost as of the last one. A usage update with no model or
+// no cost is counted and adds nothing to what it lacks.
+func TestTurnUsageSumsTheUsageUpdates(t *testing.T) {
+	journalFrames := frames(t,
+		[2]string{"controller", `{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"_meta":{"p7":{"turn":"t1"}},"prompt":[{"type":"text","text":"go"}]}}`},
+		[2]string{"agent", `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","size":200000,"used":1000,"cost":{"amount":0.5,"currency":"USD"},"_meta":{"towa":{"model":"claude-opus-5-5"}}}}}`},
+		[2]string{"agent", `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}}`},
+		[2]string{"agent", `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","size":200000,"used":2500,"cost":{"amount":1.25,"currency":"USD"},"_meta":{"towa":{"model":"claude-opus-5-5"}}}}}`},
+		[2]string{"agent", `{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","size":128000,"used":300}}}`},
+		[2]string{"agent", `{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`},
+	)
+	decoder := journal.NewDecoder("s1")
+	turn := journal.NewTurn("t1")
+	for _, frame := range journalFrames {
+		for _, event := range decoder.Decode(frame) {
+			turn.Observe(event)
+		}
+	}
+	result := turn.Result()
+	if result.Usage == nil {
+		t.Fatal("the turn has no usage")
+	}
+	if result.Usage.Requests != 3 || result.Usage.Tokens != 3800 {
+		t.Errorf("usage = %d requests, %d tokens, want 3 requests, 3800 tokens", result.Usage.Requests, result.Usage.Tokens)
+	}
+	if got := result.Usage.ByModel["claude-opus-5-5"]; got.Requests != 2 || got.Tokens != 3500 {
+		t.Errorf("claude-opus-5-5 usage = %+v, want 2 requests, 3500 tokens", got)
+	}
+	if len(result.Usage.ByModel) != 1 {
+		t.Errorf("by model = %v, want only the named model", result.Usage.ByModel)
+	}
+	// The request with no cost does not erase the cost of the one before it.
+	if result.Usage.SessionCost == nil || result.Usage.SessionCost.Amount != 1.25 || result.Usage.SessionCost.Currency != "USD" {
+		t.Errorf("session cost = %+v, want 1.25 USD", result.Usage.SessionCost)
+	}
+}
+
+// A turn whose harness reported no usage has none, so that a caller can tell
+// "nothing was reported" from "nothing was used".
+func TestTurnWithoutUsageUpdatesHasNoUsage(t *testing.T) {
+	decoder := journal.NewDecoder("s1")
+	turn := journal.NewTurn("t1")
+	for _, frame := range frames(t,
+		[2]string{"controller", `{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"_meta":{"p7":{"turn":"t1"}},"prompt":[{"type":"text","text":"go"}]}}`},
+		[2]string{"agent", `{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}`},
+	) {
+		for _, event := range decoder.Decode(frame) {
+			turn.Observe(event)
+		}
+	}
+	if usage := turn.Result().Usage; usage != nil {
+		t.Errorf("usage = %+v, want none", usage)
+	}
+}
