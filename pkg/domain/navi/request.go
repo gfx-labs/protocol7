@@ -1,6 +1,9 @@
 package navi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+
 	naviv1 "github.com/gfx-labs/protocol7/pkg/transport/naviapi/navi/v1"
 )
 
@@ -31,7 +34,7 @@ const (
 	MemoTarget = "target"
 	// RequestChatPrefix starts the id of a chat that a request started in the
 	// target project.
-	RequestChatPrefix = "pr-"
+	RequestChatPrefix = "pr"
 )
 
 // ProjectRequestStatus is the state of a request. ProjectRequestState.Status
@@ -87,9 +90,13 @@ func ReplyTerminal(outcome ReplyOutcome) bool {
 func ProjectRequestWorkflowID(id string) string { return "project-request-" + id }
 
 // RequestChatID is the id of the chat that works on a request in the target
-// project: it names the project that asked, so that two projects' request ids
-// cannot meet.
-func RequestChatID(origin, id string) string { return RequestChatPrefix + origin + "-" + id }
+// project. It is a function of the project that asked and the request, so that
+// delivering twice starts one chat and two projects' request ids cannot meet,
+// and it has the form of any chat id (lower-case letters and digits, at most 32).
+func RequestChatID(origin, id string) string {
+	sum := sha256.Sum256([]byte(origin + "/" + id))
+	return RequestChatPrefix + hex.EncodeToString(sum[:])[:30]
+}
 
 // ProjectRequest is what a chat asks of another project.
 type ProjectRequest = naviv1.ProjectRequest

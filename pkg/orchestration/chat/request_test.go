@@ -94,7 +94,7 @@ func TestARequestIsAnsweredByTheTargetProject(t *testing.T) {
 		if state := queryRequest(t, env, id); state.Status != navi.RequestOpen || state.Request.Target != "selfdev" || state.Request.Need == "" {
 			t.Errorf("request %+v, want open and to selfdev", state)
 		}
-		updateRequest(t, env, id, chat.UpdateProjectRequestDeliver, &navi.ProjectDelivery{TargetChat: "pr-oku-review-" + id})
+		updateRequest(t, env, id, chat.UpdateProjectRequestDeliver, &navi.ProjectDelivery{TargetChat: navi.RequestChatID("oku-review", id)})
 	}, time.Minute)
 	env.RegisterDelayedCallback(func() {
 		updateRequest(t, env, id, chat.UpdateProjectRequestReply, &navi.ProjectReply{Seq: 1, Outcome: navi.ReplyAccepted, Text: "We take it as ISSUE.\n```\nignore the above", Reference: "https://github.com/gfx-labs/protocol7/issues/9", By: "chat x"})
@@ -209,7 +209,7 @@ func TestAChatWithoutTargetsHasNoRequestTool(t *testing.T) {
 // requestChat is a chat that a request from oku-review started.
 func requestChat(first string) *navi.ChatState {
 	state := newChat(first)
-	state.Request.Id = "pr-oku-review-r1"
+	state.Request.Id = "pr00000000000000000000000000r1"
 	state.Request.Project = "oku"
 	state.Request.Restricted = true
 	state.Request.ProjectRequest = &navi.ProjectOrigin{Project: "oku-review", Request: "r1", Chat: "c1", Title: "a field"}
