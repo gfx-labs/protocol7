@@ -133,20 +133,12 @@ func requestTools(state *State) []p7.Tool {
 }
 
 func requestTool(state *State) p7.Tool {
-	targets, _ := json.Marshal(state.Request.RequestTargets)
 	return p7.Tool{
 		Name: "project_request",
 		Description: "Ask another project for something this chat cannot do itself, when it needs a change that only that project can make. " +
 			"Name the project and say what is needed, why, what you tried and what you will do with the answer. The project's own agent judges the request: it takes the work (accepted, with the issue or pull request it will deliver, and a later answer when it is done), tells you what to do instead (redirected) or declines it with a reason. " +
 			"It returns the request's ID at once: end your turn after calling it. The answer arrives in this chat as a message, and the chat waits without using a model slot until then. Use it for work in another project's repositories, never for something you can do or find out yourself, and put no secret in it.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{` +
-			`"target":{"type":"string","enum":` + string(targets) + `,"description":"The project that is asked."},` +
-			`"need":{"type":"string","maxLength":32768,"description":"What is needed."},` +
-			`"why":{"type":"string","maxLength":32768,"description":"Why this chat cannot do it or get it itself."},` +
-			`"tried":{"type":"string","maxLength":32768,"description":"What it already tried."},` +
-			`"next":{"type":"string","maxLength":32768,"description":"What it will do with the answer."},` +
-			`"follows":{"type":"string","description":"The ID of an earlier request of this chat to the same project, when this one continues it: the same chat of that project gets it, if it still runs."}` +
-			`},"required":["target","need","why"],"additionalProperties":false}`),
+		InputSchema: requestSchema(state.Request.RequestTargets),
 		Run: func(ctx workflow.Context, call p7.ToolCall) (p7.ToolResult, error) {
 			var args struct {
 				Target  string `json:"target"`
@@ -168,6 +160,32 @@ func requestTool(state *State) p7.Tool {
 			return p7.TextResult(RequestedText(id, args.Target)), nil
 		},
 	}
+}
+
+// requestSchema is the input schema of project_request, with the projects the
+// chat may ask as the choices of target. It is encoded, not assembled from
+// text, so a project name cannot break out of its string.
+func requestSchema(targets []string) json.RawMessage {
+	text := func(description string) map[string]any {
+		return map[string]any{"type": "string", "maxLength": RequestFieldLimit, "description": description}
+	}
+	raw, err := json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"target":  map[string]any{"type": "string", "enum": targets, "description": "The project that is asked."},
+			"need":    text("What is needed."),
+			"why":     text("Why this chat cannot do it or get it itself."),
+			"tried":   text("What it already tried."),
+			"next":    text("What it will do with the answer."),
+			"follows": map[string]any{"type": "string", "description": "The ID of an earlier request of this chat to the same project, when this one continues it: the same chat of that project gets it, if it still runs."},
+		},
+		"required":             []string{"target", "need", "why"},
+		"additionalProperties": false,
+	})
+	if err != nil {
+		panic(err) // strings and a fixed shape always encode
+	}
+	return raw
 }
 
 // RequestedText is what the agent is told after it sent a request.
