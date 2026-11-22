@@ -18,9 +18,10 @@ type Vars map[string]any
 // Builder collects a prompt. The zero value is ready to use. Blocks are
 // separated by one blank line, so callers never manage newlines.
 type Builder struct {
-	vars   Vars
-	blocks []string
-	errs   []error
+	vars    Vars
+	blocks  []string
+	errs    []error
+	library *Library
 }
 
 // New returns a builder whose placeholders are filled from vars.
