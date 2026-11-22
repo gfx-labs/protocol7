@@ -48,3 +48,32 @@ func TestLoadRejectsABrokenTemplate(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestPartIncludesParts(t *testing.T) {
+	shared := fstest.MapFS{
+		"main.md":          {Data: []byte("Write for {{.who}}.\n\n{{part \"voice\"}}\n\n{{part \"dest\"}}")},
+		"voice/default.md": {Data: []byte("plain voice")},
+		"voice/direct.md":  {Data: []byte("direct voice for {{.who}}")},
+		"dest.md":          {Data: []byte("{{part \"voice\"}} again")},
+		"a.md":             {Data: []byte("{{part \"b\"}}")},
+		"b.md":             {Data: []byte("{{part \"a\"}}")},
+		"self.md":          {Data: []byte("{{part \"nope\"}}")},
+	}
+	lib, err := Load(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := lib.Pick("voice", "direct").New(Vars{"who": "ops"}).Part("main").String()
+	want := "Write for ops.\n\ndirect voice for ops\n\ndirect voice for ops again\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	for _, name := range []string{"a", "self"} {
+		if b := lib.New(nil).Part(name); b.Err() == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if b := New(nil).Template(`{{part "voice"}}`); b.Err() == nil {
+		t.Error("part without a library: no error")
+	}
+}

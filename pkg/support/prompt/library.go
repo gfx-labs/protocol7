@@ -23,9 +23,16 @@ type Library struct {
 	picks  map[string]string
 }
 
+// partStub lets Load parse a part that calls {{part "name"}}; the real function
+// is bound to a builder when the part is executed.
+var partStub = template.FuncMap{"part": func(string) (string, error) { return "", nil }}
+
 // Load reads the parts of each file system. A later one overrides parts of
 // the same name in an earlier one, so an app can lay its own files over a
-// shared set. Every file must parse as a text/template, so a broken part fails
+// shared set. A part includes another with {{part "name"}}, resolved through
+// the same Pick and layers and filled from the same vars, so a prompt's
+// structure can live in the markdown. A part that includes itself is an error.
+// Every file must parse as a text/template, so a broken part fails
 // at load and not when a prompt is built.
 func Load(layers ...fs.FS) (*Library, error) {
 	l := &Library{layers: layers}
@@ -39,7 +46,7 @@ func Load(layers ...fs.FS) (*Library, error) {
 			if err != nil {
 				return err
 			}
-			if _, err := template.New(name).Parse(string(data)); err != nil {
+			if _, err := template.New(name).Funcs(partStub).Parse(string(data)); err != nil {
 				errs = append(errs, fmt.Errorf("prompt: %s: %w", name, err))
 			}
 			return nil
@@ -108,5 +115,10 @@ func (b *Builder) Part(name string) *Builder {
 		b.errs = append(b.errs, err)
 		return b
 	}
-	return b.Template(text)
+	out, err := b.execute(text, []string{name})
+	if err != nil {
+		b.errs = append(b.errs, fmt.Errorf("prompt: part %q: %w", name, err))
+		return b
+	}
+	return b.Raw(out)
 }

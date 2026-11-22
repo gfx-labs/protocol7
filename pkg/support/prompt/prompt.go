@@ -7,6 +7,7 @@ package prompt
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"text/template"
 )
@@ -152,20 +153,48 @@ func (b *Builder) block(text string) *Builder {
 // key is an error, not "<no value>". Text without "{{" is returned as is, so
 // braces in prose (JSON, globs such as {a,b}) need no escaping.
 func (b *Builder) fill(text string) string {
-	if !strings.Contains(text, "{{") {
-		return text
-	}
-	tmpl, err := template.New("prompt").Option("missingkey=error").Parse(text)
+	out, err := b.execute(text, nil)
 	if err != nil {
 		b.errs = append(b.errs, fmt.Errorf("prompt: %w", err))
 		return text
 	}
+	return out
+}
+
+// execute fills text. stack holds the parts being included, so a part that
+// includes itself, directly or through others, is an error and not a loop.
+func (b *Builder) execute(text string, stack []string) (string, error) {
+	if !strings.Contains(text, "{{") {
+		return text, nil
+	}
+	tmpl, err := template.New("prompt").Option("missingkey=error").Funcs(b.funcs(stack)).Parse(text)
+	if err != nil {
+		return text, err
+	}
 	var out strings.Builder
 	if err := tmpl.Execute(&out, map[string]any(b.vars)); err != nil {
-		b.errs = append(b.errs, fmt.Errorf("prompt: %w", err))
-		return text
+		return text, err
 	}
-	return out.String()
+	return out.String(), nil
+}
+
+// funcs is the template functions of a builder: {{part "name"}} includes
+// another part of the library, found through the same Pick and layers as
+// Builder.Part and filled from the same vars.
+func (b *Builder) funcs(stack []string) template.FuncMap {
+	return template.FuncMap{"part": func(name string) (string, error) {
+		if b.library == nil {
+			return "", fmt.Errorf("part %q: the builder has no library", name)
+		}
+		if slices.Contains(stack, name) {
+			return "", fmt.Errorf("part %q includes itself (%s)", name, strings.Join(append(slices.Clone(stack), name), " > "))
+		}
+		text, err := b.library.Text(name)
+		if err != nil {
+			return "", err
+		}
+		return b.execute(text, append(slices.Clone(stack), name))
+	}}
 }
 
 // Dedent removes the indentation common to all non-blank lines and trims
