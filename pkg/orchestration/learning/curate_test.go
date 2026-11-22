@@ -505,3 +505,43 @@ func TestRegisterCurate(t *testing.T) {
 	assert.Error(t, learning.RegisterCurate(nil, &learning.CurateActivities{}))
 	assert.Error(t, learning.RegisterCurate(r, nil))
 }
+
+// A pass that ran is found however many runs that skipped come after it: the
+// completed runs are read page by page until one holds a result.
+func TestCurateCheckFindsTheLastPassPastSkippedRuns(t *testing.T) {
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	cursor := now.Add(-2 * time.Hour)
+	log := learningtest.New(t)
+	log.Add(recorded("a1", now.Add(-5*time.Hour)))
+	data := converter.GetDefaultDataConverter()
+	payload, err := data.ToPayload(learning.CurateResult{Cursor: cursor})
+	require.NoError(t, err)
+	var pages int
+	c := &mocks.Client{}
+	c.On("ListWorkflow", mock.Anything, mock.Anything).Return(func(ctx context.Context, request *workflowservice.ListWorkflowExecutionsRequest) (*workflowservice.ListWorkflowExecutionsResponse, error) {
+		switch {
+		case strings.Contains(request.GetQuery(), "'Running'") && strings.Contains(request.GetQuery(), learning.CurateWorkflowName):
+			return &workflowservice.ListWorkflowExecutionsResponse{}, nil
+		case strings.Contains(request.GetQuery(), learning.CurateWorkflowName):
+			pages++
+			skipped := &workflowservice.ListWorkflowExecutionsResponse{NextPageToken: []byte("more")}
+			for range 100 {
+				skipped.Executions = append(skipped.Executions, &workflowpb.WorkflowExecutionInfo{Execution: &commonpb.WorkflowExecution{WorkflowId: "skip"}})
+			}
+			if string(request.GetNextPageToken()) == "more" {
+				return &workflowservice.ListWorkflowExecutionsResponse{Executions: []*workflowpb.WorkflowExecutionInfo{{
+					Execution: &commonpb.WorkflowExecution{WorkflowId: "ran"}, Memo: &commonpb.Memo{Fields: map[string]*commonpb.Payload{learning.MemoCurate: payload}},
+				}}}, nil
+			}
+			return skipped, nil
+		}
+		return log.Client.ListWorkflow(ctx, request)
+	})
+	activities := &learning.CurateActivities{Store: learning.Store{Client: c}, Now: func() time.Time { return now }}
+	plan, err := activities.Check(context.Background(), learning.CheckInput{Pass: "learning-curate-1", Started: now})
+	require.NoError(t, err)
+	assert.Equal(t, 2, pages)
+	assert.Equal(t, cursor, plan.Since)
+	assert.Equal(t, 0, plan.New, "the entry was recorded before the last pass")
+	assert.Contains(t, plan.Skip, "0 of 1 open learnings")
+}

@@ -8,7 +8,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	commonpb "go.temporal.io/api/common/v1"
+	workflowpb "go.temporal.io/api/workflow/v1"
+	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/mocks"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
@@ -288,4 +294,49 @@ func TestWorkflowDecisions(t *testing.T) {
 		assert.Equal(t, "https://github.com/gfx-labs/protocol7/pull/9", result.PR)
 		assert.Equal(t, "learning-curate-1", result.Pass)
 	})
+}
+
+// An entry that continued as new has a closed run under the same workflow ID,
+// with an older state. A listing shows the entry once, as its newest run says.
+func TestListShowsAnEntryOnce(t *testing.T) {
+	data := converter.GetDefaultDataConverter()
+	info := func(state learning.State) *workflowpb.WorkflowExecutionInfo {
+		e := entry("x1", "Continued", selfdev)
+		e.State = learning.Open
+		memo, err := data.ToPayload(e)
+		require.NoError(t, err)
+		attribute, err := data.ToPayload(string(state))
+		require.NoError(t, err)
+		return &workflowpb.WorkflowExecutionInfo{
+			Memo:             &commonpb.Memo{Fields: map[string]*commonpb.Payload{learning.MemoEntry: memo}},
+			SearchAttributes: &commonpb.SearchAttributes{IndexedFields: map[string]*commonpb.Payload{learning.AttributeState.GetName(): attribute}},
+		}
+	}
+	var queries []string
+	c := &mocks.Client{}
+	c.On("ListWorkflow", mock.Anything, mock.Anything).Return(func(_ context.Context, request *workflowservice.ListWorkflowExecutionsRequest) (*workflowservice.ListWorkflowExecutionsResponse, error) {
+		queries = append(queries, request.GetQuery())
+		return &workflowservice.ListWorkflowExecutionsResponse{Executions: []*workflowpb.WorkflowExecutionInfo{info(learning.Applied), info(learning.Open)}}, nil
+	})
+	entries, err := learning.Store{Client: c}.ListAll(t.Context())
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, learning.Applied, entries[0].State)
+	assert.NotContains(t, queries[0], "ContinuedAsNew")
+	assert.Contains(t, queries[0], "ExecutionStatus = 'Running' OR ExecutionStatus = 'Completed'", "the runs that continued as new are not asked for")
+}
+
+// The open entries are asked for by their state, so that a log of more than a
+// read returns does not hide an old open entry behind newer settled ones.
+func TestOpenAsksForTheOpenStates(t *testing.T) {
+	log := learningtest.New(t)
+	log.Add(entry("o1", "Open", selfdev))
+	applied := entry("a1", "Applied", selfdev)
+	applied.State = learning.Applied
+	log.Add(applied)
+	open, err := log.Store().Open(t.Context())
+	require.NoError(t, err)
+	require.Len(t, open, 1)
+	assert.Equal(t, "o1", open[0].ID)
+	assert.Contains(t, log.Queries[len(log.Queries)-1], "SelfdevLearningState = 'open' OR SelfdevLearningState = 'proposed'")
 }

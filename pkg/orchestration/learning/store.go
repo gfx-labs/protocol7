@@ -55,10 +55,14 @@ func (s Store) Record(ctx context.Context, entry Entry) error {
 
 // listQuery lists the entries whose workflow runs: the open, accepted and
 // applied ones. allQuery lists the covered, rejected and retired ones too,
-// while Temporal's retention holds them.
+// while Temporal's retention holds them. It leaves out the runs that continued
+// as new, which hold an older state under the same workflow ID.
 const (
 	listQuery = "WorkflowType = '" + WorkflowName + "' AND ExecutionStatus = 'Running'"
-	allQuery  = "WorkflowType = '" + WorkflowName + "'"
+	allQuery  = "WorkflowType = '" + WorkflowName + "' AND (ExecutionStatus = 'Running' OR ExecutionStatus = 'Completed')"
+	// openQuery names the open states, so that a log of more than ListLimit
+	// entries does not hide an old open one behind newer settled ones.
+	openQuery = listQuery + " AND (SelfdevLearningState = '" + string(Open) + "' OR SelfdevLearningState = '" + string(Proposed) + "')"
 )
 
 // List reads the entries that run (open, accepted and applied), newest first,
@@ -74,7 +78,7 @@ func (s Store) ListAll(ctx context.Context) ([]Entry, error) { return s.list(ctx
 // Open reads the open entries, oldest first. The curator takes them in that
 // order, so that none waits for ever behind newer ones.
 func (s Store) Open(ctx context.Context) ([]Entry, error) {
-	entries, err := s.list(ctx, listQuery)
+	entries, err := s.list(ctx, openQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +101,8 @@ func (s Store) list(ctx context.Context, query string) ([]Entry, error) {
 			return nil, err
 		}
 		for _, execution := range response.GetExecutions() {
-			if entry, ok := entryOf(execution); ok {
+			// A workflow ID is one entry: the first run listed is the newest.
+			if entry, ok := entryOf(execution); ok && !slices.ContainsFunc(entries, func(have Entry) bool { return have.ID == entry.ID }) {
 				entries = append(entries, entry)
 			}
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -161,8 +162,9 @@ func ValidLearningID(id string) bool { return learningIDPattern.MatchString(id) 
 
 // learningListQuery lists every learning Temporal still holds: the open,
 // accepted and applied ones, whose workflow runs, and the covered, rejected
-// and retired ones until their retention ends.
-const learningListQuery = "WorkflowType = '" + LearningWorkflow + "'"
+// and retired ones until their retention ends. A run that continued as new
+// holds an older state under the same workflow ID, and is left out.
+const learningListQuery = "WorkflowType = '" + LearningWorkflow + "' AND (ExecutionStatus = 'Running' OR ExecutionStatus = 'Completed')"
 
 // ListLearnings reads the learnings, open and settled, newest first, at most
 // LearningListLimit. Each one's state is the search attribute's,
@@ -187,7 +189,9 @@ func ListLearnings(ctx context.Context, temporalClient client.Client) ([]Learnin
 					entry.State = LearningState(state)
 				}
 			}
-			entries = append(entries, entry)
+			if !slices.ContainsFunc(entries, func(have LearningEntry) bool { return have.ID == entry.ID }) {
+				entries = append(entries, entry)
+			}
 		}
 		token = response.GetNextPageToken()
 		if len(token) == 0 {
