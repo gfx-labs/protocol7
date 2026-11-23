@@ -39,6 +39,8 @@ type Plan struct {
 	Ceiling      panel.Money         `json:"ceiling"`
 	Settle       bool                `json:"settle"`
 	SameAnswer   bool                `json:"same_answer"`
+	// Outside is what the caller spent outside the children, from the start.
+	Outside panel.Money `json:"outside"`
 }
 
 type childInput struct {
@@ -98,6 +100,9 @@ func runPanel(ctx workflow.Context, plan Plan) (panel.Result[Answer], error) {
 		},
 		Ceiling: func(panel.Participant, int) panel.Money { return plan.Ceiling },
 		Rules:   []panel.Rule[Answer]{agree},
+	}
+	if plan.Outside > 0 {
+		config.Outside = func() panel.Money { return plan.Outside }
 	}
 	if plan.SameAnswer {
 		config.Same = func(a, b Answer) bool { return a.Decision == b.Decision }
@@ -375,5 +380,74 @@ func TestTheResultsLatestPositionsAreInParticipantOrder(t *testing.T) {
 	}
 	if got := decisions(result.Latest); got != "A=hold B=decline C=hold" {
 		t.Errorf("latest = %q, want A and C from round 1 and B from round 0, in participant order", got)
+	}
+}
+
+// A participant with a first round after the first takes no part before it,
+// costs nothing before it and sees the others' positions when it starts. The
+// round it joins in is not one that changed nothing.
+func TestAParticipantThatJoinsLaterTakesPartFromItsRound(t *testing.T) {
+	critic := panel.Participant{Name: "C", Vendor: "anthropic", From: 1}
+	result, err := execute(t, environment(t), Plan{
+		Participants: append(slices.Clone(twoVendors), critic), MinVendors: 2, MaxRounds: 3, SameAnswer: true,
+		Budget: panel.Budget{Cap: 100e6, Reserve: 10e6}, Ceiling: 5e6,
+		Script: map[string][]Say{
+			"A": {{Decision: "build"}}, "B": {{Decision: "decline"}},
+			"C": {{Decision: "unused"}, {Decision: "decline"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decisions(result.Rounds[0]); got != "A=build B=decline" {
+		t.Errorf("round 0 = %q, want A and B only", got)
+	}
+	if got := decisions(result.Rounds[1]); got != "A=build B=decline C=decline" {
+		t.Errorf("round 1 = %q, want C to join", got)
+	}
+	for _, position := range result.Rounds[1] {
+		if position.Participant == "C" && !slices.Equal(position.Value.Saw, []string{"A:build", "B:decline"}) {
+			t.Errorf("C saw %v, want the positions of A and B", position.Value.Saw)
+		}
+	}
+	if result.Stop != panel.StopNoProgress || len(result.Rounds) != 3 {
+		t.Errorf("stop = %q after %d rounds, want no progress after 3: the round C joined in is not one that changed nothing", result.Stop, len(result.Rounds))
+	}
+	if result.Spent != 0 {
+		t.Errorf("spent = %d, want the scripted spend of 0", result.Spent)
+	}
+}
+
+// The ceiling of a participant that has not started is not in the cost of the
+// round, so a round that only the others can afford still runs.
+func TestARoundDoesNotReserveTheCeilingOfAParticipantThatHasNotJoined(t *testing.T) {
+	critic := panel.Participant{Name: "C", Vendor: "anthropic", From: 1}
+	result, err := execute(t, environment(t), Plan{
+		Participants: append(slices.Clone(twoVendors), critic), MinVendors: 2, MaxRounds: 0,
+		Budget: panel.Budget{Cap: 10e6}, Ceiling: 5e6,
+		Script: map[string][]Say{"A": {{Decision: "build"}}, "B": {{Decision: "build"}}, "C": {{Decision: "x"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rounds) != 1 {
+		t.Errorf("%d rounds, want the first round to run: 2 ceilings of 5 fit a cap of 10", len(result.Rounds))
+	}
+}
+
+// What the caller spent between the rounds counts against the budget, so the
+// next round is refused when it no longer fits.
+func TestWorkOutsideTheChildrenCountsAgainstTheBudget(t *testing.T) {
+	plan := Plan{
+		Participants: twoVendors, MinVendors: 2, MaxRounds: 3,
+		Budget: panel.Budget{Cap: 100e6, Reserve: 10e6}, Ceiling: 5e6, Outside: 85e6,
+		Script: map[string][]Say{"A": {{Decision: "build"}}, "B": {{Decision: "decline"}}},
+	}
+	result, err := execute(t, environment(t), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stop != panel.StopCost || len(result.Rounds) != 0 {
+		t.Errorf("stop = %q after %d rounds, want the cost limit before the first: 85 spent outside and 10 for the round do not fit 90", result.Stop, len(result.Rounds))
 	}
 }
