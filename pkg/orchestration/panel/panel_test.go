@@ -39,6 +39,9 @@ type Plan struct {
 	Ceiling      panel.Money         `json:"ceiling"`
 	Settle       bool                `json:"settle"`
 	SameAnswer   bool                `json:"same_answer"`
+	// Outside is what the caller spent outside the children before each round:
+	// it is Outside times the number of rounds that were asked for.
+	Outside panel.Money `json:"outside"`
 }
 
 type childInput struct {
@@ -98,6 +101,13 @@ func runPanel(ctx workflow.Context, plan Plan) (panel.Result[Answer], error) {
 		},
 		Ceiling: func(panel.Participant, int) panel.Money { return plan.Ceiling },
 		Rules:   []panel.Rule[Answer]{agree},
+	}
+	if plan.Outside > 0 {
+		asked := panel.Money(0)
+		config.Outside = func() panel.Money {
+			asked++
+			return plan.Outside * asked
+		}
 	}
 	if plan.SameAnswer {
 		config.Same = func(a, b Answer) bool { return a.Decision == b.Decision }
@@ -375,5 +385,78 @@ func TestTheResultsLatestPositionsAreInParticipantOrder(t *testing.T) {
 	}
 	if got := decisions(result.Latest); got != "A=hold B=decline C=hold" {
 		t.Errorf("latest = %q, want A and C from round 1 and B from round 0, in participant order", got)
+	}
+}
+
+// A participant with a first round after the first takes no part before it,
+// costs nothing before it and sees the others' positions when it starts. It has
+// no answer of the round before, so the round it joins in is not one that
+// changed nothing, and the panel does not end before the others answer it.
+func TestAParticipantThatJoinsLaterTakesPartFromItsRound(t *testing.T) {
+	critic := panel.Participant{Name: "C", Vendor: "anthropic", From: 1}
+	result, err := execute(t, environment(t), Plan{
+		Participants: append(slices.Clone(twoVendors), critic), MinVendors: 2, MaxRounds: 3, SameAnswer: true,
+		Budget: panel.Budget{Cap: 100e6, Reserve: 10e6}, Ceiling: 5e6,
+		Script: map[string][]Say{
+			"A": {{Decision: "build"}}, "B": {{Decision: "decline"}},
+			"C": {{Decision: "unused"}, {Decision: "decline"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decisions(result.Rounds[0]); got != "A=build B=decline" {
+		t.Errorf("round 0 = %q, want A and B only", got)
+	}
+	if got := decisions(result.Rounds[1]); got != "A=build B=decline C=decline" {
+		t.Errorf("round 1 = %q, want C to join", got)
+	}
+	for _, position := range result.Rounds[1] {
+		if position.Participant == "C" && !slices.Equal(position.Value.Saw, []string{"A:build", "B:decline"}) {
+			t.Errorf("C saw %v, want the positions of A and B", position.Value.Saw)
+		}
+	}
+	if result.Stop != panel.StopNoProgress || len(result.Rounds) != 3 {
+		t.Errorf("stop = %q after %d rounds, want no progress after 3: the round C joined in is not one that changed nothing", result.Stop, len(result.Rounds))
+	}
+	if result.Spent != 0 {
+		t.Errorf("spent = %d, want the scripted spend of 0", result.Spent)
+	}
+}
+
+// The ceiling of a participant that has not started is not in the cost of the
+// round, so a round that only the others can afford still runs.
+func TestARoundDoesNotReserveTheCeilingOfAParticipantThatHasNotJoined(t *testing.T) {
+	critic := panel.Participant{Name: "C", Vendor: "anthropic", From: 1}
+	result, err := execute(t, environment(t), Plan{
+		Participants: append(slices.Clone(twoVendors), critic), MinVendors: 2, MaxRounds: 0,
+		Budget: panel.Budget{Cap: 10e6}, Ceiling: 5e6,
+		Script: map[string][]Say{"A": {{Decision: "build"}}, "B": {{Decision: "build"}}, "C": {{Decision: "x"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rounds) != 1 {
+		t.Errorf("%d rounds, want the first round to run: 2 ceilings of 5 fit a cap of 10", len(result.Rounds))
+	}
+}
+
+// What the caller spent between the rounds counts against the budget: it is
+// read before each round, and the round that no longer fits is refused.
+func TestWorkOutsideTheChildrenCountsAgainstTheBudget(t *testing.T) {
+	plan := Plan{
+		Participants: twoVendors, MinVendors: 2, MaxRounds: 5,
+		Budget: panel.Budget{Cap: 100e6, Reserve: 10e6}, Ceiling: 5e6, Outside: 30e6,
+		Script: map[string][]Say{"A": {{Decision: "build"}, {Decision: "build?"}, {Decision: "build!"}}, "B": {{Decision: "decline"}, {Decision: "decline?"}, {Decision: "decline!"}}},
+	}
+	result, err := execute(t, environment(t), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Before round 0 the caller has spent 30 and a round needs 10, before round
+	// 1 it has spent 60, and before round 2 it has spent 90, which leaves no
+	// room for a round of 10 under 90.
+	if result.Stop != panel.StopCost || len(result.Rounds) != 2 {
+		t.Errorf("stop = %q after %d rounds, want the cost limit after 2", result.Stop, len(result.Rounds))
 	}
 }

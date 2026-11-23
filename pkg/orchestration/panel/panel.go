@@ -79,6 +79,13 @@ type Participant struct {
 	// Vendor says who makes the participant's model. The panel needs
 	// Config.MinVendors different ones to go on.
 	Vendor string `json:"vendor"`
+	// From is the first round the participant takes part in. Zero is the first
+	// round. A participant that answers what the others said, such as a critic,
+	// has nothing to answer before round 1. A round it is not in does not call
+	// Config.Child or Config.Ceiling for it. In the round it starts in it has
+	// no answer of the round before, so that round is not one that changed
+	// nothing.
+	From int `json:"from,omitempty"`
 }
 
 // Position is what a participant said in a round.
@@ -164,6 +171,10 @@ type Config[P any] struct {
 	// Spent is what the caller has spent before the panel, which counts
 	// against the budget.
 	Spent Money
+	// Outside is what the caller has spent since the panel started on work that
+	// is not one of its children, such as a step that runs between rounds. It is
+	// read before each round and counts against the budget. Nil counts nothing.
+	Outside func() Money
 	// OnState is called, in workflow code, after each phase change, so that
 	// the caller can set search attributes or record progress.
 	OnState func(ctx workflow.Context, status Status)
@@ -215,6 +226,9 @@ func (c Config[P]) validate() error {
 		}
 		if names[p.Name] {
 			return fmt.Errorf("panel: two participants are named %q", p.Name)
+		}
+		if p.From < 0 {
+			return fmt.Errorf("panel: the participant %q starts in round %d", p.Name, p.From)
 		}
 		names[p.Name] = true
 		vendors[p.Vendor] = true
@@ -279,9 +293,19 @@ func (r *runner[P]) vendors() int {
 func (r *runner[P]) ceiling(round int) Money {
 	var total Money
 	for _, p := range r.live {
-		total += r.config.Ceiling(p, round)
+		if p.From <= round {
+			total += r.config.Ceiling(p, round)
+		}
 	}
 	return total
+}
+
+// outside is what the caller spent outside the children.
+func (r *runner[P]) outside() Money {
+	if r.config.Outside == nil {
+		return 0
+	}
+	return r.config.Outside()
 }
 
 func (r *runner[P]) finish(ctx workflow.Context, stop, detail string) (Result[P], error) {
@@ -296,9 +320,10 @@ func (r *runner[P]) run(ctx workflow.Context) (Result[P], error) {
 		if r.stopped() {
 			return r.finish(ctx, StopSignal, "")
 		}
-		if !r.config.Budget.Fits(r.state.Spent, r.ceiling(round)) {
+		outside := r.outside()
+		if !r.config.Budget.Fits(r.state.Spent+outside, r.ceiling(round)) {
 			return r.finish(ctx, StopCost, fmt.Sprintf("round %d needs up to %.2f dollars and %.2f remain before the reserve",
-				round, r.ceiling(round).Dollars(), (r.config.Budget.Cap-r.config.Budget.Reserve-r.state.Spent).Dollars()))
+				round, r.ceiling(round).Dollars(), (r.config.Budget.Cap-r.config.Budget.Reserve-r.state.Spent-outside).Dollars()))
 		}
 		r.status.Phase, r.status.Round = "running", round
 		r.publish(ctx)
@@ -397,6 +422,9 @@ func (r *runner[P]) round(ctx workflow.Context, round int) ([]Position[P], error
 	defer cancel()
 	var started []pending[P]
 	for _, p := range r.live {
+		if p.From > round {
+			continue
+		}
 		var visible []Position[P]
 		for _, other := range others {
 			if other.Participant != p.Name {
