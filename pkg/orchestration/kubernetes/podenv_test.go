@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -34,5 +35,21 @@ func TestAPoolReplacesTheEnvironmentOfTheTemplate(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("replacing %s: error %v, want one that says %q", name, err, want)
 		}
+	}
+}
+
+func TestAPoolWithoutSnapshotsLosesTheSnapshotFlagsOfTheTemplate(t *testing.T) {
+	container := map[string]any{
+		"args": []any{"p7", "session", "--state-dir", "/var/lib/p7", "--snapshot-bucket", "p7-snapshots", "--snapshot-endpoint=http://s3", "--snapshot-region", "us-east-1", "--snapshot-path-style"},
+		"env":  []any{map[string]any{"name": "P7_SNAPSHOT_BUCKET", "value": "b"}, map[string]any{"name": "KEEP", "value": "1"}},
+	}
+	dropSnapshots(container)
+	want := []any{"p7", "session", "--state-dir", "/var/lib/p7"}
+	if got := container["args"].([]any); !reflect.DeepEqual(got, want) {
+		t.Errorf("args %v, want %v", got, want)
+	}
+	env := container["env"].([]any)
+	if len(env) != 1 || env[0].(map[string]any)["name"] != "KEEP" {
+		t.Errorf("env %v, want only KEEP", env)
 	}
 }

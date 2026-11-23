@@ -63,6 +63,11 @@ type PodSpec struct {
 	// a pool of another reach sends. A variable the template lacks, and the
 	// variables of the pool itself, are refused.
 	Env map[string]string `json:"env,omitempty"`
+	// NoSnapshots starts the workers without the template's snapshot flags and
+	// variables, so that they keep no snapshot and restore none. A pool whose
+	// identity has no snapshot grant needs it: its first restore would be
+	// refused, and the session would not open.
+	NoSnapshots bool `json:"no_snapshots,omitempty"`
 }
 
 // PoolSpec says how a pool is made. The workflow that opens a session
