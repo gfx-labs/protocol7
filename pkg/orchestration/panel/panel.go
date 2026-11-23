@@ -82,8 +82,9 @@ type Participant struct {
 	// From is the first round the participant takes part in. Zero is the first
 	// round. A participant that answers what the others said, such as a critic,
 	// has nothing to answer before round 1. A round it is not in does not call
-	// Config.Child or Config.Ceiling for it. The round it starts in is a round
-	// that changed something, since the others have not answered it yet.
+	// Config.Child or Config.Ceiling for it. In the round it starts in it has
+	// no answer of the round before, so that round is not one that changed
+	// nothing.
 	From int `json:"from,omitempty"`
 }
 
@@ -319,9 +320,10 @@ func (r *runner[P]) run(ctx workflow.Context) (Result[P], error) {
 		if r.stopped() {
 			return r.finish(ctx, StopSignal, "")
 		}
-		if !r.config.Budget.Fits(r.state.Spent+r.outside(), r.ceiling(round)) {
+		outside := r.outside()
+		if !r.config.Budget.Fits(r.state.Spent+outside, r.ceiling(round)) {
 			return r.finish(ctx, StopCost, fmt.Sprintf("round %d needs up to %.2f dollars and %.2f remain before the reserve",
-				round, r.ceiling(round).Dollars(), (r.config.Budget.Cap-r.config.Budget.Reserve-r.state.Spent-r.outside()).Dollars()))
+				round, r.ceiling(round).Dollars(), (r.config.Budget.Cap-r.config.Budget.Reserve-r.state.Spent-outside).Dollars()))
 		}
 		r.status.Phase, r.status.Round = "running", round
 		r.publish(ctx)
@@ -399,25 +401,11 @@ func (r *runner[P]) unchanged(round int) bool {
 	}
 	for _, position := range current {
 		index := slices.IndexFunc(before, func(p Position[P]) bool { return p.Participant == position.Participant })
-		if index < 0 && r.startedIn(position.Participant, round) {
-			// Its first answer is new, and the others have not answered it.
-			return false
-		}
 		if index < 0 || !r.config.Same(before[index].Value, position.Value) {
 			return false
 		}
 	}
 	return true
-}
-
-// startedIn says whether the participant's first round is the round.
-func (r *runner[P]) startedIn(name string, round int) bool {
-	for _, p := range r.config.Participants {
-		if p.Name == name {
-			return p.From == round
-		}
-	}
-	return false
 }
 
 type pending[P any] struct {

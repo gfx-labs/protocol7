@@ -39,7 +39,8 @@ type Plan struct {
 	Ceiling      panel.Money         `json:"ceiling"`
 	Settle       bool                `json:"settle"`
 	SameAnswer   bool                `json:"same_answer"`
-	// Outside is what the caller spent outside the children, from the start.
+	// Outside is what the caller spent outside the children before each round:
+	// it is Outside times the number of rounds that were asked for.
 	Outside panel.Money `json:"outside"`
 }
 
@@ -102,7 +103,11 @@ func runPanel(ctx workflow.Context, plan Plan) (panel.Result[Answer], error) {
 		Rules:   []panel.Rule[Answer]{agree},
 	}
 	if plan.Outside > 0 {
-		config.Outside = func() panel.Money { return plan.Outside }
+		asked := panel.Money(0)
+		config.Outside = func() panel.Money {
+			asked++
+			return plan.Outside * asked
+		}
 	}
 	if plan.SameAnswer {
 		config.Same = func(a, b Answer) bool { return a.Decision == b.Decision }
@@ -384,8 +389,9 @@ func TestTheResultsLatestPositionsAreInParticipantOrder(t *testing.T) {
 }
 
 // A participant with a first round after the first takes no part before it,
-// costs nothing before it and sees the others' positions when it starts. The
-// round it joins in is not one that changed nothing.
+// costs nothing before it and sees the others' positions when it starts. It has
+// no answer of the round before, so the round it joins in is not one that
+// changed nothing, and the panel does not end before the others answer it.
 func TestAParticipantThatJoinsLaterTakesPartFromItsRound(t *testing.T) {
 	critic := panel.Participant{Name: "C", Vendor: "anthropic", From: 1}
 	result, err := execute(t, environment(t), Plan{
@@ -435,19 +441,22 @@ func TestARoundDoesNotReserveTheCeilingOfAParticipantThatHasNotJoined(t *testing
 	}
 }
 
-// What the caller spent between the rounds counts against the budget, so the
-// next round is refused when it no longer fits.
+// What the caller spent between the rounds counts against the budget: it is
+// read before each round, and the round that no longer fits is refused.
 func TestWorkOutsideTheChildrenCountsAgainstTheBudget(t *testing.T) {
 	plan := Plan{
-		Participants: twoVendors, MinVendors: 2, MaxRounds: 3,
-		Budget: panel.Budget{Cap: 100e6, Reserve: 10e6}, Ceiling: 5e6, Outside: 85e6,
-		Script: map[string][]Say{"A": {{Decision: "build"}}, "B": {{Decision: "decline"}}},
+		Participants: twoVendors, MinVendors: 2, MaxRounds: 5,
+		Budget: panel.Budget{Cap: 100e6, Reserve: 10e6}, Ceiling: 5e6, Outside: 30e6,
+		Script: map[string][]Say{"A": {{Decision: "build"}, {Decision: "build?"}, {Decision: "build!"}}, "B": {{Decision: "decline"}, {Decision: "decline?"}, {Decision: "decline!"}}},
 	}
 	result, err := execute(t, environment(t), plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Stop != panel.StopCost || len(result.Rounds) != 0 {
-		t.Errorf("stop = %q after %d rounds, want the cost limit before the first: 85 spent outside and 10 for the round do not fit 90", result.Stop, len(result.Rounds))
+	// Before round 0 the caller has spent 30 and a round needs 10, before round
+	// 1 it has spent 60, and before round 2 it has spent 90, which leaves no
+	// room for a round of 10 under 90.
+	if result.Stop != panel.StopCost || len(result.Rounds) != 2 {
+		t.Errorf("stop = %q after %d rounds, want the cost limit after 2", result.Stop, len(result.Rounds))
 	}
 }
