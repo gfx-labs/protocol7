@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -124,6 +125,9 @@ func (p *Pods) renderWorker(request domain.PoolWorkerRequest, placement domain.P
 	if err := replaceEnv(container, request.Pool.Pod.Env); err != nil {
 		return nil, fmt.Errorf("pool %s: %w", request.Pool.Name, err)
 	}
+	if request.Pool.Pod.NoSnapshots {
+		dropSnapshots(container)
+	}
 	if len(request.Pool.Pod.Requests) > 0 || len(request.Pool.Pod.Limits) > 0 {
 		resources := object(container, "resources")
 		for field, values := range map[string]map[string]string{"requests": request.Pool.Pod.Requests, "limits": request.Pool.Pod.Limits} {
@@ -137,6 +141,55 @@ func (p *Pods) renderWorker(request domain.PoolWorkerRequest, placement domain.P
 		}
 	}
 	return pod, nil
+}
+
+// snapshotFlag starts every command line flag and environment variable of
+// the snapshot store.
+const (
+	snapshotFlag = "--snapshot-"
+	snapshotEnv  = "P7_SNAPSHOT_"
+)
+
+// dropSnapshots removes the snapshot flags and variables from the container,
+// so that its session keeps no snapshots (an empty bucket is that). A flag that
+// has a value in the next argument takes it along. The flags of the template
+// are ones with a value, and the boolean ones come last, so the next argument
+// is taken only when it is not a flag itself.
+func dropSnapshots(container map[string]any) {
+	if args, ok := container["args"].([]any); ok {
+		kept := make([]any, 0, len(args))
+		for i := 0; i < len(args); i++ {
+			arg, _ := args[i].(string)
+			if !strings.HasPrefix(arg, snapshotFlag) {
+				kept = append(kept, args[i])
+				continue
+			}
+			if next, ok := argAt(args, i+1); ok && !strings.Contains(arg, "=") && !strings.HasPrefix(next, "-") {
+				i++
+			}
+		}
+		container["args"] = kept
+	}
+	if env, ok := container["env"].([]any); ok {
+		kept := make([]any, 0, len(env))
+		for _, variable := range env {
+			if named, ok := variable.(map[string]any); ok {
+				if name, _ := named["name"].(string); strings.HasPrefix(name, snapshotEnv) {
+					continue
+				}
+			}
+			kept = append(kept, variable)
+		}
+		container["env"] = kept
+	}
+}
+
+func argAt(args []any, i int) (string, bool) {
+	if i >= len(args) {
+		return "", false
+	}
+	arg, ok := args[i].(string)
+	return arg, ok
 }
 
 // replaceEnv gives the variables of the container that the template has the

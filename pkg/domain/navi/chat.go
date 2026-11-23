@@ -191,7 +191,7 @@ func SessionMessage(session *p7.Session) *Session {
 			Name:              pool.Name,
 			MaxWorkers:        int32(pool.MaxWorkers),
 			SessionsPerWorker: int32(pool.SessionsPerWorker),
-			Pod:               &naviv1.PodSpec{Image: pool.Pod.Image, Requests: pool.Pod.Requests, Limits: pool.Pod.Limits, Env: pool.Pod.Env},
+			Pod:               &naviv1.PodSpec{Image: pool.Pod.Image, Requests: pool.Pod.Requests, Limits: pool.Pod.Limits, Env: pool.Pod.Env, NoSnapshots: pool.Pod.NoSnapshots},
 		}
 		if pool.IdleTimeout != 0 {
 			message.Pool.IdleTimeout = durationpb.New(pool.IdleTimeout)
@@ -229,6 +229,7 @@ func SessionOf(message *Session) *p7.Session {
 		session.Pool.Pod.Requests = pool.GetPod().GetRequests()
 		session.Pool.Pod.Limits = pool.GetPod().GetLimits()
 		session.Pool.Pod.Env = pool.GetPod().GetEnv()
+		session.Pool.Pod.NoSnapshots = pool.GetPod().GetNoSnapshots()
 	}
 	return session
 }

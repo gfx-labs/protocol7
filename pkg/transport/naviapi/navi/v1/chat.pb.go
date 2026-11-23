@@ -4000,6 +4000,7 @@ type PodSpec struct {
 	Requests      map[string]string      `protobuf:"bytes,2,rep,name=requests,proto3" json:"requests,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Limits        map[string]string      `protobuf:"bytes,3,rep,name=limits,proto3" json:"limits,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Env           map[string]string      `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	NoSnapshots   bool                   `protobuf:"varint,5,opt,name=no_snapshots,json=noSnapshots,proto3" json:"no_snapshots,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4060,6 +4061,13 @@ func (x *PodSpec) GetEnv() map[string]string {
 		return x.Env
 	}
 	return nil
+}
+
+func (x *PodSpec) GetNoSnapshots() bool {
+	if x != nil {
+		return x.NoSnapshots
+	}
+	return false
 }
 
 // SessionEvent is one thing that happened in a session.
@@ -4845,12 +4853,13 @@ const file_navi_v1_chat_proto_rawDesc = "" +
 	"maxWorkers\x12.\n" +
 	"\x13sessions_per_worker\x18\x03 \x01(\x05R\x11sessionsPerWorker\x12<\n" +
 	"\fidle_timeout\x18\x04 \x01(\v2\x19.google.protobuf.DurationR\vidleTimeout\x12\"\n" +
-	"\x03pod\x18\x05 \x01(\v2\x10.navi.v1.PodSpecR\x03pod\"\xee\x02\n" +
+	"\x03pod\x18\x05 \x01(\v2\x10.navi.v1.PodSpecR\x03pod\"\x91\x03\n" +
 	"\aPodSpec\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12:\n" +
 	"\brequests\x18\x02 \x03(\v2\x1e.navi.v1.PodSpec.RequestsEntryR\brequests\x124\n" +
 	"\x06limits\x18\x03 \x03(\v2\x1c.navi.v1.PodSpec.LimitsEntryR\x06limits\x12+\n" +
-	"\x03env\x18\x04 \x03(\v2\x19.navi.v1.PodSpec.EnvEntryR\x03env\x1a;\n" +
+	"\x03env\x18\x04 \x03(\v2\x19.navi.v1.PodSpec.EnvEntryR\x03env\x12!\n" +
+	"\fno_snapshots\x18\x05 \x01(\bR\vnoSnapshots\x1a;\n" +
 	"\rRequestsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a9\n" +
