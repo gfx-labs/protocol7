@@ -97,6 +97,15 @@ func (a *scriptedAgent) Prompt(ctx context.Context, request acp.PromptRequest) (
 		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
 	}
 	a.record("prompt " + text)
+	if text == "rate-limit" {
+		return acp.PromptResponse{}, acp.NewInternalError(map[string]any{
+			"error": "turn stopped: rate_limit: HTTP 429",
+			"towa": map[string]any{"stop": map[string]any{
+				"kind": "rate_limit", "message": "HTTP 429: rate limit exceeded",
+				"resetAt": "2026-11-19T18:00:00Z", "account": "claude", "model": "sonnet",
+			}},
+		})
+	}
 	if command, ok := strings.CutPrefix(text, "ask "); ok {
 		return a.askPermission(ctx, request.SessionId, command)
 	}
@@ -274,6 +283,36 @@ func TestARepeatedTurnReturnsItsResultWithoutASecondPrompt(t *testing.T) {
 		t.Errorf("the repeated turn returned %+v, want %+v", again, first)
 	}
 	if asked, want := f.asked(), []string{"new", "prompt hello"}; !slices.Equal(asked, want) {
+		t.Errorf("the agent was asked %q, want %q", asked, want)
+	}
+}
+
+// A provider failure travels through the real ACP connection and host journal.
+// Retrying its activity must return the same failed turn, not prompt again or
+// turn it into an empty successful answer. A new turn can still run afterward.
+func TestAHarnessFailureSurvivesTheHostJournalAndActivityRetry(t *testing.T) {
+	f := open(t)
+	want := domain.TurnFailure{
+		Kind: "rate_limit", Message: "HTTP 429: rate limit exceeded",
+		ResetAt: time.Date(2026, 11, 19, 18, 0, 0, 0, time.UTC), Account: "claude", Model: "sonnet",
+	}
+	for range 2 {
+		result, err := f.turn(t.Context(), "t1", "rate-limit", session.TurnControl{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.StopReason != domain.StopFailed || result.Text != "" || result.Failure == nil || *result.Failure != want {
+			t.Fatalf("got %+v (failure %+v), want a failed turn with %+v", result, result.Failure, want)
+		}
+	}
+	next, err := f.turn(t.Context(), "t2", "hello", session.TurnControl{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.StopReason != "end_turn" || next.Text != "echo: hello" || next.Failure != nil {
+		t.Errorf("turn after the failure: %+v, want a fresh successful answer", next)
+	}
+	if asked, want := f.asked(), []string{"new", "prompt rate-limit", "prompt hello"}; !slices.Equal(asked, want) {
 		t.Errorf("the agent was asked %q, want %q", asked, want)
 	}
 }
