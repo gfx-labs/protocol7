@@ -2,12 +2,43 @@ package chat
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/gfx-labs/protocol7/pkg/p7"
 )
+
+// A harness error is a completed activity, not a successful model turn.
+// Keep the provider's diagnostics visible to the person and the chat's owner.
+func failedTurnError(turn p7.Turn) string {
+	if turn.Failure == nil {
+		return "the agent's turn failed"
+	}
+	failure := turn.Failure
+	message := failure.Message
+	if message == "" {
+		message = "the agent's turn failed"
+	}
+	var details []string
+	if failure.Kind != "" {
+		details = append(details, failure.Kind)
+	}
+	if failure.Account != "" {
+		details = append(details, "account "+failure.Account)
+	}
+	if failure.Model != "" {
+		details = append(details, "model "+failure.Model)
+	}
+	if !failure.ResetAt.IsZero() {
+		details = append(details, "reset at "+failure.ResetAt.UTC().Format(time.RFC3339))
+	}
+	if len(details) > 0 {
+		message += " (" + strings.Join(details, ", ") + ")"
+	}
+	return message
+}
 
 // versionTurnResume gates the resume of an interrupted turn. A history from
 // before it ended such a turn and went on, with no timer in between, and
